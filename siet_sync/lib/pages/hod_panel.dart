@@ -470,7 +470,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       ),
       HODStaffTab(token: widget.token, dept: widget.user['dept']),
       HODMarkAttendanceTab(token: widget.token, user: widget.user),
-      StaffLeaveRequestTab(token: widget.token),
+      HODLeaveManagement(token: widget.token),
       HODMergedAnalyticsTab(
         token: widget.token,
         user: widget.user,
@@ -561,7 +561,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
               ),
               HODStaffTab(token: widget.token, dept: widget.user['dept']),
               HODMarkAttendanceTab(token: widget.token, user: widget.user),
-              StaffLeaveRequestTab(token: widget.token),
+              HODLeaveManagement(token: widget.token),
               HODMergedAnalyticsTab(
                 token: widget.token,
                 user: widget.user,

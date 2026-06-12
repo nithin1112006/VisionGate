@@ -17,7 +17,7 @@ import '../widgets/location_permission_enforcer.dart';
 import '../utils/responsive.dart';
 import '../utils/api_response_utils.dart';
 
-String get API_URL => CollegeIPConfig.defaultURL;
+String get API_URL => CollegeIPConfig.apiBaseURL;
 
 class OtherStaffLoginPage extends StatefulWidget {
   const OtherStaffLoginPage({super.key});

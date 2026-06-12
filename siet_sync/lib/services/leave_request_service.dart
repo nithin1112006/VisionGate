@@ -249,6 +249,153 @@ class LeaveRequestService {
     }
   }
 
+  // ============================================
+  // HOD ENDPOINTS
+  // ============================================
+
+  /// Get leave requests for HOD's department
+  static Future<Map<String, dynamic>> hodGetLeaveRequests({
+    required String token,
+    String? status,
+    String? search,
+    int page = 1,
+    int limit = 50,
+  }) async {
+    try {
+      final queryParams = <String, String>{
+        'page': page.toString(),
+        'limit': limit.toString(),
+      };
+      
+      if (status != null) queryParams['status'] = status;
+      if (search != null) queryParams['search'] = search;
+      
+      final uri = Uri.parse('$API_URL/hod/leave/requests')
+          .replace(queryParameters: queryParams);
+      
+      final response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        return {
+          'success': false,
+          'requests': [],
+          'message': 'Failed to fetch leave requests',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'requests': [],
+        'message': 'Network error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Get pending leave requests for HOD's department
+  static Future<Map<String, dynamic>> hodGetPendingRequests(String token) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$API_URL/hod/leave/requests/pending'),
+        headers: {
+          'Authorization': 'Bearer $token',
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        return {
+          'success': false,
+          'requests': [],
+          'message': 'Failed to fetch pending requests',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'requests': [],
+        'message': 'Network error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Approve a leave request (HOD version)
+  static Future<Map<String, dynamic>> hodApproveRequest({
+    required String token,
+    required int requestId,
+    String? comment,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$API_URL/hod/leave/request/$requestId/approve'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'comment': comment ?? '',
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        return {
+          'success': false,
+          'message': error['detail'] ?? 'Failed to approve request',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Network error: ${e.toString()}',
+      };
+    }
+  }
+
+  /// Reject a leave request (HOD version)
+  static Future<Map<String, dynamic>> hodRejectRequest({
+    required String token,
+    required int requestId,
+    required String comment,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$API_URL/hod/leave/request/$requestId/reject'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'comment': comment,
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        return {
+          'success': false,
+          'message': error['detail'] ?? 'Failed to reject request',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Network error: ${e.toString()}',
+      };
+    }
+  }
+
   /// Get pending leave requests (admin view)
   static Future<Map<String, dynamic>> adminGetPendingRequests(String token) async {
     try {

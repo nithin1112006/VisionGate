@@ -426,6 +426,8 @@ class _LeaveRequestListState extends State<LeaveRequestList> {
         return Colors.green;
       case 'rejected':
         return Colors.red;
+      case 'withdrawn':
+        return Colors.grey;
       default:
         return Colors.grey;
     }
@@ -439,6 +441,8 @@ class _LeaveRequestListState extends State<LeaveRequestList> {
         return Icons.check_circle;
       case 'rejected':
         return Icons.cancel;
+      case 'withdrawn':
+        return Icons.cancel_outlined;
       default:
         return Icons.help;
     }
@@ -618,6 +622,81 @@ class _LeaveRequestListState extends State<LeaveRequestList> {
                       ),
                     ),
                   ],
+
+                  // Withdraw Request Button (only if pending)
+                  if ((request['status'] ?? 'pending').toString().toLowerCase() == 'pending') ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: _isLoading ? null : () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Withdraw Request'),
+                              content: const Text(
+                                  'Are you sure you want to withdraw this leave request?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text('Withdraw', style: TextStyle(color: Colors.red)),
+                                ),
+                              ],
+                            ),
+                          );
+
+                          if (confirm == true) {
+                            setState(() {
+                              _isLoading = true;
+                            });
+                            final res = await LeaveRequestService.cancelLeaveRequest(
+                              widget.token,
+                              request['id'],
+                            );
+                            if (res['success'] == true) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Request withdrawn successfully'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              }
+                              _loadRequests();
+                            } else {
+                              setState(() {
+                                _isLoading = false;
+                              });
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(res['message'] ?? 'Failed to withdraw request'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.delete_forever, color: Colors.red, size: 18),
+                        label: const Text(
+                          'Withdraw',
+                          style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                        ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: const BorderSide(color: Colors.red, width: 1),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -706,8 +785,8 @@ class _AdminLeaveRequestListState extends State<AdminLeaveRequestList> {
   String? _statusFilter;
   String? _deptFilter;
   String _searchQuery = '';
-  String _sortBy = 'submission_date';
-  String _sortOrder = 'desc';
+  final String _sortBy = 'submission_date';
+  final String _sortOrder = 'desc';
 
   @override
   void initState() {
@@ -883,7 +962,7 @@ class _AdminLeaveRequestListState extends State<AdminLeaveRequestList> {
 
   Widget _buildRequestCard(dynamic request, bool isDark, bool isSmallScreen) {
     Color statusColor;
-    switch (request['status']) {
+    switch (request['status']?.toString().toLowerCase()) {
       case 'pending':
         statusColor = Colors.orange;
         break;
@@ -1309,17 +1388,19 @@ class _AdminPendingRequestListState extends State<AdminPendingRequestList> {
   }
 }
 
-/// Leave Request Detail Sheet - for admin to approve/reject
+/// Leave Request Detail Sheet - for admin/hod to approve/reject
 class LeaveRequestDetailSheet extends StatefulWidget {
   final String token;
   final dynamic request;
   final VoidCallback? onActionCompleted;
+  final bool isHod;
 
   const LeaveRequestDetailSheet({
     super.key,
     required this.token,
     required this.request,
     this.onActionCompleted,
+    this.isHod = false,
   });
 
   @override
@@ -1342,11 +1423,17 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
       _isLoading = true;
     });
 
-    final result = await LeaveRequestService.adminApproveRequest(
-      token: widget.token,
-      requestId: widget.request['id'],
-      comment: _commentController.text.trim(),
-    );
+    final result = widget.isHod
+        ? await LeaveRequestService.hodApproveRequest(
+            token: widget.token,
+            requestId: widget.request['id'],
+            comment: _commentController.text.trim(),
+          )
+        : await LeaveRequestService.adminApproveRequest(
+            token: widget.token,
+            requestId: widget.request['id'],
+            comment: _commentController.text.trim(),
+          );
 
     setState(() {
       _isLoading = false;
@@ -1390,11 +1477,17 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
       _isLoading = true;
     });
 
-    final result = await LeaveRequestService.adminRejectRequest(
-      token: widget.token,
-      requestId: widget.request['id'],
-      comment: _commentController.text.trim(),
-    );
+    final result = widget.isHod
+        ? await LeaveRequestService.hodRejectRequest(
+            token: widget.token,
+            requestId: widget.request['id'],
+            comment: _commentController.text.trim(),
+          )
+        : await LeaveRequestService.adminRejectRequest(
+            token: widget.token,
+            requestId: widget.request['id'],
+            comment: _commentController.text.trim(),
+          );
 
     setState(() {
       _isLoading = false;
@@ -1427,7 +1520,7 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final request = widget.request;
-    final isPending = request['status'] == 'pending';
+    final isPending = (request['status'] ?? 'pending').toString().toLowerCase() == 'pending';
 
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
@@ -1665,26 +1758,30 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
   }
 
   Color _getStatusColor(String status) {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'pending':
         return Colors.orange;
       case 'approved':
         return Colors.green;
       case 'rejected':
         return Colors.red;
+      case 'withdrawn':
+        return Colors.grey;
       default:
         return Colors.grey;
     }
   }
 
   IconData _getStatusIcon(String status) {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'pending':
         return Icons.hourglass_empty;
       case 'approved':
         return Icons.check_circle;
       case 'rejected':
         return Icons.cancel;
+      case 'withdrawn':
+        return Icons.cancel_outlined;
       default:
         return Icons.help;
     }
@@ -1947,5 +2044,373 @@ class _AdminNotificationsWidgetState extends State<AdminNotificationsWidget> {
       default:
         return Icons.notifications;
     }
+  }
+}
+
+/// HOD Leave Management Widget
+class HODLeaveManagement extends StatefulWidget {
+  final String token;
+
+  const HODLeaveManagement({super.key, required this.token});
+
+  @override
+  State<HODLeaveManagement> createState() => _HODLeaveManagementState();
+}
+
+class _HODLeaveManagementState extends State<HODLeaveManagement>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 400;
+
+    return Column(
+      children: [
+        TabBar(
+          controller: _tabController,
+          labelColor: const Color(0xFF00897B),
+          unselectedLabelColor: Colors.grey,
+          labelStyle: isSmallScreen ? const TextStyle(fontSize: 12) : null,
+          tabs: const [
+            Tab(text: 'All Requests'),
+            Tab(text: 'Pending'),
+          ],
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              HODLeaveRequestList(token: widget.token),
+              HODPendingRequestList(token: widget.token),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// HOD Leave Request List
+class HODLeaveRequestList extends StatefulWidget {
+  final String token;
+
+  const HODLeaveRequestList({
+    super.key,
+    required this.token,
+  });
+
+  @override
+  State<HODLeaveRequestList> createState() => _HODLeaveRequestListState();
+}
+
+class _HODLeaveRequestListState extends State<HODLeaveRequestList> {
+  List<dynamic> _requests = [];
+  bool _isLoading = true;
+  String? _statusFilter;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final result = await LeaveRequestService.hodGetLeaveRequests(
+      token: widget.token,
+      status: _statusFilter,
+      search: _searchQuery.isNotEmpty ? _searchQuery : null,
+    );
+
+    setState(() {
+      _isLoading = false;
+      if (result['success'] == true) {
+        _requests = result['requests'] ?? [];
+      }
+    });
+  }
+
+  void _showRequestDetails(dynamic request) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => LeaveRequestDetailSheet(
+        token: widget.token,
+        request: request,
+        onActionCompleted: _loadRequests,
+        isHod: true,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 400;
+
+    return Column(
+      children: [
+        // Filters
+        Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 350;
+              return Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      decoration: InputDecoration(
+                        hintText: isNarrow
+                            ? 'Search...'
+                            : 'Search by name or reg no...',
+                        prefixIcon: Icon(isNarrow ? null : Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: isSmallScreen ? 12 : 16,
+                          vertical: 10,
+                        ),
+                      ),
+                      style: TextStyle(fontSize: isSmallScreen ? 13 : 14),
+                      onChanged: (value) {
+                        _searchQuery = value;
+                        _loadRequests();
+                      },
+                    ),
+                  ),
+                  SizedBox(width: isSmallScreen ? 4 : 8),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.filter_list,
+                      size: isSmallScreen ? 20 : 24,
+                    ),
+                    onSelected: (value) {
+                      setState(() {
+                        _statusFilter = value == 'all' ? null : value;
+                      });
+                      _loadRequests();
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'all', child: Text('All Status')),
+                      const PopupMenuItem(value: 'pending', child: Text('Pending')),
+                      const PopupMenuItem(value: 'approved', child: Text('Approved')),
+                      const PopupMenuItem(value: 'rejected', child: Text('Rejected')),
+                      const PopupMenuItem(value: 'withdrawn', child: Text('Withdrawn')),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+
+        Expanded(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _requests.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No leave requests found',
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadRequests,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        itemCount: _requests.length,
+                        itemBuilder: (context, index) {
+                          final request = _requests[index];
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              onTap: () => _showRequestDetails(request),
+                              title: Text(request['user_name'] ?? ''),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('${request['leave_type'].toString().toUpperCase()} | ${request['start_date']} to ${request['end_date']}'),
+                                  const SizedBox(height: 4),
+                                  Text(request['reason'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+                                ],
+                              ),
+                              trailing: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: _getStatusColor(request['status'] ?? 'pending').withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  (request['status'] ?? 'pending').toString().toUpperCase(),
+                                  style: TextStyle(
+                                    color: _getStatusColor(request['status'] ?? 'pending'),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+        return Colors.orange;
+      case 'approved':
+        return Colors.green;
+      case 'rejected':
+        return Colors.red;
+      case 'withdrawn':
+        return Colors.grey;
+      default:
+        return Colors.grey;
+    }
+  }
+}
+
+/// HOD Pending Request List
+class HODPendingRequestList extends StatefulWidget {
+  final String token;
+
+  const HODPendingRequestList({super.key, required this.token});
+
+  @override
+  State<HODPendingRequestList> createState() => _HODPendingRequestListState();
+}
+
+class _HODPendingRequestListState extends State<HODPendingRequestList> {
+  List<dynamic> _requests = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final result = await LeaveRequestService.hodGetPendingRequests(
+      widget.token,
+    );
+
+    setState(() {
+      _isLoading = false;
+      if (result['success'] == true) {
+        _requests = result['requests'] ?? [];
+      }
+    });
+  }
+
+  void _showRequestDetails(dynamic request) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => LeaveRequestDetailSheet(
+        token: widget.token,
+        request: request,
+        onActionCompleted: _loadRequests,
+        isHod: true,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_requests.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 64,
+              color: isDark ? Colors.green[400] : Colors.green[300],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No pending requests',
+              style: TextStyle(
+                fontSize: 18,
+                color: isDark ? Colors.grey[400] : Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadRequests,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        itemCount: _requests.length,
+        itemBuilder: (context, index) {
+          final request = _requests[index];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ListTile(
+              onTap: () => _showRequestDetails(request),
+              title: Text(request['user_name'] ?? ''),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${request['leave_type'].toString().toUpperCase()} | ${request['start_date']} to ${request['end_date']}'),
+                  const SizedBox(height: 4),
+                  Text(request['reason'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            ),
+          );
+        },
+      ),
+    );
   }
 }

@@ -15,7 +15,7 @@ import 'staff_panel.dart';
 import 'other_staff_login.dart';
 import '../widgets/face_registration_widget.dart';
 
-String get API_URL => CollegeIPConfig.defaultURL;
+String get API_URL => CollegeIPConfig.apiBaseURL;
 
 class AppColors {
   static const Color orange = Color(0xFF6366F1); // Modernized Indigo

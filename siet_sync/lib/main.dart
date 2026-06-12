@@ -20,6 +20,9 @@ late List<CameraDescription> cameras;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    CollegeIPConfig.setRuntimeURL(CollegeIPConfig.customServerURL);
+  }
   if (!kIsWeb) {
     await BackgroundLocationService.initialize();
   }
