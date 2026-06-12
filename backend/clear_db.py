@@ -54,8 +54,15 @@ def clear_database():
             return
 
         for table in TABLES:
-            cur.execute(f"TRUNCATE TABLE {table} CASCADE")
-            print(f"Cleared: {table}")
+            try:
+                cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+                print(f"Cleared: {table}")
+            except psycopg2.errors.UndefinedTable:
+                conn.rollback()
+                print(f"Skipped (table not found): {table}")
+            except Exception as e:
+                conn.rollback()
+                print(f"Error clearing {table}: {e}")
 
         cur.execute("SELECT relname FROM pg_class WHERE relkind = 'S' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')")
         sequences = cur.fetchall()

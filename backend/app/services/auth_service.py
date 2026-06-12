@@ -26,7 +26,14 @@ class AuthService:
         return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
     def verify_password(self, plain_password: str, hashed: str) -> bool:
-        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed.encode('utf-8'))
+        if not hashed:
+            return False
+        try:
+            if hashed.startswith("$2"):
+                return bcrypt.checkpw(plain_password.encode("utf-8"), hashed.encode("utf-8"))
+            return plain_password == hashed
+        except Exception:
+            return False
 
     def create_access_token(
         self,

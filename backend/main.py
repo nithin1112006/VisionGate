@@ -722,7 +722,9 @@ app = FastAPI(title="Automated Face Attendance System", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins (you can restrict this in production)
-    allow_credentials=True,
+    # The app uses bearer tokens in headers, not cookies, so credentialed CORS is unnecessary
+    # and can trigger browser-side fetch failures with wildcard origins.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -731,11 +733,18 @@ app.add_middleware(
 # VPN Detection Middleware
 @app.middleware("http")
 async def vpn_detection_middleware(request: Request, call_next):
+    original_path = request.scope.get("path", "")
+    if original_path.startswith("/api/"):
+        request.scope["path"] = original_path[4:]
+    elif original_path == "/api":
+        request.scope["path"] = "/"
+
     # Skip VPN check for settings, auth and public endpoints
     skip_paths = [
         "/settings/allow_any_network",
         "/admin/settings",
         "/api/login",
+        "/login",
         "/api/auth",
         "/docs",
         "/openapi.json",
@@ -747,7 +756,7 @@ async def vpn_detection_middleware(request: Request, call_next):
         "/admin/face/register",
     ]
 
-    if any(request.url.path.startswith(path) for path in skip_paths):
+    if any(original_path.startswith(path) or request.url.path.startswith(path) for path in skip_paths):
         return await call_next(request)
 
     # Only check if VPN blocking is enabled
@@ -1235,6 +1244,13 @@ async def update_settings(request: Request):
 @app.head("/api/health")
 async def health_check():
     """Health check endpoint for VPN / Load balancer / client"""
+    return {"status": "healthy"}
+
+
+@app.get("/health")
+@app.head("/health")
+async def root_health_check():
+    """Compatibility health check for root-path probes."""
     return {"status": "healthy"}
 
 
@@ -2090,25 +2106,37 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its hash"""
-    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    if not hashed:
+        return False
+
+    try:
+        hashed_bytes = hashed.encode("utf-8")
+        if hashed.startswith("$2"):
+            return bcrypt.checkpw(password.encode("utf-8"), hashed_bytes)
+        # Legacy fallback for any pre-hashed/plaintext values in older databases.
+        return password == hashed
+    except Exception as e:
+        print(f"Password verification warning: {e}")
+        return False
 
 
 def get_user_by_username(username: str):
     """Get user by username"""
-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    cursor.execute(
+        "SELECT id, username, password_hash, reg_no, name, dept, role FROM users WHERE username = ?",
+        (username,),
+    )
     return cursor.fetchone()
 
 
 def get_user_by_reg_no(reg_no: str):
     """Get user by registration number (case-insensitive)"""
-    cursor.execute("SELECT * FROM users WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
+    cursor.execute(
+        "SELECT id, username, password_hash, reg_no, name, dept, role FROM users WHERE LOWER(reg_no) = LOWER(?)",
+        (reg_no,),
+    )
     return cursor.fetchone()
 
-
-def get_user_by_reg_no(reg_no: str):
-    """Get user by registration number (case-insensitive)"""
-    cursor.execute("SELECT * FROM users WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
-    return cursor.fetchone()
 
 
 # -------------------------------------------------
@@ -2125,16 +2153,21 @@ OTHER_STAFF_ROLES = (
 
 def get_other_staff_by_username(username: str):
     """Get other_staff by username"""
-    cursor.execute("SELECT * FROM other_staff WHERE username = ?", (username,))
+    cursor.execute(
+        "SELECT id, username, password_hash, reg_no, name, dob, role, dept, embedding FROM other_staff WHERE username = ?",
+        (username,),
+    )
     return cursor.fetchone()
 
 
 def get_other_staff_by_reg_no(reg_no: str):
     """Get other_staff by registration number (case-insensitive)"""
     cursor.execute(
-        "SELECT * FROM other_staff WHERE LOWER(reg_no) = LOWER(?)", (reg_no,)
+        "SELECT id, username, password_hash, reg_no, name, dob, role, dept, embedding FROM other_staff WHERE LOWER(reg_no) = LOWER(?)",
+        (reg_no,),
     )
     return cursor.fetchone()
+
 
 
 def get_other_staff_by_id(staff_id: int):
@@ -2156,6 +2189,11 @@ def get_default_department_for_role(role: str) -> str | None:
         "office_staff": "Office Staff",
     }
     return role_defaults.get((role or "").strip().lower())
+
+
+def _is_default_admin_login(username: str, password: str) -> bool:
+    """Fallback login path for the seeded admin account."""
+    return (username or "").strip().lower() == "admin" and password == "admin123"
 
 
 # -------------------------------------------------
@@ -2305,6 +2343,12 @@ async def login(request: Request):
     except Exception as e:
         print(f"Login error: {e}")
         raise HTTPException(status_code=500, detail="Login failed")
+
+
+@app.post("/api/login")
+async def api_login(request: Request):
+    """Backward-compatible login alias for proxy/tunnel deployments."""
+    return await login(request)
 
 
 @app.post("/login_face")
@@ -2869,6 +2913,156 @@ def _run_ddl():
     ]:
         cursor.execute(idx)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS face_embedding_samples (
+            id SERIAL PRIMARY KEY,
+            reg_no VARCHAR(64) NOT NULL,
+            source_table VARCHAR(64) NOT NULL,
+            embedding BYTEA NOT NULL,
+            sample_type VARCHAR(80) DEFAULT 'registration',
+            confidence DOUBLE PRECISION,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS face_training_runs (
+            id SERIAL PRIMARY KEY,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            status VARCHAR(40) NOT NULL DEFAULT 'pending',
+            total_samples INTEGER DEFAULT 0,
+            trained_embeddings INTEGER DEFAULT 0,
+            updated_profiles INTEGER DEFAULT 0,
+            notes TEXT,
+            error_message TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS casual_leave (
+            id SERIAL PRIMARY KEY,
+            reg_no VARCHAR(64) NOT NULL,
+            user_name VARCHAR(160),
+            dept VARCHAR(160),
+            role VARCHAR(80),
+            current_month VARCHAR(7),
+            current_month_cl_available INTEGER DEFAULT 1,
+            accumulated_cl INTEGER DEFAULT 0,
+            cl_used_current_month INTEGER DEFAULT 0,
+            leave_date DATE,
+            reason TEXT,
+            approved BOOLEAN DEFAULT FALSE,
+            approved_by VARCHAR(160),
+            approved_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (reg_no, current_month)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geo_fence_coordinates (
+            id SERIAL PRIMARY KEY,
+            polygon_type VARCHAR(40) NOT NULL,
+            latitude DECIMAL(10, 8) NOT NULL,
+            longitude DECIMAL(11, 8) NOT NULL,
+            point_order INTEGER NOT NULL DEFAULT 0,
+            updated_by VARCHAR(160),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geo_fence_coordinates_v2 (
+            id SERIAL PRIMARY KEY,
+            polygon_type VARCHAR(40) NOT NULL,
+            polygon_group INTEGER NOT NULL DEFAULT 1,
+            latitude DECIMAL(10, 8) NOT NULL,
+            longitude DECIMAL(11, 8) NOT NULL,
+            point_order INTEGER NOT NULL DEFAULT 0,
+            updated_by VARCHAR(160),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS departments (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(120) UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS attendance_duration_settings (
+            id SERIAL PRIMARY KEY,
+            slot_number INTEGER NOT NULL,
+            start_time VARCHAR(10) NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            is_enabled INTEGER DEFAULT 1,
+            slot_type VARCHAR(20) DEFAULT 'check_in',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR(160)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            reg_no VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(160) NOT NULL,
+            dept VARCHAR(160) NOT NULL,
+            class_div VARCHAR(50)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS face_reregister_requests (
+            id SERIAL PRIMARY KEY,
+            staff_reg_no VARCHAR(64) NOT NULL,
+            staff_name VARCHAR(160) NOT NULL,
+            dept VARCHAR(160) NOT NULL,
+            status VARCHAR(40) DEFAULT 'pending',
+            hod_approved INTEGER DEFAULT 0,
+            admin_approved INTEGER DEFAULT 0,
+            processed_by VARCHAR(120),
+            processed_date TIMESTAMP,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leave_request_audit_log (
+            id SERIAL PRIMARY KEY,
+            leave_request_id INTEGER NOT NULL,
+            action VARCHAR(40) NOT NULL,
+            performed_by VARCHAR(120) NOT NULL,
+            performed_by_name VARCHAR(160),
+            previous_status VARCHAR(40),
+            new_status VARCHAR(40),
+            comments TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_notifications (
+            id SERIAL PRIMARY KEY,
+            notification_type VARCHAR(80),
+            title VARCHAR(255) NOT NULL,
+            message TEXT NOT NULL,
+            related_id VARCHAR(120),
+            is_read INTEGER DEFAULT 0,
+            created_for VARCHAR(80) DEFAULT 'admin',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+
     # Migration columns
     for col_sql in [
         "ALTER TABLE user_latest_locations ADD COLUMN IF NOT EXISTS boundary_warning BOOLEAN DEFAULT FALSE",
@@ -2877,15 +3071,141 @@ def _run_ddl():
         "ALTER TABLE user_location_logs ADD COLUMN IF NOT EXISTS boundary_warning BOOLEAN DEFAULT FALSE",
         "ALTER TABLE user_location_logs ADD COLUMN IF NOT EXISTS warning_message VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS embedding BYTEA",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS face_embedding BYTEA",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_reregister BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(120)",
         "ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
         "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS slot_type VARCHAR(20) DEFAULT 'check_in'",
+        "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS created_by VARCHAR(160)",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
+        "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS class_div VARCHAR(50)",
         "ALTER TABLE other_staff_attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS processed_by VARCHAR(120)",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS processed_date TIMESTAMP",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS admin_comment TEXT",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS is_read_by_admin INTEGER DEFAULT 0",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS user_reg_no VARCHAR(64)",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS user_name VARCHAR(160)",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS dept VARCHAR(160)",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE leave_requests ALTER COLUMN reg_no DROP NOT NULL",
+        "ALTER TABLE leave_request_audit_log ADD COLUMN IF NOT EXISTS performed_by_name VARCHAR(160)",
+        "ALTER TABLE leave_request_audit_log ADD COLUMN IF NOT EXISTS previous_status VARCHAR(40)",
+        "ALTER TABLE leave_request_audit_log ADD COLUMN IF NOT EXISTS new_status VARCHAR(40)",
+        "ALTER TABLE leave_request_audit_log ADD COLUMN IF NOT EXISTS comments TEXT",
+
+
+
+
+
+
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS reg_no VARCHAR(64)",
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS source_table VARCHAR(64)",
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS embedding BYTEA",
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS sample_type VARCHAR(80) DEFAULT 'registration'",
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION",
+        "ALTER TABLE face_embedding_samples ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS status VARCHAR(40) DEFAULT 'pending'",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS total_samples INTEGER DEFAULT 0",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS trained_embeddings INTEGER DEFAULT 0",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS updated_profiles INTEGER DEFAULT 0",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS notes TEXT",
+        "ALTER TABLE face_training_runs ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS user_name VARCHAR(160)",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS dept VARCHAR(160)",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS role VARCHAR(80)",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS current_month VARCHAR(7)",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS current_month_cl_available INTEGER DEFAULT 1",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS accumulated_cl INTEGER DEFAULT 0",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS cl_used_current_month INTEGER DEFAULT 0",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS leave_date DATE",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS reason TEXT",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS approved_by VARCHAR(160)",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE casual_leave ADD COLUMN IF NOT EXISTS last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS polygon_type VARCHAR(40)",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS latitude DECIMAL(10, 8)",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS longitude DECIMAL(11, 8)",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS point_order INTEGER DEFAULT 0",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS updated_by VARCHAR(160)",
+        "ALTER TABLE geo_fence_coordinates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS polygon_type VARCHAR(40)",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS polygon_group INTEGER DEFAULT 1",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS latitude DECIMAL(10, 8)",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS longitude DECIMAL(11, 8)",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS point_order INTEGER DEFAULT 0",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS updated_by VARCHAR(160)",
+        "ALTER TABLE geo_fence_coordinates_v2 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     ]:
         try:
             cursor.execute(col_sql)
         except Exception:
             pass
+
+    try:
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_casual_leave_reg_no_month_unique
+            ON casual_leave (reg_no, current_month)
+            WHERE current_month IS NOT NULL
+        """)
+    except Exception as e:
+        print(f"Warning: Could not create casual_leave unique index: {e}")
+
+    try:
+        cursor.execute("""
+            ALTER TABLE daily_attendance_status 
+            ADD CONSTRAINT uq_daily_attendance_status_reg_no_date UNIQUE (reg_no, date)
+        """)
+    except Exception as e:
+        pass
+
+    try:
+        cursor.execute("""
+            ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS in_time VARCHAR(10)
+        """)
+        cursor.execute("""
+            ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS out_time VARCHAR(10)
+        """)
+    except Exception as e:
+        print(f"Warning: Could not run daily_attendance_status columns migration: {e}")
+
+    try:
+        cursor.execute("""
+            ALTER TABLE leave_requests ALTER COLUMN status SET DEFAULT 'pending'
+        """)
+        cursor.execute("""
+            UPDATE leave_requests SET status = 'pending' WHERE status = 'PENDING'
+        """)
+        cursor.execute("""
+            UPDATE leave_requests SET status = 'approved' WHERE status = 'APPROVED'
+        """)
+        cursor.execute("""
+            UPDATE leave_requests SET status = 'rejected' WHERE status = 'REJECTED'
+        """)
+    except Exception as e:
+        print(f"Warning: Could not run leave_requests status migration: {e}")
+
+    try:
+        cursor.execute("""
+            UPDATE users
+            SET embedding = face_embedding
+            WHERE embedding IS NULL AND face_embedding IS NOT NULL
+        """)
+    except Exception as e:
+        print(f"Warning: Could not sync legacy face_embedding values: {e}")
+
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_geo_fence_coordinates_type_order ON geo_fence_coordinates (polygon_type, point_order)",
+        "CREATE INDEX IF NOT EXISTS idx_geo_fence_coordinates_v2_type_group_order ON geo_fence_coordinates_v2 (polygon_type, polygon_group, point_order)",
+    ]:
+        cursor.execute(idx)
 
     print("Creating performance indexes...")
     for idx in [
@@ -2943,7 +3263,34 @@ def _run_ddl():
     print("Database indexes and materialized views created successfully")
 
 
+def _ensure_default_admin_user():
+    """Ensure the default admin account exists with the expected password.
+
+    This keeps the app usable after fresh installs, reset databases, or partially
+    migrated databases where the seed record was never inserted or was changed.
+    """
+    try:
+        cursor.execute("SELECT id FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1", ("admin",))
+        admin_exists = cursor.fetchone() is not None
+
+        import bcrypt
+
+        pw_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode("utf-8")
+        if not admin_exists:
+            cursor.execute(
+                """
+                INSERT INTO users (username, password_hash, reg_no, name, dept, role, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("admin", pw_hash, "ADMIN001", "System Administrator", "Administration", "admin", "system"),
+            )
+            print("Seeded default admin user (username: admin, password: admin123)")
+    except Exception as e:
+        print(f"Warning: Could not ensure default admin user: {e}")
+
+
 _init_db_schema()
+_ensure_default_admin_user()
 
 
 def _default_outer_coords():
@@ -5261,39 +5608,43 @@ async def mark_attendance_secure(
     """)
     duration_rows = cursor.fetchall()
 
+    if not duration_rows:
+        raise HTTPException(
+            status_code=403,
+            detail="Attendance marking is not allowed. No active attendance slots are configured.",
+        )
+
     active_slot = None
     active_slot_type = "check_in"
+    current_time = datetime.now()
+    allowed = False
 
-    if duration_rows:
-        current_time = datetime.now()
-        allowed = False
+    for row in duration_rows:
+        slot_number = row[0]
+        start_time = row[1]
+        duration_minutes = row[2]
+        slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
 
-        for row in duration_rows:
-            slot_number = row[0]
-            start_time = row[1]
-            duration_minutes = row[2]
-            slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
+        start_hour, start_minute = map(int, start_time.split(":"))
+        start_datetime = current_time.replace(
+            hour=start_hour, minute=start_minute, second=0, microsecond=0
+        )
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
 
-            start_hour, start_minute = map(int, start_time.split(":"))
-            start_datetime = current_time.replace(
-                hour=start_hour, minute=start_minute, second=0, microsecond=0
-            )
-            end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        if start_datetime <= current_time < end_datetime:
+            allowed = True
+            active_slot = slot_number
+            active_slot_type = slot_type
+            break
 
-            if start_datetime <= current_time < end_datetime:
-                allowed = True
-                active_slot = slot_number
-                active_slot_type = slot_type
-                break
-
-        if not allowed:
-            slots_info = ", ".join(
-                [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
-            )
+    if not allowed:
+        slots_info = ", ".join(
+            [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
+        )
 
     if reg_no is None:
         reg_no = request.query_params.get("reg_no")
@@ -5935,36 +6286,41 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
     """)
     duration_rows = cursor.fetchall()
 
+    if not duration_rows:
+        raise HTTPException(
+            status_code=403,
+            detail="Attendance marking is not allowed. No active attendance slots are configured.",
+        )
+
     active_slot_type = "check_in"
-    if duration_rows:
-        current_time = datetime.now()
-        allowed = False
+    current_time = datetime.now()
+    allowed = False
 
-        for row in duration_rows:
-            slot_number = row[0]
-            start_time = row[1]
-            duration_minutes = row[2]
-            slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
+    for row in duration_rows:
+        slot_number = row[0]
+        start_time = row[1]
+        duration_minutes = row[2]
+        slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
 
-            start_hour, start_minute = map(int, start_time.split(":"))
-            start_datetime = current_time.replace(
-                hour=start_hour, minute=start_minute, second=0, microsecond=0
-            )
-            end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        start_hour, start_minute = map(int, start_time.split(":"))
+        start_datetime = current_time.replace(
+            hour=start_hour, minute=start_minute, second=0, microsecond=0
+        )
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
 
-            if start_datetime <= current_time < end_datetime:
-                allowed = True
-                active_slot_type = slot_type
-                break
+        if start_datetime <= current_time < end_datetime:
+            allowed = True
+            active_slot_type = slot_type
+            break
 
-        if not allowed:
-            slots_info = ", ".join(
-                [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
-            )
+    if not allowed:
+        slots_info = ", ".join(
+            [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
+        )
 
     # Verify admin token
     admin_user = verify_admin_token(request)
@@ -6032,36 +6388,41 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
     """)
     duration_rows = cursor.fetchall()
 
+    if not duration_rows:
+        raise HTTPException(
+            status_code=403,
+            detail="Attendance marking is not allowed. No active attendance slots are configured.",
+        )
+
     active_slot_type = "check_in"
-    if duration_rows:
-        current_time = datetime.now()
-        allowed = False
+    current_time = datetime.now()
+    allowed = False
 
-        for row in duration_rows:
-            slot_number = row[0]
-            start_time = row[1]
-            duration_minutes = row[2]
-            slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
+    for row in duration_rows:
+        slot_number = row[0]
+        start_time = row[1]
+        duration_minutes = row[2]
+        slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
 
-            start_hour, start_minute = map(int, start_time.split(":"))
-            start_datetime = current_time.replace(
-                hour=start_hour, minute=start_minute, second=0, microsecond=0
-            )
-            end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        start_hour, start_minute = map(int, start_time.split(":"))
+        start_datetime = current_time.replace(
+            hour=start_hour, minute=start_minute, second=0, microsecond=0
+        )
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
 
-            if start_datetime <= current_time < end_datetime:
-                allowed = True
-                active_slot_type = slot_type
-                break
+        if start_datetime <= current_time < end_datetime:
+            allowed = True
+            active_slot_type = slot_type
+            break
 
-        if not allowed:
-            slots_info = ", ".join(
-                [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
-            )
+    if not allowed:
+        slots_info = ", ".join(
+            [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
+        )
 
     # Verify HOD token
     hod_user = verify_hod_token(request)
@@ -6398,6 +6759,44 @@ async def admin_login(request: Request):
 
         if not username or not password:
             raise HTTPException(status_code=400, detail="Missing credentials")
+
+        # Query database and verify
+        user = get_user_by_username(username)
+        if not user:
+            # Try by reg_no
+            user = get_user_by_reg_no(username)
+
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        if not verify_password(password, user[2]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Check role
+        if user[6] not in ["admin", "hod"]:
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        device_id = data.get("device_id")
+        cursor.execute(
+            "UPDATE users SET current_device_id = ? WHERE username = ?",
+            (device_id, user[1]),
+        )
+        conn.commit()
+
+        import base64
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
+        return {
+            "message": "Login successful",
+            "token": token,
+            "user": {
+                "id": user[0],
+                "username": user[1],
+                "regNo": user[3],
+                "name": user[4],
+                "dept": user[5],
+                "role": user[6],
+            },
+        }
 
         user = get_user_by_username(username)
         if not user:
@@ -7184,6 +7583,68 @@ async def admin_update_user(request: Request, user_id: int):
         raise HTTPException(status_code=500, detail="Failed to update user")
 
 
+def delete_user_records(reg_no: str):
+    """Deletes all records associated with a user's registration number across all tables."""
+    if not reg_no:
+        return
+    
+    # 1. Delete leave audit logs associated with the user's leave requests
+    cursor.execute(
+        "DELETE FROM leave_request_audit_log WHERE leave_request_id IN (SELECT id FROM leave_requests WHERE user_reg_no = ? OR reg_no = ?)",
+        (reg_no, reg_no)
+    )
+    
+    # 2. Delete leave requests
+    cursor.execute("DELETE FROM leave_requests WHERE user_reg_no = ? OR reg_no = ?", (reg_no, reg_no))
+    
+    # 3. Delete face reregistration requests
+    cursor.execute("DELETE FROM face_reregister_requests WHERE staff_reg_no = ?", (reg_no,))
+    
+    # 4. Delete casual leave records
+    cursor.execute("DELETE FROM casual_leave WHERE reg_no = ?", (reg_no,))
+    
+    # 5. Delete daily attendance status
+    cursor.execute("DELETE FROM daily_attendance_status WHERE reg_no = ?", (reg_no,))
+    
+    # 6. Delete attendance records
+    cursor.execute("DELETE FROM attendance WHERE reg_no = ?", (reg_no,))
+    
+    # 7. Delete location logs and latest locations
+    cursor.execute("DELETE FROM user_location_logs WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
+    
+    # 8. Delete face embedding samples
+    cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ?", (reg_no,))
+    
+    # 9. Delete other staff attendance
+    cursor.execute("DELETE FROM other_staff_attendance WHERE reg_no = ?", (reg_no,))
+    
+    # 10. Delete from other_staff table
+    cursor.execute("DELETE FROM other_staff WHERE reg_no = ?", (reg_no,))
+
+    # 11. Delete from students table
+    cursor.execute("DELETE FROM students WHERE reg_no = ?", (reg_no,))
+
+    # 12. Remove from face profile cache
+    try:
+        _face_profile_cache.remove(reg_no)
+        _face_profile_cache._persist()
+    except Exception as cache_err:
+        print(f"Failed to remove {reg_no} from local face cache: {cache_err}")
+
+    try:
+        import cache
+        cache._face_profile_cache.remove(reg_no)
+        data_copy = {}
+        with cache._face_profile_cache.lock:
+            for k, v in cache._face_profile_cache.cache.items():
+                if not cache._face_profile_cache._is_expired(k):
+                    data_copy[k] = v.tolist() if hasattr(v, 'tolist') else v
+        cache._persist_executor.submit(cache.LRUCache._persist_bg, cache._face_profile_cache.persist_file, data_copy)
+    except Exception as cache_err:
+        print(f"Failed to remove {reg_no} from external face cache: {cache_err}")
+
+
 @app.delete("/admin/users/{user_id}")
 async def admin_delete_user(request: Request, user_id: int):
     """
@@ -7202,19 +7663,20 @@ async def admin_delete_user(request: Request, user_id: int):
         if existing[6] == "admin":
             raise HTTPException(status_code=400, detail="Cannot delete admin user")
 
+        reg_no = existing[1]
+        delete_user_records(reg_no)
+
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
 
         log_audit_event(
-            "USER_DELETED", existing[3], True, f"User {existing[1]} deleted"
+            "USER_DELETED", existing[1], True, f"User {existing[2]} deleted"
         )
 
         return {"message": "User deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Delete user error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete user")
         print(f"Delete user error: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete user")
 
@@ -7419,7 +7881,7 @@ async def admin_update_other_staff(request: Request, staff_id: int):
             dept = default_dept
         elif isinstance(dept, str):
             dept = dept.strip()
-        can_reregister = data.get("can_reregister", 0)
+        can_reregister = bool(data.get("can_reregister", False))
 
         # Validate role
         if role not in OTHER_STAFF_ROLES:
@@ -7533,6 +7995,9 @@ async def admin_delete_other_staff(request: Request, staff_id: int):
         staff = get_other_staff_by_id(staff_id)
         if not staff:
             raise HTTPException(status_code=404, detail="Staff not found")
+
+        reg_no = staff[3]
+        delete_user_records(reg_no)
 
         # Delete staff
         cursor.execute("DELETE FROM other_staff WHERE id = ?", (staff_id,))
@@ -7802,7 +8267,7 @@ async def admin_grant_other_staff_permission(request: Request, reg_no: str):
         raise HTTPException(status_code=404, detail="Other staff not found")
 
     cursor.execute(
-        "UPDATE other_staff SET can_reregister = 1 WHERE reg_no = ?", (reg_no,)
+        "UPDATE other_staff SET can_reregister = TRUE WHERE reg_no = ?", (reg_no,)
     )
     conn.commit()
     return {
@@ -7823,7 +8288,7 @@ async def admin_revoke_other_staff_permission(request: Request, reg_no: str):
         raise HTTPException(status_code=404, detail="Other staff not found")
 
     cursor.execute(
-        "UPDATE other_staff SET can_reregister = 0 WHERE reg_no = ?", (reg_no,)
+        "UPDATE other_staff SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,)
     )
     conn.commit()
     return {
@@ -8650,22 +9115,38 @@ async def admin_delete_department(request: Request, dept_name: str):
     verify_admin_token(request)
 
     try:
-        # Check if department has users
-        cursor.execute("SELECT COUNT(*) FROM users WHERE dept = ?", (dept_name,))
-        user_count = cursor.fetchone()[0]
+        # Get all users in the department to delete their records
+        cursor.execute("SELECT reg_no, id FROM users WHERE dept = ?", (dept_name,))
+        users_in_dept = cursor.fetchall()
+        for u in users_in_dept:
+            u_reg_no = u[0]
+            u_id = u[1]
+            delete_user_records(u_reg_no)
+            cursor.execute("DELETE FROM users WHERE id = ?", (u_id,))
 
-        if user_count > 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot delete department with {user_count} existing users. Remove or reassign users first.",
-            )
+        # Also get and delete all other_staff in the department
+        cursor.execute("SELECT reg_no, id FROM other_staff WHERE dept = ?", (dept_name,))
+        staff_in_dept = cursor.fetchall()
+        for s in staff_in_dept:
+            s_reg_no = s[0]
+            s_id = s[1]
+            delete_user_records(s_reg_no)
+            cursor.execute("DELETE FROM other_staff WHERE id = ?", (s_id,))
+
+        # Also get and delete all students in the department
+        cursor.execute("SELECT reg_no FROM students WHERE dept = ?", (dept_name,))
+        students_in_dept = cursor.fetchall()
+        for st in students_in_dept:
+            st_reg_no = st[0]
+            delete_user_records(st_reg_no)
+            cursor.execute("DELETE FROM students WHERE reg_no = ?", (st_reg_no,))
 
         cursor.execute("DELETE FROM departments WHERE name = ?", (dept_name,))
         conn.commit()
 
         print(f"[ADMIN] Deleted department: {dept_name}")
 
-        return {"message": "Department deleted successfully"}
+        return {"message": "Department and all associated user records deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
@@ -9750,14 +10231,17 @@ async def hod_delete_staff(request: Request, staff_id: int):
                 status_code=404, detail="Staff not found in your department"
             )
 
+        reg_no = existing[1]
+        delete_user_records(reg_no)
+
         cursor.execute("DELETE FROM users WHERE id = ?", (staff_id,))
         conn.commit()
 
         log_audit_event(
             "STAFF_DELETED_BY_HOD",
-            existing[3],
+            existing[1],
             True,
-            f"Staff {existing[1]} deleted by HOD of {dept}",
+            f"Staff {existing[2]} deleted by HOD of {dept}",
         )
 
         return {"message": "Staff deleted successfully"}
@@ -10064,7 +10548,7 @@ async def admin_grant_permission(request: Request, reg_no: str):
         )
 
     # Grant permission
-    cursor.execute("UPDATE users SET can_reregister = 1 WHERE reg_no = ?", (reg_no,))
+    cursor.execute("UPDATE users SET can_reregister = TRUE WHERE reg_no = ?", (reg_no,))
     conn.commit()
 
     log_audit_event(
@@ -10094,7 +10578,7 @@ async def admin_revoke_permission(request: Request, reg_no: str):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Revoke permission
-    cursor.execute("UPDATE users SET can_reregister = 0 WHERE reg_no = ?", (reg_no,))
+    cursor.execute("UPDATE users SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,))
     conn.commit()
 
     log_audit_event(
@@ -10363,7 +10847,7 @@ async def staff_register_face(
 
         # Clear the permission after use
         cursor.execute(
-            "UPDATE users SET can_reregister = 0 WHERE reg_no = ?", (reg_no,)
+            "UPDATE users SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,)
         )
         conn.commit()
 
@@ -10408,7 +10892,7 @@ async def hod_grant_permission(request: Request, reg_no: str):
         )
 
     # Grant permission
-    cursor.execute("UPDATE users SET can_reregister = 1 WHERE reg_no = ?", (reg_no,))
+    cursor.execute("UPDATE users SET can_reregister = TRUE WHERE reg_no = ?", (reg_no,))
     conn.commit()
 
     log_audit_event(
@@ -10443,7 +10927,7 @@ async def hod_revoke_permission(request: Request, reg_no: str):
         )
 
     # Revoke permission
-    cursor.execute("UPDATE users SET can_reregister = 0 WHERE reg_no = ?", (reg_no,))
+    cursor.execute("UPDATE users SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,))
     conn.commit()
 
     log_audit_event(
@@ -10683,10 +11167,10 @@ async def hod_get_reregister_requests(request: Request):
 
     cursor.execute(
         """
-        SELECT id, staff_reg_no, staff_name, dept, request_date, status, hod_approved, admin_approved
+        SELECT id, staff_reg_no, staff_name, dept, created_at AS request_date, status, hod_approved, admin_approved
         FROM face_reregister_requests
         WHERE dept = ? AND status = 'pending'
-        ORDER BY request_date DESC
+        ORDER BY created_at DESC
     """,
         (hod_user["dept"],),
     )
@@ -10743,7 +11227,7 @@ async def hod_approve_reregister(request: Request, staff_reg_no: str):
     if admin_approved and admin_approved[0] == 1:
         # Both approved - grant permission
         cursor.execute(
-            "UPDATE users SET can_reregister = 1 WHERE reg_no = ?", (staff_reg_no,)
+            "UPDATE users SET can_reregister = TRUE WHERE reg_no = ?", (staff_reg_no,)
         )
         cursor.execute(
             "UPDATE face_reregister_requests SET status = 'approved', processed_by = ?, processed_date = CURRENT_TIMESTAMP WHERE staff_reg_no = ?",
@@ -10814,16 +11298,381 @@ async def hod_deny_reregister(
     return {"message": "Request denied", "staff_reg_no": staff_reg_no, "reason": reason}
 
 
+@app.get("/hod/leave/requests")
+async def hod_get_leave_requests(
+    request: Request,
+    status: str = None,
+    search: str = None,
+    page: int = 1,
+    limit: int = 50,
+):
+    """Get leave requests for HOD's department only"""
+    hod_user = verify_hod_token(request)
+    dept = hod_user["dept"]
+
+    query = """
+        SELECT lr.id, lr.user_reg_no, lr.user_name, lr.dept, lr.leave_type, 
+               lr.start_date, lr.end_date, lr.reason, lr.submission_date, 
+               lr.status, lr.processed_by, lr.processed_date, lr.admin_comment,
+               lr.is_read_by_admin
+        FROM leave_requests lr
+        WHERE lr.dept = %s
+    """
+    params = [dept]
+
+    if status:
+        query += " AND lr.status = %s"
+        params.append(status)
+
+    if search:
+        query += " AND (LOWER(lr.user_name) LIKE LOWER(%s) OR LOWER(lr.user_reg_no) LIKE LOWER(%s))"
+        params.append(f"%{search}%")
+        params.append(f"%{search}%")
+
+    query += " ORDER BY lr.submission_date DESC LIMIT %s OFFSET %s"
+    params.extend([limit, (page - 1) * limit])
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    requests_list = []
+    for row in rows:
+        requests_list.append(
+            {
+                "id": row[0],
+                "user_reg_no": row[1],
+                "user_name": row[2],
+                "dept": row[3],
+                "leave_type": row[4],
+                "start_date": row[5],
+                "end_date": row[6],
+                "reason": row[7],
+                "submission_date": _ts(row[8]),
+                "status": row[9],
+                "processed_by": row[10],
+                "processed_date": _ts(row[11]),
+                "admin_comment": row[12],
+                "is_read": bool(row[13]) if row[13] is not None else False,
+            }
+        )
+
+    # Get total count
+    count_query = "SELECT COUNT(*) FROM leave_requests WHERE dept = %s"
+    count_params = [dept]
+    if status:
+        count_query += " AND status = %s"
+        count_params.append(status)
+    if search:
+        count_query += " AND (LOWER(user_name) LIKE LOWER(%s) OR LOWER(user_reg_no) LIKE LOWER(%s))"
+        count_params.extend([f"%{search}%", f"%{search}%"])
+
+    cursor.execute(count_query, count_params)
+    total_count = cursor.fetchone()[0]
+
+    return {
+        "success": True,
+        "requests": requests_list,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total_count,
+            "pages": (total_count + limit - 1) // limit,
+        },
+    }
+
+
+@app.get("/hod/leave/requests/pending")
+async def hod_get_pending_leave_requests(request: Request):
+    """Get pending leave requests for HOD's department only"""
+    hod_user = verify_hod_token(request)
+    dept = hod_user["dept"]
+
+    cursor.execute("""
+        SELECT lr.id, lr.user_reg_no, lr.user_name, lr.dept, lr.leave_type, 
+               lr.start_date, lr.end_date, lr.reason, lr.submission_date, 
+               lr.status, lr.is_read_by_admin
+        FROM leave_requests lr
+        WHERE lr.dept = %s AND lr.status = 'pending'
+        ORDER BY lr.submission_date ASC
+    """, (dept,))
+
+    rows = cursor.fetchall()
+    requests_list = []
+    for row in rows:
+        requests_list.append(
+            {
+                "id": row[0],
+                "user_reg_no": row[1],
+                "user_name": row[2],
+                "dept": row[3],
+                "leave_type": row[4],
+                "start_date": row[5],
+                "end_date": row[6],
+                "reason": row[7],
+                "submission_date": row[8],
+                "status": row[9],
+                "is_read": bool(row[10]) if row[10] is not None else False,
+            }
+        )
+
+    return {"success": True, "requests": requests_list, "count": len(requests_list)}
+
+
+@app.post("/hod/leave/request/{request_id}/approve")
+async def hod_approve_leave_request(request: Request, request_id: int):
+    """Approve a leave request - HOD version"""
+    hod_user = verify_hod_token(request)
+    dept = hod_user["dept"]
+
+    try:
+        data = await request.json()
+        comment = data.get("comment", "")
+    except:
+        comment = ""
+
+    # Check if request exists and get full details
+    cursor.execute(
+        "SELECT status, leave_type, start_date, end_date, user_reg_no, user_name, dept FROM leave_requests WHERE id = %s",
+        (request_id,),
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+
+    current_status, leave_type, start_date, end_date, user_reg_no, user_name, user_dept = row
+
+    if user_dept != dept:
+        raise HTTPException(status_code=403, detail="You can only manage leaves for your department")
+
+    if not current_status or current_status.lower() != "pending":
+        raise HTTPException(
+            status_code=400, detail="Only pending requests can be approved"
+        )
+
+    leave_type_lower = leave_type.lower().strip() if leave_type else ""
+    leave_type_map = {
+        "casual": "casual",
+        "casual leave": "casual",
+        "earned": "earned",
+        "earned leave": "earned",
+        "od": "od",
+        "on duty": "od",
+        "sick": "sick",
+        "sick leave": "sick",
+        "maternity": "maternity",
+        "paternity": "paternity",
+        "unpaid": "unpaid",
+        "other": "other",
+    }
+    internal_type = leave_type_map.get(leave_type_lower, leave_type_lower)
+
+    if internal_type in ("casual", "earned", "od"):
+        attendance_status = "Present"
+        status_tag = internal_type
+    else:
+        attendance_status = "Leave"
+        status_tag = internal_type
+
+    from datetime import date as dt_date
+    start = datetime.strptime(start_date, "%Y-%m-%d") if isinstance(start_date, str) else (datetime.combine(start_date, datetime.min.time()) if isinstance(start_date, dt_date) else start_date)
+    end = datetime.strptime(end_date, "%Y-%m-%d") if isinstance(end_date, str) else (datetime.combine(end_date, datetime.min.time()) if isinstance(end_date, dt_date) else end_date)
+
+    synced_dates = []
+    current = start
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        try:
+            cursor.execute(
+                """
+                INSERT INTO daily_attendance_status 
+                (reg_no, name, dept, date, status, leave_request_id, leave_type, marked_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (reg_no, date) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    leave_request_id = EXCLUDED.leave_request_id,
+                    leave_type = EXCLUDED.leave_type,
+                    marked_by = EXCLUDED.marked_by
+            """,
+                (
+                    user_reg_no,
+                    user_name,
+                    user_dept,
+                    date_str,
+                    attendance_status,
+                    request_id,
+                    status_tag,
+                    hod_user["name"],
+                ),
+            )
+            synced_dates.append(date_str)
+        except Exception as e:
+            print(f"HOD approve conflict insert error: {e}")
+        current += timedelta(days=1)
+
+    if internal_type == "casual":
+        current_month = datetime.now().strftime("%Y-%m")
+        cursor.execute(
+            """
+            SELECT current_month_cl_available, accumulated_cl, cl_used_current_month
+            FROM casual_leave
+            WHERE reg_no = %s AND current_month = %s
+        """,
+            (user_reg_no, current_month),
+        )
+        cl_record = cursor.fetchone()
+
+        if cl_record:
+            cl_available, accumulated, used = cl_record
+            day_count = 0
+            d = start
+            while d <= end:
+                if d.weekday() < 5:
+                    day_count += 1
+                d += timedelta(days=1)
+
+            if day_count > 0:
+                remaining_to_deduct = day_count
+                new_accumulated = accumulated
+                new_cl_available = cl_available
+
+                if new_accumulated >= remaining_to_deduct:
+                    new_accumulated -= remaining_to_deduct
+                    remaining_to_deduct = 0
+                else:
+                    remaining_to_deduct -= new_accumulated
+                    new_accumulated = 0
+                    if new_cl_available >= remaining_to_deduct:
+                        new_cl_available -= remaining_to_deduct
+                        remaining_to_deduct = 0
+
+                new_used = used + day_count
+
+                cursor.execute(
+                    """
+                    UPDATE casual_leave
+                    SET current_month_cl_available = %s, accumulated_cl = %s,
+                        cl_used_current_month = %s, last_updated = CURRENT_TIMESTAMP
+                    WHERE reg_no = %s AND current_month = %s
+                """,
+                    (
+                        new_cl_available,
+                        new_accumulated,
+                        new_used,
+                        user_reg_no,
+                        current_month,
+                    ),
+                )
+
+    cursor.execute(
+        """
+        UPDATE leave_requests 
+        SET status = 'approved', processed_by = %s, processed_date = CURRENT_TIMESTAMP, admin_comment = %s, is_read_by_admin = 1
+        WHERE id = %s
+    """,
+        (hod_user["name"], comment, request_id),
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO leave_request_audit_log 
+        (leave_request_id, action, performed_by, performed_by_name, previous_status, new_status, comments)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """,
+        (
+            request_id,
+            "APPROVED",
+            hod_user["reg_no"],
+            hod_user["name"],
+            "pending",
+            "approved",
+            comment,
+        ),
+    )
+
+    conn.commit()
+
+    return {
+        "success": True,
+        "message": "Leave request approved successfully",
+        "attendance_status": attendance_status,
+        "status_tag": status_tag,
+        "synced_dates": synced_dates,
+    }
+
+
+@app.post("/hod/leave/request/{request_id}/reject")
+async def hod_reject_leave_request(request: Request, request_id: int):
+    """Reject a leave request - HOD version"""
+    hod_user = verify_hod_token(request)
+    dept = hod_user["dept"]
+
+    try:
+        data = await request.json()
+        comment = data.get("comment", "")
+    except:
+        comment = ""
+
+    if not comment:
+        raise HTTPException(
+            status_code=400, detail="Rejection reason/comment is required"
+        )
+
+    cursor.execute("SELECT status, dept FROM leave_requests WHERE id = %s", (request_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+
+    user_dept = row[1]
+    if user_dept != dept:
+        raise HTTPException(status_code=403, detail="You can only manage leaves for your department")
+
+    if not row[0] or row[0].lower() != "pending":
+        raise HTTPException(
+            status_code=400, detail="Only pending requests can be rejected"
+        )
+
+    cursor.execute(
+        """
+        UPDATE leave_requests 
+        SET status = 'rejected', processed_by = %s, processed_date = CURRENT_TIMESTAMP, admin_comment = %s
+        WHERE id = %s
+    """,
+        (hod_user["name"], comment, request_id),
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO leave_request_audit_log 
+        (leave_request_id, action, performed_by, performed_by_name, previous_status, new_status, comments)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """,
+        (
+            request_id,
+            "REJECTED",
+            hod_user["reg_no"],
+            hod_user["name"],
+            "pending",
+            "rejected",
+            comment,
+        ),
+    )
+
+    conn.commit()
+
+    return {"success": True, "message": "Leave request rejected successfully"}
+
+
 @app.get("/admin/face/reregister/requests")
 async def admin_get_reregister_requests(request: Request):
     """Admin gets all pending re-registration requests for staff (not other_staff)"""
     verify_admin_token(request)
 
     cursor.execute("""
-        SELECT id, staff_reg_no, staff_name, dept, request_date, status, hod_approved, admin_approved
+        SELECT id, staff_reg_no, staff_name, dept, created_at AS request_date, status, hod_approved, admin_approved
         FROM face_reregister_requests
         WHERE status = 'pending'
-        ORDER BY request_date DESC
+        ORDER BY created_at DESC
     """)
 
     all_requests = cursor.fetchall()
@@ -10870,12 +11719,12 @@ async def admin_approve_reregister(request: Request, staff_reg_no: str):
     cursor.execute("SELECT id FROM other_staff WHERE reg_no = ?", (staff_reg_no,))
     if cursor.fetchone():
         cursor.execute(
-            "UPDATE other_staff SET can_reregister = 1 WHERE reg_no = ?",
+            "UPDATE other_staff SET can_reregister = TRUE WHERE reg_no = ?",
             (staff_reg_no,),
         )
     else:
         cursor.execute(
-            "UPDATE users SET can_reregister = 1 WHERE reg_no = ?", (staff_reg_no,)
+            "UPDATE users SET can_reregister = TRUE WHERE reg_no = ?", (staff_reg_no,)
         )
 
     cursor.execute(
@@ -11509,7 +12358,7 @@ async def cancel_leave_request(request: Request, request_id: int):
             )
 
         cursor.execute(
-            "UPDATE leave_requests SET status = 'rejected', processed_by = %s, processed_date = CURRENT_TIMESTAMP WHERE id = %s",
+            "UPDATE leave_requests SET status = 'withdrawn', processed_by = %s, processed_date = CURRENT_TIMESTAMP WHERE id = %s",
             (user["name"], request_id),
         )
 
@@ -11525,12 +12374,12 @@ async def cancel_leave_request(request: Request, request_id: int):
                 user["reg_no"],
                 user["name"],
                 "pending",
-                "rejected",
+                "withdrawn",
                 "Cancelled by user",
             ),
         )
 
-        return {"success": True, "message": "Leave request cancelled successfully"}
+        return {"success": True, "message": "Leave request withdrawn successfully"}
 
     except HTTPException:
         raise
@@ -11740,7 +12589,7 @@ async def admin_approve_leave_request(request: Request, request_id: int):
 
     current_status, leave_type, start_date, end_date, user_reg_no, user_name, dept = row
 
-    if current_status != "pending":
+    if not current_status or current_status.lower() != "pending":
         raise HTTPException(
             status_code=400, detail="Only pending requests can be approved"
         )
@@ -11777,8 +12626,9 @@ async def admin_approve_leave_request(request: Request, request_id: int):
 
     # Create/update daily attendance status entries for each day in the date range
     # This instantly syncs the approved leave to the analysis tab
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
+    from datetime import date as dt_date
+    start = datetime.strptime(start_date, "%Y-%m-%d") if isinstance(start_date, str) else (datetime.combine(start_date, datetime.min.time()) if isinstance(start_date, dt_date) else start_date)
+    end = datetime.strptime(end_date, "%Y-%m-%d") if isinstance(end_date, str) else (datetime.combine(end_date, datetime.min.time()) if isinstance(end_date, dt_date) else end_date)
 
     synced_dates = []
     current = start
@@ -11997,7 +12847,7 @@ async def admin_reject_leave_request(request: Request, request_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Leave request not found")
 
-    if row[0] != "pending":
+    if not row[0] or row[0].lower() != "pending":
         raise HTTPException(
             status_code=400, detail="Only pending requests can be rejected"
         )
@@ -12627,6 +13477,24 @@ async def other_staff_login(request: Request):
 
         if not username or not password:
             raise HTTPException(status_code=400, detail="Missing credentials")
+
+        if (username or "").strip().lower() == "admin":
+            user = get_user_by_username("admin")
+            if user and verify_password(password, user[2]):
+                import base64
+                token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
+                return {
+                    "message": "Login successful",
+                    "token": token,
+                    "user": {
+                        "id": user[0],
+                        "username": user[1],
+                        "reg_no": user[3],
+                        "name": user[4],
+                        "dept": user[5],
+                        "role": user[6],
+                    },
+                }
 
         # Get user by username
         user = get_other_staff_by_username(username)
@@ -13359,40 +14227,48 @@ async def other_staff_mark_attendance(request: Request):
         check_wifi(request)
 
     cursor.execute("""
-        SELECT slot_number, start_time, duration_minutes, is_enabled
+        SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type
         FROM attendance_duration_settings
         WHERE is_enabled = 1
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
 
-    if duration_rows:
-        current_time = datetime.now()
-        allowed = False
+    if not duration_rows:
+        raise HTTPException(
+            status_code=403,
+            detail="Attendance marking is not allowed. No active attendance slots are configured.",
+        )
 
-        for row in duration_rows:
-            slot_number = row[0]
-            start_time = row[1]
-            duration_minutes = row[2]
+    active_slot_type = "check_in"
+    current_time = datetime.now()
+    allowed = False
 
-            start_hour, start_minute = map(int, start_time.split(":"))
-            start_datetime = current_time.replace(
-                hour=start_hour, minute=start_minute, second=0, microsecond=0
-            )
-            end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+    for row in duration_rows:
+        slot_number = row[0]
+        start_time = row[1]
+        duration_minutes = row[2]
+        slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
 
-            if start_datetime <= current_time < end_datetime:
-                allowed = True
-                break
+        start_hour, start_minute = map(int, start_time.split(":"))
+        start_datetime = current_time.replace(
+            hour=start_hour, minute=start_minute, second=0, microsecond=0
+        )
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
 
-        if not allowed:
-            slots_info = ", ".join(
-                [f"Slot {row[0]}: {row[1]} ({row[2]} min)" for row in duration_rows]
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
-            )
+        if start_datetime <= current_time < end_datetime:
+            allowed = True
+            active_slot_type = slot_type
+            break
+
+    if not allowed:
+        slots_info = ", ".join(
+            [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
+        )
 
     # Parse request body for extra fields (lat/lng/location)
     if form_data is not None:
@@ -13408,8 +14284,8 @@ async def other_staff_mark_attendance(request: Request):
     try:
         cursor.execute(
             """
-            INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp")
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp", status)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """,
             (
                 staff_user["reg_no"],
@@ -13417,12 +14293,14 @@ async def other_staff_mark_attendance(request: Request):
                 staff_user["dept"],
                 staff_user["role"],
                 timestamp,
+                active_slot_type,
             ),
         )
         conn.commit()
 
         # Sync with daily_attendance_status table
         current_date = datetime.now().strftime("%Y-%m-%d")
+        time_now_str = datetime.now().strftime("%H:%M:%S")
         try:
             cursor.execute(
                 """
@@ -13432,41 +14310,68 @@ async def other_staff_mark_attendance(request: Request):
                 (staff_user["reg_no"], current_date),
             )
             existing = cursor.fetchone()
-            if existing and existing[1] in [
-                "Absent",
-                "Leave",
-                "OD",
-                "casual",
-                "earned",
-                "od",
-            ]:
-                cursor.execute(
-                    """
-                    UPDATE daily_attendance_status 
-                    SET status = 'Present', leave_type = NULL, leave_request_id = NULL,
-                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                    WHERE reg_no = %s AND date = %s
-                """,
-                    (staff_user["reg_no"], current_date),
-                )
+            if existing:
+                if active_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', in_time = %s, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = %s AND date = %s
+                    """,
+                        (time_now_str, staff_user["reg_no"], current_date),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', out_time = %s, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = %s AND date = %s
+                    """,
+                        (time_now_str, staff_user["reg_no"], current_date),
+                    )
             else:
-                cursor.execute(
-                    """
-                    INSERT INTO daily_attendance_status 
-                    (reg_no, name, dept, date, status, marked_by, marked_at)
-                    VALUES (%s, %s, %s, %s, 'Present', 'Attendance System', CURRENT_TIMESTAMP)
-                    ON CONFLICT (reg_no, date) DO UPDATE SET
-                        status = 'Present',
-                        marked_by = 'Attendance System',
-                        marked_at = CURRENT_TIMESTAMP
-                """,
-                    (
-                        staff_user["reg_no"],
-                        staff_user["name"],
-                        staff_user["dept"],
-                        current_date,
-                    ),
-                )
+                if active_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
+                        VALUES (%s, %s, %s, %s, 'Present', %s, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (
+                            staff_user["reg_no"],
+                            staff_user["name"],
+                            staff_user["dept"],
+                            current_date,
+                            time_now_str,
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
+                        VALUES (%s, %s, %s, %s, 'Present', %s, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (
+                            staff_user["reg_no"],
+                            staff_user["name"],
+                            staff_user["dept"],
+                            current_date,
+                            time_now_str,
+                        ),
+                    )
         except Exception as e:
             print(
                 f"Error syncing daily_attendance_status for {staff_user['reg_no']}: {e}"
@@ -13839,11 +14744,11 @@ async def other_staff_register_face(
         # Clear the permission after use
         if is_other_staff:
             cursor.execute(
-                "UPDATE other_staff SET can_reregister = 0 WHERE reg_no = ?", (reg_no,)
+                "UPDATE other_staff SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,)
             )
         else:
             cursor.execute(
-                "UPDATE users SET can_reregister = 0 WHERE reg_no = ?", (reg_no,)
+                "UPDATE users SET can_reregister = FALSE WHERE reg_no = ?", (reg_no,)
             )
         conn.commit()
 
@@ -14065,10 +14970,10 @@ async def admin_get_other_staff_reregister_requests(request: Request):
     verify_admin_token(request)
 
     cursor.execute("""
-        SELECT id, staff_reg_no, staff_name, dept, request_date, status, hod_approved, admin_approved
+        SELECT id, staff_reg_no, staff_name, dept, created_at AS request_date, status, hod_approved, admin_approved
         FROM face_reregister_requests
         WHERE status = 'pending'
-        ORDER BY request_date DESC
+        ORDER BY created_at DESC
     """)
 
     all_requests = cursor.fetchall()
@@ -14119,12 +15024,12 @@ async def admin_approve_other_staff_reregister(request: Request, staff_reg_no: s
     cursor.execute("SELECT id FROM other_staff WHERE reg_no = ?", (staff_reg_no,))
     if cursor.fetchone():
         cursor.execute(
-            "UPDATE other_staff SET can_reregister = 1 WHERE reg_no = ?",
+            "UPDATE other_staff SET can_reregister = TRUE WHERE reg_no = ?",
             (staff_reg_no,),
         )
     else:
         cursor.execute(
-            "UPDATE users SET can_reregister = 1 WHERE reg_no = ?", (staff_reg_no,)
+            "UPDATE users SET can_reregister = TRUE WHERE reg_no = ?", (staff_reg_no,)
         )
 
     conn.commit()

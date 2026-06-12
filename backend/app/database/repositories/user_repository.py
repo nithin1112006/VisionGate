@@ -267,7 +267,13 @@ class UserRepository(BaseRepository):
         try:
             # password_hash argument is the plaintext password
             # stored password_hash in DB is bcrypt hash
-            if bcrypt.checkpw(password_hash.encode("utf-8"), user.password_hash.encode("utf-8")):
+            stored_hash = user.password_hash or ""
+            if stored_hash.startswith("$2"):
+                ok = bcrypt.checkpw(password_hash.encode("utf-8"), stored_hash.encode("utf-8"))
+            else:
+                ok = password_hash == stored_hash
+
+            if ok:
                 logger.info(f"User {username} authenticated successfully")
                 return user
             else:
