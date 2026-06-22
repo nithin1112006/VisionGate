@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config/college_ip_config.dart';
+import '../utils/api_response_utils.dart';
 
 class CLManagementPage extends StatefulWidget {
   final String token;
@@ -336,7 +337,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
       }
     } catch (e) {
       setState(() {
-        _error = 'Error loading CL data: $e';
+        _error = 'Error loading CL data: ${ApiResponseUtils.sanitize(e)}';
         _isLoading = false;
       });
     }

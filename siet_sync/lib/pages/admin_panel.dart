@@ -27,6 +27,194 @@ import '../widgets/three_option_toggle.dart';
 import 'academics_settings_page.dart';
 import 'attendance_duration_settings.dart';
 import 'cl_management_page.dart';
+import 'package:file_picker/file_picker.dart';
+
+// ============================================
+// ERROR CLEANING HELPERS
+// ============================================
+
+String cleanAdminErrorMessage(dynamic e) {
+  final errorStr = e.toString();
+  final errorLower = errorStr.toLowerCase();
+  
+  if (errorLower.contains('socketexception') ||
+      errorLower.contains('failed host lookup') ||
+      errorLower.contains('connection refused') ||
+      errorLower.contains('clientexception')) {
+    return 'Unable to connect to the server. Please check your network connection.';
+  } else if (errorLower.contains('timeout') || errorLower.contains('time out')) {
+    return 'Connection timed out. Please check your connection and try again.';
+  } else if (errorLower.contains('formatexception') || errorLower.contains('unexpected character')) {
+    return 'Invalid response format from server.';
+  } else if (errorLower.contains('unauthorized') ||
+             errorLower.contains('401') ||
+             errorLower.contains('token expired')) {
+    return 'Session expired or unauthorized. Please log in again.';
+  } else if (errorLower.contains('403')) {
+    return 'Access denied. You do not have permission to perform this action.';
+  } else if (errorLower.contains('404')) {
+    return 'Requested resource not found.';
+  } else if (errorLower.contains('500') ||
+             errorLower.contains('internal server error') ||
+             errorLower.contains('502') ||
+             errorLower.contains('503')) {
+    return 'An internal server error occurred. Please contact the administrator.';
+  }
+  
+  if (errorLower.contains('table') ||
+      errorLower.contains('column') ||
+      errorLower.contains('relation') ||
+      errorLower.contains('database') ||
+      errorLower.contains('sql') ||
+      errorLower.contains('select ') ||
+      errorLower.contains('insert ') ||
+      errorLower.contains('update ') ||
+      errorLower.contains('delete ') ||
+      errorLower.contains('postgresql') ||
+      errorLower.contains('mysql') ||
+      errorLower.contains('sqlite') ||
+      errorLower.contains('query') ||
+      errorLower.contains('foreign key') ||
+      errorLower.contains('constraint') ||
+      errorLower.contains('syntax error')) {
+    return 'A database operation error occurred. Details have been logged securely.';
+  }
+
+  if (errorStr.contains('\n') || errorStr.contains('Stacktrace') || errorStr.contains('Exception:')) {
+    return 'An unexpected error occurred. Please try again.';
+  }
+
+  return errorStr.replaceAll(RegExp(r'(Exception:\s*|Error:\s*)', caseSensitive: false), '');
+}
+
+// ============================================
+// BULK UPLOAD HELPER
+// ============================================
+
+Future<void> performBulkUpload(BuildContext context, String token, String endpointUrl, VoidCallback onSuccess) async {
+  try {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx', 'xls', 'json'],
+    );
+
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+
+    final file = result.files.first;
+    
+    // Show loading indicator dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    var request = http.MultipartRequest('POST', Uri.parse(endpointUrl));
+    request.headers['Authorization'] = 'Bearer $token';
+
+    if (kIsWeb) {
+      if (file.bytes != null) {
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            file.bytes!,
+            filename: file.name,
+          ),
+        );
+      } else {
+        throw Exception("File bytes are null on web");
+      }
+    } else {
+      if (file.path != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'file',
+            file.path!,
+          ),
+        );
+      } else if (file.bytes != null) {
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            file.bytes!,
+            filename: file.name,
+          ),
+        );
+      } else {
+        throw Exception("File path and bytes are both null");
+      }
+    }
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+
+    // Dismiss loading indicator
+    Navigator.pop(context);
+
+    if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      final successMsg = responseData['message'] ?? 'Bulk upload completed successfully.';
+      final data = responseData['data'] ?? {};
+      final createdCount = data['created_count'] ?? 0;
+      final failedCount = data['failed_count'] ?? 0;
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Upload Status'),
+          content: Text(
+            '$successMsg\n\n'
+            'Created/Synced: $createdCount\n'
+            'Failed: $failedCount'
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                onSuccess();
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      final errorData = jsonDecode(response.body);
+      final errorDetail = errorData['detail'] ?? 'An error occurred during bulk upload.';
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Upload Failed'),
+          content: Text(errorDetail.toString()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  } catch (e) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(e.toString()),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 // ============================================
 // GEO FENCE EDITOR WIDGET
@@ -59,7 +247,24 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   bool _isLoading = true;
   bool _isSaving = false;
   String? _errorMessage;
-  String _tapTarget = 'outer';
+  String _tapTarget = 'none';
+  String _editMode = 'none';
+  final List<Map<String, dynamic>> _history = [];
+
+  void _saveToHistory() {
+    _history.add({
+      'outer': List<List<double>>.from(_outerPolygon.map((p) => List<double>.from(p))),
+      'inner': List<List<double>>.from(_innerPolygon.map((p) => List<double>.from(p))),
+      'limit_range': List<List<double>>.from(_limitRangePolygon.map((p) => List<double>.from(p))),
+      'outer_store': List<List<List<double>>>.from(_outerPolygonsStore.map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p))))),
+      'inner_store': List<List<List<double>>>.from(_innerPolygonsStore.map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p))))),
+      'limit_range_store': List<List<List<double>>>.from(_limitRangePolygonsStore.map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p))))),
+    });
+    if (_history.length > 50) {
+      _history.removeAt(0);
+    }
+  }
+
   List<List<List<double>>> _outerPolygonsStore = [];
   List<List<List<double>>> _innerPolygonsStore = [];
   List<List<List<double>>> _limitRangePolygonsStore = [];
@@ -240,7 +445,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+        ).showSnackBar(SnackBar(content: Text('Failed to save: ${cleanAdminErrorMessage(e)}')));
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -248,6 +453,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _addPoint(String type) {
+    _saveToHistory();
     setState(() {
       if (type == 'outer') {
         _outerPolygon = [
@@ -269,6 +475,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _removePoint(int index, String type) {
+    _saveToHistory();
     setState(() {
       if (type == 'outer' && _outerPolygon.length > 3) {
         final list = List<List<double>>.from(_outerPolygon);
@@ -358,6 +565,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _addOuterBoundary() {
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _outerPolygonsStore.add([
@@ -374,6 +582,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _addInnerBoundary() {
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _innerPolygonsStore.add([
@@ -391,6 +600,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
 
   void _deleteCurrentOuterBoundary() {
     if (_outerPolygonsStore.length <= 1) return;
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _outerPolygonsStore.removeAt(_selectedOuterBoundary);
@@ -405,6 +615,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
 
   void _deleteCurrentInnerBoundary() {
     if (_innerPolygonsStore.length <= 1) return;
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _innerPolygonsStore.removeAt(_selectedInnerBoundary);
@@ -418,6 +629,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _addLimitRangeBoundary() {
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _limitRangePolygonsStore.add([
@@ -435,6 +647,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
 
   void _deleteCurrentLimitRangeBoundary() {
     if (_limitRangePolygonsStore.length <= 1) return;
+    _saveToHistory();
     _persistCurrentPolygons();
     setState(() {
       _limitRangePolygonsStore.removeAt(_selectedLimitRangeBoundary);
@@ -481,6 +694,8 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   }
 
   void _addPointFromMap(LatLng point) {
+    if (_editMode == 'none') return;
+    _saveToHistory();
     setState(() {
       if (_tapTarget == 'outer') {
         _outerPolygon = [
@@ -492,7 +707,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
           ..._innerPolygon,
           [point.latitude, point.longitude],
         ];
-      } else {
+      } else if (_tapTarget == 'limit_range') {
         _limitRangePolygon = [
           ..._limitRangePolygon,
           [point.latitude, point.longitude],
@@ -501,22 +716,18 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     });
   }
 
-  void _undoLastPointFromMap() {
-    setState(() {
-      if (_tapTarget == 'outer') {
-        if (_outerPolygon.length > 3) {
-          _outerPolygon = List<List<double>>.from(_outerPolygon)..removeLast();
-        }
-      } else if (_tapTarget == 'inner') {
-        if (_innerPolygon.length > 3) {
-          _innerPolygon = List<List<double>>.from(_innerPolygon)..removeLast();
-        }
-      } else {
-        if (_limitRangePolygon.length > 3) {
-          _limitRangePolygon = List<List<double>>.from(_limitRangePolygon)..removeLast();
-        }
-      }
-    });
+  void _undoLastChange() {
+    if (_history.isNotEmpty) {
+      setState(() {
+        final lastState = _history.removeLast();
+        _outerPolygon = List<List<double>>.from(lastState['outer'].map((p) => List<double>.from(p)));
+        _innerPolygon = List<List<double>>.from(lastState['inner'].map((p) => List<double>.from(p)));
+        _limitRangePolygon = List<List<double>>.from(lastState['limit_range'].map((p) => List<double>.from(p)));
+        _outerPolygonsStore = List<List<List<double>>>.from(lastState['outer_store'].map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p)))));
+        _innerPolygonsStore = List<List<List<double>>>.from(lastState['inner_store'].map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p)))));
+        _limitRangePolygonsStore = List<List<List<double>>>.from(lastState['limit_range_store'].map((poly) => List<List<double>>.from(poly.map((p) => List<double>.from(p)))));
+      });
+    }
   }
 
   // Builds a single editable point row
@@ -832,49 +1043,68 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                         ),
                         const SizedBox(height: 10),
                          Wrap(
-                           spacing: 8,
-                           runSpacing: 8,
-                           children: [
-                             ChoiceChip(
-                               label: const Text('Add to Outer'),
-                               selected: _tapTarget == 'outer',
-                               onSelected: (_) {
-                                 setState(() => _tapTarget = 'outer');
-                               },
-                             ),
-                             ChoiceChip(
-                               label: const Text('Add to Inner'),
-                               selected: _tapTarget == 'inner',
-                               onSelected: (_) {
-                                 setState(() => _tapTarget = 'inner');
-                               },
-                             ),
-                             ChoiceChip(
-                               label: const Text('Movement Limit (Orange)'),
-                               selected: _tapTarget == 'limit_range',
-                               onSelected: (_) {
-                                 setState(() => _tapTarget = 'limit_range');
-                               },
-                             ),
-                             OutlinedButton.icon(
-                               onPressed: _undoLastPointFromMap,
-                               icon: const Icon(Icons.undo, size: 16),
-                               label: const Text('Undo Last'),
-                             ),
-                             ChoiceChip(
-                               label: const Text('Satellite'),
-                               avatar: Icon(_useSatelliteView 
-                                 ? Icons.satellite_alt 
-                                 : Icons.map, 
-                                 size: 16
-                               ),
-                               selected: _useSatelliteView,
-                               onSelected: (value) {
-                                 setState(() => _useSatelliteView = value);
-                               },
-                             ),
-                           ],
-                         ),
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              ChoiceChip(
+                                label: const Text('View'),
+                                selected: _editMode == 'none',
+                                onSelected: (_) {
+                                  setState(() {
+                                    _editMode = 'none';
+                                    _tapTarget = 'none';
+                                  });
+                                },
+                              ),
+                              ChoiceChip(
+                                label: const Text('Outer'),
+                                selected: _editMode == 'outer',
+                                onSelected: (_) {
+                                  setState(() {
+                                    _editMode = 'outer';
+                                    _tapTarget = 'outer';
+                                  });
+                                },
+                              ),
+                              ChoiceChip(
+                                label: const Text('Inner'),
+                                selected: _editMode == 'inner',
+                                onSelected: (_) {
+                                  setState(() {
+                                    _editMode = 'inner';
+                                    _tapTarget = 'inner';
+                                  });
+                                },
+                              ),
+                              ChoiceChip(
+                                label: const Text('Limit'),
+                                selected: _editMode == 'limit_range',
+                                onSelected: (_) {
+                                  setState(() {
+                                    _editMode = 'limit_range';
+                                    _tapTarget = 'limit_range';
+                                  });
+                                },
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _history.isNotEmpty ? _undoLastChange : null,
+                                icon: const Icon(Icons.undo, size: 16),
+                                label: const Text('Undo Last'),
+                              ),
+                              ChoiceChip(
+                                label: const Text('Satellite'),
+                                avatar: Icon(_useSatelliteView 
+                                  ? Icons.satellite_alt 
+                                  : Icons.map, 
+                                  size: 16
+                                ),
+                                selected: _useSatelliteView,
+                                onSelected: (value) {
+                                  setState(() => _useSatelliteView = value);
+                                },
+                              ),
+                            ],
+                          ),
                         const SizedBox(height: 10),
                         Container(
                           height: isMobile
@@ -957,108 +1187,113 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                       ),
                                 ],
                               ),
-                               DragMarkers(
-                                 markers: [
-                                   ..._outerPolygon.asMap().entries.map((entry) {
-                                     final i = entry.key;
-                                     final p = entry.value;
-                                     return DragMarker(
-                                       point: LatLng(p[0], p[1]),
-                                       size: const Size(36, 36),
-                                       builder: (context, _, isDragging) {
-                                         return AnimatedContainer(
-                                           duration: const Duration(
-                                             milliseconds: 100,
-                                           ),
-                                           alignment: Alignment.center,
-                                           decoration: BoxDecoration(
-                                             color: Colors.deepPurple,
-                                             borderRadius: BorderRadius.circular(
-                                               isDragging ? 20 : 18,
-                                             ),
-                                             border: Border.all(
-                                               color: Colors.white,
-                                               width: 2,
-                                             ),
-                                           ),
-                                           child: Text(
-                                             '${i + 1}',
-                                             style: const TextStyle(
-                                               color: Colors.white,
-                                               fontSize: 11,
-                                               fontWeight: FontWeight.bold,
-                                             ),
-                                           ),
-                                         );
-                                       },
-                                       onDragUpdate: (_, latLng) {
-                                         _updatePoint(
-                                           i,
-                                           latLng.latitude,
-                                           latLng.longitude,
-                                           'outer',
-                                         );
-                                       },
-                                       onDragEnd: (_, latLng) {
-                                         _updatePoint(
-                                           i,
-                                           latLng.latitude,
-                                           latLng.longitude,
-                                           'outer',
-                                         );
-                                       },
-                                     );
-                                   }),
-                                   ..._innerPolygon.asMap().entries.map((entry) {
-                                     final i = entry.key;
-                                     final p = entry.value;
-                                     return DragMarker(
-                                       point: LatLng(p[0], p[1]),
-                                       size: const Size(36, 36),
-                                       builder: (context, _, isDragging) {
-                                         return AnimatedContainer(
-                                           duration: const Duration(
-                                             milliseconds: 100,
-                                           ),
-                                           alignment: Alignment.center,
-                                           decoration: BoxDecoration(
-                                             color: Colors.teal,
-                                             borderRadius: BorderRadius.circular(
-                                               isDragging ? 20 : 18,
-                                             ),
-                                             border: Border.all(
-                                               color: Colors.white,
-                                               width: 2,
-                                             ),
-                                           ),
-                                           child: Text(
-                                             '${i + 1}',
-                                             style: const TextStyle(
-                                               color: Colors.white,
-                                               fontSize: 11,
-                                               fontWeight: FontWeight.bold,
-                                             ),
-                                           ),
-                                         );
-                                       },
-                                       onDragUpdate: (_, latLng) {
-                                         _updatePoint(
-                                           i,
-                                           latLng.latitude,
-                                           latLng.longitude,
-                                           'inner',
-                                         );
-                                       },
-                                       onDragEnd: (_, latLng) {
-                                         _updatePoint(
-                                           i,
-                                           latLng.latitude,
-                                           latLng.longitude,
-                                           'inner',
-                                         );
-                                       },
-                                     );
-                                   }),
+                              DragMarkers(
+                                markers: [
+                                  if (_editMode == 'outer')
+                                    ..._outerPolygon.asMap().entries.map((entry) {
+                                      final i = entry.key;
+                                      final p = entry.value;
+                                      return DragMarker(
+                                        point: LatLng(p[0], p[1]),
+                                        size: const Size(36, 36),
+                                        builder: (context, _, isDragging) {
+                                          return AnimatedContainer(
+                                            duration: const Duration(
+                                              milliseconds: 100,
+                                            ),
+                                            alignment: Alignment.center,
+                                            decoration: BoxDecoration(
+                                              color: Colors.deepPurple,
+                                              borderRadius: BorderRadius.circular(
+                                                isDragging ? 20 : 18,
+                                              ),
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 2,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              '${i + 1}',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        onDragStart: (_, __) => _saveToHistory(),
+                                        onDragUpdate: (_, latLng) {
+                                          _updatePoint(
+                                            i,
+                                            latLng.latitude,
+                                            latLng.longitude,
+                                            'outer',
+                                          );
+                                        },
+                                        onDragEnd: (_, latLng) {
+                                          _updatePoint(
+                                            i,
+                                            latLng.latitude,
+                                            latLng.longitude,
+                                            'outer',
+                                          );
+                                        },
+                                      );
+                                    }),
+                                  if (_editMode == 'inner')
+                                    ..._innerPolygon.asMap().entries.map((entry) {
+                                      final i = entry.key;
+                                      final p = entry.value;
+                                      return DragMarker(
+                                        point: LatLng(p[0], p[1]),
+                                        size: const Size(36, 36),
+                                        builder: (context, _, isDragging) {
+                                          return AnimatedContainer(
+                                            duration: const Duration(
+                                              milliseconds: 100,
+                                            ),
+                                            alignment: Alignment.center,
+                                            decoration: BoxDecoration(
+                                              color: Colors.teal,
+                                              borderRadius: BorderRadius.circular(
+                                                isDragging ? 20 : 18,
+                                              ),
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 2,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              '${i + 1}',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        onDragStart: (_, __) => _saveToHistory(),
+                                        onDragUpdate: (_, latLng) {
+                                          _updatePoint(
+                                            i,
+                                            latLng.latitude,
+                                            latLng.longitude,
+                                            'inner',
+                                          );
+                                        },
+                                        onDragEnd: (_, latLng) {
+                                          _updatePoint(
+                                            i,
+                                            latLng.latitude,
+                                            latLng.longitude,
+                                            'inner',
+                                          );
+                                        },
+                                      );
+                                    }),
+                                  if (_editMode == 'limit_range')
                                     ..._limitRangePolygon.asMap().entries.map((entry) {
                                       final i = entry.key;
                                       final p = entry.value;
@@ -1091,6 +1326,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                             ),
                                           );
                                         },
+                                        onDragStart: (_, __) => _saveToHistory(),
                                         onDragUpdate: (_, latLng) {
                                           _updatePoint(
                                             i,
@@ -1109,8 +1345,8 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                         },
                                       );
                                     }),
-                                 ],
-                               ),
+                                ],
+                              ),
                                Positioned(
                                  top: 10,
                                  right: 10,
@@ -1249,7 +1485,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                     : _outerPolygonsStore.length,
                                 (i) => DropdownMenuItem(
                                   value: i,
-                                  child: Text('Outer ${i + 1}'),
+                                  child: Text('O-${i + 1}'),
                                 ),
                               ),
                               onChanged: (value) {
@@ -1375,7 +1611,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                     : _innerPolygonsStore.length,
                                 (i) => DropdownMenuItem(
                                   value: i,
-                                  child: Text('Inner ${i + 1}'),
+                                  child: Text('I-${i + 1}'),
                                 ),
                               ),
                               onChanged: (value) {
@@ -1461,7 +1697,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                   (idx) => DropdownMenuItem(
                                     value: idx,
                                     child: Text(
-                                      'Boundary ${idx + 1}',
+                                      'L-${idx + 1}',
                                       style: TextStyle(
                                         color: textColor,
                                         fontSize: 14,
@@ -3207,7 +3443,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -3262,7 +3498,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -3288,7 +3524,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -3394,7 +3630,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -3440,7 +3676,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -3505,7 +3741,7 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -3713,6 +3949,19 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                           icon: const Icon(Icons.add, size: 18),
                           label: const Text('Add Staff'),
                         ),
+                        FilledButton.icon(
+                          onPressed: () => performBulkUpload(
+                            context,
+                            widget.token,
+                            '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
+                            fetchStaff,
+                          ),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.indigo,
+                          ),
+                          icon: const Icon(Icons.upload_file, size: 18),
+                          label: const Text('Bulk Upload'),
+                        ),
                         OutlinedButton.icon(
                           onPressed: fetchStaff,
                           icon: const Icon(Icons.refresh, size: 18),
@@ -3748,6 +3997,20 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                       ),
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Add'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      onPressed: () => performBulkUpload(
+                        context,
+                        widget.token,
+                        '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
+                        fetchStaff,
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.indigo,
+                      ),
+                      icon: const Icon(Icons.upload_file, size: 18),
+                      label: const Text('Bulk Upload'),
                     ),
                     const SizedBox(width: 8),
                     IconButton.filled(
@@ -4412,7 +4675,7 @@ class _StaffAttendanceDialogState extends State<_StaffAttendanceDialog> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     } finally {
       if (mounted) {
@@ -5607,7 +5870,7 @@ class _DashboardTabState extends State<DashboardTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -6461,7 +6724,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
       print('[DepartmentsTab] Error: $e');
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -6523,7 +6786,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -6583,7 +6846,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -6635,7 +6898,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -6684,7 +6947,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -6733,7 +6996,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -6822,6 +7085,32 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                         Icon(Icons.add_rounded, color: Colors.white, size: 18),
                         SizedBox(width: 4),
                         Text('Add', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Upload button
+                GestureDetector(
+                  onTap: () => performBulkUpload(
+                    context,
+                    widget.token,
+                    '${CollegeIPConfig.defaultURL}/admin/departments/bulk-upload',
+                    fetchDepartmentData,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
+                        SizedBox(width: 4),
+                        Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
                       ],
                     ),
                   ),
@@ -7350,7 +7639,7 @@ class _DepartmentHODPageState extends State<DepartmentHODPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     }
   }
@@ -7510,7 +7799,7 @@ class _DepartmentHODPageState extends State<DepartmentHODPage> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -7567,7 +7856,70 @@ class _DepartmentHODPageState extends State<DepartmentHODPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      }
+    }
+  }
+
+  Future<void> _toggleHODSuspension(Map<String, dynamic> hod) async {
+    final isSuspended = hod['suspended'] == true;
+    final actionText = isSuspended ? 'unsuspend' : 'suspend';
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${isSuspended ? "Unsuspend" : "Suspend"} HOD'),
+        content: Text('Are you sure you want to $actionText HOD ${hod['name']}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: isSuspended ? Colors.green : Colors.red),
+            child: Text(isSuspended ? 'Unsuspend' : 'Suspend'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final response = await http.put(
+        Uri.parse('$API_URL/admin/users/${hod['id']}'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'suspended': !isSuspended}),
+      );
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('HOD ${isSuspended ? "unsuspended" : "suspended"} successfully')),
+          );
+          setState(() {
+            final index = hodList.indexWhere((h) => h['id'] == hod['id']);
+            if (index != -1) {
+              hodList[index]['suspended'] = !isSuspended;
+            }
+          });
+        }
+      } else {
+        final data = jsonDecode(response.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(data['detail'] ?? 'Failed to update status')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')),
+        );
       }
     }
   }
@@ -7686,11 +8038,14 @@ class _DepartmentHODPageState extends State<DepartmentHODPage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    hod['name'] ?? 'Unknown',
+                                    (hod['name'] ?? 'Unknown') + (hod['suspended'] == true ? ' (Suspended)' : ''),
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16,
-                                      color: isDark ? Colors.white : Colors.red.shade900,
+                                      color: hod['suspended'] == true 
+                                        ? Colors.red 
+                                        : (isDark ? Colors.white : Colors.red.shade900),
+                                      decoration: hod['suspended'] == true ? TextDecoration.lineThrough : null,
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -7744,38 +8099,51 @@ class _DepartmentHODPageState extends State<DepartmentHODPage> {
                         const SizedBox(height: 16),
                         const Divider(height: 1, thickness: 0.5),
                         const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildActionButton(
-                              icon: Icons.calendar_today_rounded,
-                              label: 'Attendance',
-                              color: Colors.indigo,
-                              isDark: isDark,
-                              onTap: () => _showHODAttendanceDetails(hod),
-                            ),
-                            _buildActionButton(
-                              icon: faceRegistered ? Icons.face_retouching_natural_rounded : Icons.face_rounded,
-                              label: faceRegistered ? 'Update Face' : 'Register Face',
-                              color: faceRegistered ? Colors.teal : Colors.green,
-                              isDark: isDark,
-                              onTap: () => _registerHODFace(hod),
-                            ),
-                            _buildActionButton(
-                              icon: Icons.edit_rounded,
-                              label: 'Edit Info',
-                              color: Colors.blue,
-                              isDark: isDark,
-                              onTap: () => _editHOD(hod),
-                            ),
-                            _buildActionButton(
-                              icon: Icons.delete_outline_rounded,
-                              label: 'Delete',
-                              color: Colors.red,
-                              isDark: isDark,
-                              onTap: () => deleteHOD(hod['id'], hod['username']),
-                            ),
-                          ],
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              _buildActionButton(
+                                icon: Icons.calendar_today_rounded,
+                                label: 'Attendance',
+                                color: Colors.indigo,
+                                isDark: isDark,
+                                onTap: () => _showHODAttendanceDetails(hod),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildActionButton(
+                                icon: faceRegistered ? Icons.face_retouching_natural_rounded : Icons.face_rounded,
+                                label: faceRegistered ? 'Update Face' : 'Register Face',
+                                color: faceRegistered ? Colors.teal : Colors.green,
+                                isDark: isDark,
+                                onTap: () => _registerHODFace(hod),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildActionButton(
+                                icon: Icons.edit_rounded,
+                                label: 'Edit Info',
+                                color: Colors.blue,
+                                isDark: isDark,
+                                onTap: () => _editHOD(hod),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildActionButton(
+                                icon: hod['suspended'] == true ? Icons.play_arrow_rounded : Icons.block_rounded,
+                                label: hod['suspended'] == true ? 'Unsuspend' : 'Suspend',
+                                color: hod['suspended'] == true ? Colors.green : Colors.orange.shade800,
+                                isDark: isDark,
+                                onTap: () => _toggleHODSuspension(hod),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildActionButton(
+                                icon: Icons.delete_outline_rounded,
+                                label: 'Delete',
+                                color: Colors.red,
+                                isDark: isDark,
+                                onTap: () => deleteHOD(hod['id'], hod['username']),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -7984,7 +8352,7 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -8042,7 +8410,7 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -8073,7 +8441,7 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -8196,7 +8564,7 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -8264,7 +8632,70 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      }
+    }
+  }
+
+  Future<void> _toggleStaffSuspension(Map<String, dynamic> staff) async {
+    final isSuspended = staff['suspended'] == true;
+    final actionText = isSuspended ? 'unsuspend' : 'suspend';
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${isSuspended ? "Unsuspend" : "Suspend"} Staff'),
+        content: Text('Are you sure you want to $actionText staff member ${staff['name']}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: isSuspended ? Colors.green : Colors.red),
+            child: Text(isSuspended ? 'Unsuspend' : 'Suspend'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final response = await http.put(
+        Uri.parse('$API_URL/admin/users/${staff['id']}'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'suspended': !isSuspended}),
+      );
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Staff ${isSuspended ? "unsuspended" : "suspended"} successfully')),
+          );
+          setState(() {
+            final index = staffList.indexWhere((s) => s['id'] == staff['id']);
+            if (index != -1) {
+              staffList[index]['suspended'] = !isSuspended;
+            }
+          });
+        }
+      } else {
+        final data = jsonDecode(response.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(data['detail'] ?? 'Failed to update status')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')),
+        );
       }
     }
   }
@@ -8384,11 +8815,14 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    staff['name'] ?? 'Unknown',
+                                    (staff['name'] ?? 'Unknown') + (staff['suspended'] == true ? ' (Suspended)' : ''),
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16,
-                                      color: isDark ? Colors.white : Colors.orange.shade900,
+                                      color: staff['suspended'] == true 
+                                        ? Colors.red 
+                                        : (isDark ? Colors.white : Colors.orange.shade900),
+                                      decoration: staff['suspended'] == true ? TextDecoration.lineThrough : null,
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -8512,6 +8946,14 @@ class _DepartmentStaffPageState extends State<DepartmentStaffPage> {
                                 color: Colors.blue,
                                 isDark: isDark,
                                 onTap: () => _editStaff(staff),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildActionButton(
+                                icon: staff['suspended'] == true ? Icons.play_arrow_rounded : Icons.block_rounded,
+                                label: staff['suspended'] == true ? 'Unsuspend' : 'Suspend',
+                                color: staff['suspended'] == true ? Colors.green : Colors.orange.shade800,
+                                isDark: isDark,
+                                onTap: () => _toggleStaffSuspension(staff),
                               ),
                               const SizedBox(width: 8),
                               _buildActionButton(
@@ -8647,7 +9089,7 @@ class _DepartmentStudentsPageState extends State<DepartmentStudentsPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     }
   }
@@ -8757,7 +9199,7 @@ class _StudentsManagementTabState extends State<StudentsManagementTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -8806,7 +9248,7 @@ class _StudentsManagementTabState extends State<StudentsManagementTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -8932,7 +9374,7 @@ class _AttendanceRecordsTabState extends State<AttendanceRecordsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -8981,7 +9423,7 @@ class _AttendanceRecordsTabState extends State<AttendanceRecordsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -9253,7 +9695,7 @@ class _AdminStaffAttendanceTabState extends State<AdminStaffAttendanceTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -9887,7 +10329,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -10296,7 +10738,7 @@ class _AnalysisTabState extends State<AnalysisTab> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     } finally {
       setState(() => isLoading = false);
@@ -12740,7 +13182,7 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -12805,7 +13247,7 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     }
   }
@@ -13144,7 +13586,7 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     }
   }
@@ -13214,7 +13656,7 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     }
   }
@@ -13502,7 +13944,7 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
                               } catch (e) {
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Error: $e')),
+                                    SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')),
                                   );
                                 }
                               }
@@ -13667,6 +14109,28 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
                               child: const Icon(
                                 Icons.add,
                                 color: Colors.green,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                          // Bulk Upload button
+                          IconButton(
+                            onPressed: () => performBulkUpload(
+                              context,
+                              widget.token,
+                              '${CollegeIPConfig.defaultURL}/admin/other_staff/bulk-upload',
+                              fetchOtherStaffDepartments,
+                            ),
+                            tooltip: 'Bulk Upload',
+                            icon: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Icon(
+                                Icons.upload_file,
+                                color: Colors.blue,
                                 size: 20,
                               ),
                             ),
@@ -14304,7 +14768,7 @@ class _OtherStaffAttendanceDialogState
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
       }
     } finally {
       if (mounted) {
@@ -14846,7 +15310,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     } finally {
       setState(() => isLoading = false);
     }
@@ -15170,7 +15634,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -15220,7 +15684,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
 
@@ -15266,7 +15730,64 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+    }
+  }
+
+  Future<void> _toggleOtherStaffSuspension(Map<String, dynamic> staff) async {
+    final isSuspended = staff['suspended'] == true;
+    final actionText = isSuspended ? 'unsuspend' : 'suspend';
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${isSuspended ? "Unsuspend" : "Suspend"} Other Staff'),
+        content: Text('Are you sure you want to $actionText other staff member ${staff['name']}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: isSuspended ? Colors.green : Colors.red),
+            child: Text(isSuspended ? 'Unsuspend' : 'Suspend'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final response = await http.put(
+        Uri.parse('$API_URL/admin/other_staff/${staff['id']}'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'suspended': !isSuspended}),
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Staff ${isSuspended ? "unsuspended" : "suspended"} successfully')),
+        );
+        setState(() {
+          final index = otherStaff.indexWhere((s) => s['id'] == staff['id']);
+          if (index != -1) {
+            otherStaff[index]['suspended'] = !isSuspended;
+          }
+        });
+      } else {
+        final data = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(data['detail'] ?? 'Failed to update status')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')),
+      );
     }
   }
 
@@ -15674,11 +16195,14 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                         children: [
                           Expanded(
                             child: Text(
-                              displayName,
+                              displayName + (staff['suspended'] == true ? ' (Suspended)' : ''),
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 15,
-                                color: isDark ? Colors.white : Colors.black87,
+                                color: staff['suspended'] == true 
+                                  ? Colors.red 
+                                  : (isDark ? Colors.white : Colors.black87),
+                                decoration: staff['suspended'] == true ? TextDecoration.lineThrough : null,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -15744,6 +16268,22 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                       tooltip: 'Edit',
                       style: IconButton.styleFrom(
                         backgroundColor: gradColors[0].withValues(alpha: 0.10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.all(6),
+                        minimumSize: const Size(34, 34),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    IconButton(
+                      onPressed: () => _toggleOtherStaffSuspension(staff),
+                      icon: Icon(
+                        staff['suspended'] == true ? Icons.play_arrow_rounded : Icons.block_rounded,
+                        size: 19,
+                        color: staff['suspended'] == true ? Colors.green : Colors.orange.shade800,
+                      ),
+                      tooltip: staff['suspended'] == true ? 'Unsuspend' : 'Suspend',
+                      style: IconButton.styleFrom(
+                        backgroundColor: (staff['suspended'] == true ? Colors.green : Colors.orange.shade800).withValues(alpha: 0.10),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         padding: const EdgeInsets.all(6),
                         minimumSize: const Size(34, 34),
@@ -17422,6 +17962,7 @@ class _SettingsTabState extends State<SettingsTab> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isChangingPassword = false;
+  bool _showProfilePasswordOption = false;
   bool get _ssidRequiredForAttendance => !_allowAnyNetwork;
 
   @override
@@ -17460,16 +18001,7 @@ class _SettingsTabState extends State<SettingsTab> {
     }
   }
 
-  Future<void> _saveSettings({String? successMessage}) async {
-    final prevAllowAnyNetwork = _allowAnyNetwork;
-    final prevEnforceGeoFence = _enforceGeoFence;
-    final prevEnforceAppGeoFence = _enforceAppGeoFence;
-    final prevEnforceVpnBlocking = _enforceVpnBlocking;
-
-    setState(() {
-      _isSaving = true;
-    });
-
+  Future<bool> _performSave(String profilePassword) async {
     try {
       final url = '${CollegeIPConfig.defaultURL}/admin/settings';
       final response = await http.post(
@@ -17483,57 +18015,151 @@ class _SettingsTabState extends State<SettingsTab> {
           'enforce_geo_fence': _enforceGeoFence,
           'enforce_app_geo_fence': _enforceAppGeoFence,
           'enforce_vpn_blocking': _enforceVpnBlocking,
+          'profile_password': profilePassword,
         }),
       );
 
       if (response.statusCode == 200) {
         await AppSettings.refreshSettings();
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(successMessage ?? 'Settings saved successfully'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } else {
-        setState(() {
-          _allowAnyNetwork = prevAllowAnyNetwork;
-          _enforceGeoFence = prevEnforceGeoFence;
-          _enforceAppGeoFence = prevEnforceAppGeoFence;
-          _enforceVpnBlocking = prevEnforceVpnBlocking;
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to save settings'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        return true;
       }
+      return false;
     } catch (e) {
       print('Error saving settings: $e');
-      setState(() {
-        _allowAnyNetwork = prevAllowAnyNetwork;
-        _enforceGeoFence = prevEnforceGeoFence;
-        _enforceAppGeoFence = prevEnforceAppGeoFence;
-        _enforceVpnBlocking = prevEnforceVpnBlocking;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving settings: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      setState(() {
-        _isSaving = false;
-      });
+      return false;
     }
+  }
+
+  Future<void> _saveSettings({
+    required String title,
+    required VoidCallback onConfirmedStateChange,
+    required VoidCallback onCancelledStateChange,
+    required String successMsg,
+  }) async {
+    final passwordCtrl = TextEditingController();
+    bool isVerifying = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        const accent = Color(0xFF007AFF);
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? const Color(0xFF1E1E22) : Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text(
+                'Confirm Action',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Please enter the profile password to confirm changes.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isDark ? Colors.white70 : Colors.grey[700],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: passwordCtrl,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: 'Profile Password',
+                      prefixIcon: const Icon(Icons.security, color: accent),
+                      filled: true,
+                      fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.withOpacity(0.05),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isVerifying
+                      ? null
+                      : () {
+                          onCancelledStateChange();
+                          Navigator.pop(context);
+                        },
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(color: isDark ? Colors.white70 : Colors.grey[700]),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: isVerifying
+                      ? null
+                      : () async {
+                          final password = passwordCtrl.text;
+                          if (password.isEmpty) return;
+
+                          setDialogState(() {
+                            isVerifying = true;
+                          });
+
+                          final success = await _performSave(password);
+                          if (success) {
+                            onConfirmedStateChange();
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                            }
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(successMsg),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          } else {
+                            setDialogState(() {
+                              isVerifying = false;
+                            });
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Invalid profile password or save failed'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: isVerifying
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Text('Confirm'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _showChangePasswordDialog() async {
@@ -17731,6 +18357,200 @@ class _SettingsTabState extends State<SettingsTab> {
     );
   }
 
+  Future<void> _showChangeProfilePasswordDialog() async {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool isChanging = false;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        const accent = Color(0xFF007AFF);
+        String? errorText;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            backgroundColor: isDark ? const Color(0xFF1E1E22) : Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.admin_panel_settings_rounded, color: Colors.orange, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Change Profile Password',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildDialogTextField(
+                    label: 'Current Profile Password',
+                    controller: currentCtrl,
+                    icon: Icons.lock_outline_rounded,
+                    isDark: isDark,
+                    accentColor: Colors.orange,
+                  ),
+                  const SizedBox(height: 14),
+                  _buildDialogTextField(
+                    label: 'New Profile Password',
+                    controller: newCtrl,
+                    icon: Icons.lock_rounded,
+                    isDark: isDark,
+                    accentColor: Colors.orange,
+                  ),
+                  const SizedBox(height: 14),
+                  _buildDialogTextField(
+                    label: 'Confirm New Profile Password',
+                    controller: confirmCtrl,
+                    icon: Icons.check_circle_outline_rounded,
+                    isDark: isDark,
+                    accentColor: Colors.orange,
+                  ),
+                  if (errorText != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.withOpacity(0.3)),
+                      ),
+                      child: Text(
+                        errorText!,
+                        style: const TextStyle(color: Colors.red, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isChanging
+                    ? null
+                    : () => Navigator.pop(context),
+                child: Text(
+                  'Cancel',
+                  style: TextStyle(color: isDark ? Colors.white70 : Colors.grey[700]),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: isChanging
+                    ? null
+                    : () async {
+                        final current = currentCtrl.text.trim();
+                        final newPass = newCtrl.text.trim();
+                        final confirm = confirmCtrl.text.trim();
+
+                        if (current.isEmpty ||
+                            newPass.isEmpty ||
+                            confirm.isEmpty) {
+                          setDialogState(() {
+                            errorText = 'All fields are required.';
+                          });
+                          return;
+                        }
+                        if (newPass != confirm) {
+                          setDialogState(() {
+                            errorText = 'New passwords do not match.';
+                          });
+                          return;
+                        }
+                        if (current == newPass) {
+                          setDialogState(() {
+                            errorText = 'New password must be different.';
+                          });
+                          return;
+                        }
+
+                        setDialogState(() => isChanging = true);
+                        try {
+                          final response = await http.post(
+                            Uri.parse('${CollegeIPConfig.defaultURL}/admin/change_profile_password'),
+                            headers: {
+                              'Authorization': 'Bearer ${widget.token}',
+                              'Content-Type': 'application/json',
+                            },
+                            body: jsonEncode({
+                              'current_password': current,
+                              'new_password': newPass,
+                            }),
+                          );
+
+                          if (response.statusCode == 200) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Profile password updated successfully.',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                            }
+                          } else {
+                            String message = 'Failed to change profile password.';
+                            try {
+                              final data = jsonDecode(response.body);
+                              message = data['detail'] ?? message;
+                            } catch (_) {}
+                            setDialogState(() {
+                              errorText = message;
+                            });
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            errorText = 'Error: $e';
+                          });
+                        } finally {
+                          setDialogState(() => isChanging = false);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: isChanging
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text('Update Profile Password'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildDialogTextField({
     required String label,
     required TextEditingController controller,
@@ -17800,6 +18620,32 @@ class _SettingsTabState extends State<SettingsTab> {
               // Header
               Row(
                 children: [
+                  GestureDetector(
+                    onLongPress: () {
+                      setState(() {
+                        _showProfilePasswordOption = true;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Profile password options enabled!'),
+                          backgroundColor: Colors.blue,
+                        ),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: iOSBlue.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.admin_panel_settings_rounded,
+                        color: iOSBlue,
+                        size: 24,
+                      ),
+                    ),
+                  ),
                   Text(
                     'Attendance Settings',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -17897,11 +18743,19 @@ class _SettingsTabState extends State<SettingsTab> {
                       onChanged: _isSaving
                           ? null
                           : (value) {
+                              final prevVal = _allowAnyNetwork;
                               setState(() {
                                 _allowAnyNetwork = !value;
                               });
                               _saveSettings(
-                                successMessage: value
+                                title: 'Require College Wifi',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _allowAnyNetwork = prevVal;
+                                  });
+                                },
+                                successMsg: value
                                     ? 'College Wi-Fi requirement enabled.'
                                     : 'College Wi-Fi requirement disabled.',
                               );
@@ -17921,11 +18775,19 @@ class _SettingsTabState extends State<SettingsTab> {
                       onChanged: _isSaving
                           ? null
                           : (value) {
+                              final prevVal = _enforceGeoFence;
                               setState(() {
                                 _enforceGeoFence = value;
                               });
                               _saveSettings(
-                                successMessage: value
+                                title: 'Require Geo-fence (Web)',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _enforceGeoFence = prevVal;
+                                  });
+                                },
+                                successMsg: value
                                     ? 'Web geo-fence enforcement enabled.'
                                     : 'Web geo-fence enforcement disabled.',
                               );
@@ -17945,11 +18807,19 @@ class _SettingsTabState extends State<SettingsTab> {
                       onChanged: _isSaving
                           ? null
                           : (value) {
+                              final prevVal = _enforceAppGeoFence;
                               setState(() {
                                 _enforceAppGeoFence = value;
                               });
                               _saveSettings(
-                                successMessage: value
+                                title: 'Require Geo-fence (App)',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _enforceAppGeoFence = prevVal;
+                                  });
+                                },
+                                successMsg: value
                                     ? 'App geo-fence enforcement enabled.'
                                     : 'App geo-fence enforcement disabled.',
                               );
@@ -17969,11 +18839,19 @@ class _SettingsTabState extends State<SettingsTab> {
                       onChanged: _isSaving
                           ? null
                           : (value) {
+                              final prevVal = _enforceVpnBlocking;
                               setState(() {
                                 _enforceVpnBlocking = value;
                               });
                               _saveSettings(
-                                successMessage: value
+                                title: 'Block VPN Connections',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _enforceVpnBlocking = prevVal;
+                                  });
+                                },
+                                successMsg: value
                                     ? 'VPN blocking enabled.'
                                     : 'VPN blocking disabled.',
                               );
@@ -18154,12 +19032,26 @@ class _SettingsTabState extends State<SettingsTab> {
               ModernGlassCard(
                 accentColor: iOSBlue,
                 padding: EdgeInsets.zero,
-                child: ModernSettingTile(
-                  icon: Icons.lock_rounded,
-                  iconColor: iOSBlue,
-                  title: 'Change Password',
-                  subtitle: 'Update your admin password',
-                  onTap: _showChangePasswordDialog,
+                child: Column(
+                  children: [
+                    ModernSettingTile(
+                      icon: Icons.lock_rounded,
+                      iconColor: iOSBlue,
+                      title: 'Change Password',
+                      subtitle: 'Update your admin password',
+                      onTap: _showChangePasswordDialog,
+                    ),
+                    if (_showProfilePasswordOption) ...[
+                      Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                      ModernSettingTile(
+                        icon: Icons.admin_panel_settings_rounded,
+                        iconColor: Colors.orange,
+                        title: 'Change Profile Password',
+                        subtitle: 'Update settings profile password',
+                        onTap: _showChangeProfilePasswordDialog,
+                      ),
+                    ],
+                  ],
                 ),
               ),
 

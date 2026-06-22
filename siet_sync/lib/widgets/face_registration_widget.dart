@@ -7,8 +7,8 @@ import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
 import '../config/college_ip_config.dart';
 import '../utils/wifi_check.dart';
-import '../utils/vpn_check.dart';
 import '../utils/geofence_check.dart';
+import '../services/pre_verification_service.dart';
 
 String get API_URL => CollegeIPConfig.defaultURL;
 
@@ -845,23 +845,27 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
 
     setState(() {
       _isVerifying = true;
-      _statusMessage = "Verifying...";
+      _statusMessage = "Checking credentials...";
     });
 
     try {
+      // ── Use pre-verified background cache (VPN + WiFi + Geofence) ──────────
+      // getOrRefresh() returns the cached status if it is fresh (< 90 s old).
+      // If the cache is stale it runs a synchronous re-check before continuing.
+      // This eliminates per-attempt location/wifi/vpn latency.
+      final preVerif = await PreVerificationService.instance.getOrRefresh();
+
       // VPN Check (runs on ALL platforms including web)
-      await AppSettings.refreshSettings();
-      final vpnError = await VpnChecker.validateVpnStatus();
-      if (vpnError != null) {
+      if (preVerif.vpnError != null) {
         setState(() {
-          _statusMessage = "Error: $vpnError";
+          _statusMessage = "Error: ${preVerif.vpnError}";
         });
         return;
       }
 
-      // Check geofence before marking attendance
-      final geoDecision = await GeoFenceChecker.checkAttendanceFence();
-      if (geoDecision.error != null) {
+      // Geofence check
+      final geoDecision = preVerif.geoDecision;
+      if (geoDecision != null && geoDecision.error != null) {
         setState(() {
           _statusMessage = "Error: ${geoDecision.error}";
         });
@@ -869,22 +873,30 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         return;
       }
 
-      // Check WiFi connection before marking attendance - web completely skips WiFi checks
+      // WiFi check (app only — web uses geofence)
       if (!kIsWeb &&
           CollegeIPConfig.isWifiCheckEnabled &&
-          !AppSettings.allowAnyNetwork) {
-        final wifiError = await WifiChecker.validateCollegeWifi();
-        if (wifiError != null) {
-          setState(() {
-            _statusMessage = "Error: $wifiError";
-          });
-          
-          if (wifiError.contains("SSID") || wifiError.contains("location") || wifiError.contains("Location")) {
-            _showGeofenceWarningDialog("To verify WiFi connection, please turn on Location Services (GPS) and grant permission.");
-          }
-          return;
+          !AppSettings.allowAnyNetwork &&
+          preVerif.wifiError != null) {
+        setState(() {
+          _statusMessage = "Error: ${preVerif.wifiError}";
+        });
+        if (preVerif.wifiError!.contains("SSID") ||
+            preVerif.wifiError!.contains("location") ||
+            preVerif.wifiError!.contains("Location")) {
+          _showGeofenceWarningDialog("To verify WiFi connection, please turn on Location Services (GPS) and grant permission.");
         }
+        return;
       }
+
+      // Resolve effective geo decision for position forwarding
+      final effectiveGeoDecision = geoDecision ??
+          const GeoFenceDecision(
+            enforced: false,
+            insideOuter: null,
+            insideInner: null,
+            error: null,
+          );
 
       setState(() => _statusMessage = "Verifying face...");
 
@@ -900,59 +912,34 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
       request.fields['reg_no'] = widget.regNo;
 
       // Attach client location for server-side geofence enforcement.
-      // For APP: GeoFenceChecker.lastFetchedPosition is always set when geofence
-      // check passed (inside fence). For WEB: also try fetching fresh if needed.
-      Position? position = GeoFenceChecker.lastFetchedPosition;
+      // Use the position cached by PreVerificationService (updated every 30 s),
+      // falling back to the static GeoFenceChecker cache.
+      Position? position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
 
-      // For web: if no cached position and geofence is enforced, fetch fresh position
-      if (position == null && kIsWeb && geoDecision.enforced) {
-        late final Position pos;
-        int retries = 5;
-        
-        for (int i = 0; i < retries; i++) {
+      // For web: if no cached position and geofence is enforced, try one fresh fetch
+      if (position == null && kIsWeb && effectiveGeoDecision.enforced) {
+        try {
+          position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.low,
+            timeLimit: const Duration(seconds: 20),
+          );
+        } catch (_) {
           try {
-            pos = await Geolocator.getCurrentPosition(
-              desiredAccuracy: LocationAccuracy.low,
-              timeLimit: const Duration(seconds: 20),
-            );
-            break;
-          } catch (e) {
-            // Try last known position
-            try {
-              final lastPos = await Geolocator.getLastKnownPosition();
-              if (lastPos != null) {
-                pos = lastPos;
-                break;
-              }
-            } catch (_) {}
-            
-            if (i < 2) {
-              try {
-                pos = await Geolocator.getCurrentPosition(
-                  desiredAccuracy: LocationAccuracy.reduced,
-                  timeLimit: const Duration(seconds: 10),
-                );
-                break;
-              } catch (_) {}
-            }
-            
-            if (i == retries - 1) {
-              setState(() {
-                _statusMessage =
-                    "Error: Unable to get your location. Please:\n1. Refresh the page\n2. Click location icon in browser address bar\n3. Select \"Allow\" for this site\n4. Ensure you are on HTTPS";
-              });
-              return;
-            }
-            
-            await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
-          }
+            position = await Geolocator.getLastKnownPosition();
+          } catch (_) {}
         }
-        position = pos;
+
+        if (position == null) {
+          setState(() {
+            _statusMessage =
+                "Error: Unable to get your location. Please:\n1. Refresh the page\n2. Click location icon in browser address bar\n3. Select \"Allow\" for this site\n4. Ensure you are on HTTPS";
+          });
+          return;
+        }
       }
 
-      // If geofence is enforced but no position is resolved, block as a safety net
-      // on both web and app platforms.
-      if (geoDecision.enforced && position == null) {
+      // If geofence is enforced but no position is resolved, block as safety net.
+      if (effectiveGeoDecision.enforced && position == null) {
         setState(() {
           _statusMessage = "Error: Unable to verify your location. Please try again.";
         });
@@ -967,10 +954,11 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
 
       // ALWAYS send coordinates when geofencing is enforced — backend uses
       // these as second-layer verification even after client-side geofence passed.
-      if (geoDecision.enforced && position != null) {
+      if (effectiveGeoDecision.enforced && position != null) {
         request.fields['client_lat'] = position.latitude.toString();
         request.fields['client_lng'] = position.longitude.toString();
       }
+
 
       final bytes = await imageFile.readAsBytes();
       request.files.add(

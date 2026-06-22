@@ -106,7 +106,7 @@ class _OtherStaffLoginPageState extends State<OtherStaffLoginPage> {
         });
       }
     } catch (e) {
-      setState(() => errorMsg = 'Connection error: $e');
+      setState(() => errorMsg = ApiResponseUtils.sanitize(e));
     } finally {
       setState(() => isLoading = false);
     }
@@ -1050,9 +1050,11 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
 
       await fetchMyAttendance();
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${ApiResponseUtils.sanitize(e)}')),
+        );
+      }
     } finally {
       setState(() => isLoading = false);
     }
@@ -1926,7 +1928,7 @@ class _OtherStaffMarkAttendanceTabState
       }
     } catch (e) {
       setState(() {
-        _message = "Error checking face status: $e";
+        _message = "Error checking face status: ${ApiResponseUtils.sanitize(e)}";
       });
     }
   }
@@ -2333,7 +2335,7 @@ class _OtherStaffFaceRegisterTabState extends State<OtherStaffFaceRegisterTab> {
       }
     } catch (e) {
       setState(() {
-        _message = "Error checking face status: $e";
+        _message = "Error checking face status: ${ApiResponseUtils.sanitize(e)}";
         _isLoading = false;
       });
     }

@@ -12,6 +12,7 @@ import 'pages/staff_panel.dart';
 import 'pages/other_staff_login.dart';
 import 'services/theme_service.dart';
 import 'services/background_service_handler.dart';
+import 'services/pre_verification_service.dart';
 
 // Use centralized IP configuration
 String get API_URL => CollegeIPConfig.defaultURL;
@@ -63,6 +64,9 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     _startVpnCheck();
+    // Start background location/geofence/WiFi pre-verification immediately
+    // so credentials are ready by the time the user tries to mark attendance.
+    PreVerificationService.instance.start();
   }
 
   void _startVpnCheck() {
@@ -95,6 +99,7 @@ class _MyAppState extends State<MyApp> {
   @override
   void dispose() {
     _vpnTimer?.cancel();
+    PreVerificationService.instance.stop();
     super.dispose();
   }
 

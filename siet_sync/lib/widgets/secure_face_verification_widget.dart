@@ -12,6 +12,8 @@ class SecureFaceVerificationWidget extends StatefulWidget {
   final VoidCallback onVerificationSuccess;
   final VoidCallback onVerificationFailed;
   final Function(String) onError;
+  final bool isSettingsAuth;
+  final String? token;
 
   const SecureFaceVerificationWidget({
     super.key,
@@ -20,6 +22,8 @@ class SecureFaceVerificationWidget extends StatefulWidget {
     required this.onVerificationSuccess,
     required this.onVerificationFailed,
     required this.onError,
+    this.isSettingsAuth = false,
+    this.token,
   });
 
   @override
@@ -79,6 +83,7 @@ class _SecureFaceVerificationWidgetState
         frontCamera,
         kIsWeb ? ResolutionPreset.medium : ResolutionPreset.high,
         imageFormatGroup: ImageFormatGroup.jpeg,
+        enableAudio: false,
       );
 
       await _controller!.initialize();
@@ -147,17 +152,32 @@ class _SecureFaceVerificationWidgetState
       }
 
       // Verify face and mark attendance
-      final result = await FaceVerificationService.verifyAndMarkAttendance(
-        regNo: widget.regNo,
-        imageFile: capturedImage,
-        onError: (error) {
-          if (mounted) {
-            setState(() {
-              _feedbackMessage = error;
-            });
-          }
-        },
-      );
+      final Map<String, dynamic> result;
+      if (widget.isSettingsAuth && widget.token != null) {
+        result = await FaceVerificationService.verifyAdminExclusive(
+          image: capturedImage,
+          token: widget.token!,
+          onError: (error) {
+            if (mounted) {
+              setState(() {
+                _feedbackMessage = error;
+              });
+            }
+          },
+        );
+      } else {
+        result = await FaceVerificationService.verifyAndMarkAttendance(
+          regNo: widget.regNo,
+          imageFile: capturedImage,
+          onError: (error) {
+            if (mounted) {
+              setState(() {
+                _feedbackMessage = error;
+              });
+            }
+          },
+        );
+      }
 
       if (mounted) {
         if (result['success'] == true) {
@@ -189,7 +209,10 @@ class _SecureFaceVerificationWidgetState
           children: [
             const Icon(Icons.check_circle, color: Colors.white, size: 48),
             const SizedBox(height: 8),
-            Text(result['message'] ?? 'Attendance marked successfully'),
+            Text(result['message'] ??
+                (widget.isSettingsAuth
+                    ? 'Identity verified successfully'
+                    : 'Attendance marked successfully')),
             if (result['data']?['confidence'] != null)
               Text(
                 'Confidence: ${(result['data']['confidence'] * 100).toStringAsFixed(1)}%',
@@ -736,7 +759,9 @@ class _SecureFaceVerificationWidgetState
                           ? "Account Temporarily Locked"
                           : _isProcessing
                               ? "Processing Verification..."
-                              : "Verify & Mark Attendance",
+                              : widget.isSettingsAuth
+                                  ? "Verify Admin Identity"
+                                  : "Verify Face & Mark Attendance",
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -772,10 +797,10 @@ class FaceScannerMaskPainter extends CustomPainter {
       ..color = Colors.black.withOpacity(0.70)
       ..style = PaintingStyle.fill;
 
-    // Dimensions of the viewport scanning oval
-    final ovalWidth = size.width * 0.68;
-    final ovalHeight = ovalWidth * 1.28;
-    final center = Offset(size.width / 2, size.height / 2 - 40);
+    // Dimensions of the viewport scanning oval (responsive to both width and height)
+    final ovalWidth = math.min(size.width * 0.65, size.height * 0.5);
+    final ovalHeight = ovalWidth * 1.3;
+    final center = Offset(size.width / 2, size.height / 2);
     final rect = Rect.fromCenter(center: center, width: ovalWidth, height: ovalHeight);
 
     // Screen backdrop mask

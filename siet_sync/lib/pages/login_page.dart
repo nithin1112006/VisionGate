@@ -245,7 +245,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
         setState(() => errorMsg = serverMessage ?? 'Login failed');
       }
     } catch (e) {
-      setState(() => errorMsg = 'Connection error: $e');
+      setState(() => errorMsg = ApiResponseUtils.sanitize(e));
     } finally {
       setState(() => isLoading = false);
     }

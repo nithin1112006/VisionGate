@@ -5,7 +5,8 @@ import 'package:camera/camera.dart';
 import '../config/college_ip_config.dart';
 import '../utils/geofence_check.dart';
 import '../utils/wifi_check.dart';
-import '../utils/vpn_check.dart';
+import '../utils/api_response_utils.dart';
+import 'pre_verification_service.dart';
 
 /// Secure face verification service with liveness detection and audit logging
 class FaceVerificationService {
@@ -123,33 +124,39 @@ class FaceVerificationService {
       };
     }
 
-    // Refresh settings from server before any checks
-    await AppSettings.refreshSettings();
+    // ── Use pre-verified background cache (VPN + WiFi + Geofence) ────────────
+    // getOrRefresh() returns the cached status if it is fresh (< 90 s old).
+    // If the cache is stale it runs a synchronous re-check before continuing.
+    final preVerif = await PreVerificationService.instance.getOrRefresh();
 
-    // 1. VPN Check — all platforms, if VPN blocking is enabled
-    final vpnError = await VpnChecker.validateVpnStatus();
-    if (vpnError != null) {
-      onError?.call(vpnError);
-      return {'success': false, 'error': vpnError, 'vpn_blocked': true};
+    // 1. VPN Check
+    if (preVerif.vpnError != null) {
+      onError?.call(preVerif.vpnError!);
+      return {'success': false, 'error': preVerif.vpnError, 'vpn_blocked': true};
     }
 
-    // 2. WiFi/Network check — app only; web uses geofence for location enforcement
-    //    Runs independently: turning OFF geofence does NOT skip this check
-    if (!kIsWeb && !AppSettings.allowAnyNetwork) {
-      final wifiError = await WifiChecker.validateCollegeWifi();
-      if (wifiError != null) {
-        onError?.call(wifiError);
-        return {'success': false, 'error': wifiError, 'wifi_blocked': true};
-      }
+    // 2. WiFi/Network check (app only)
+    if (!kIsWeb && !AppSettings.allowAnyNetwork && preVerif.wifiError != null) {
+      onError?.call(preVerif.wifiError!);
+      return {'success': false, 'error': preVerif.wifiError, 'wifi_blocked': true};
     }
 
-    // 3. Geofence check — web reads enforce_geo_fence; app reads enforce_app_geo_fence
-    //    Runs independently: turning OFF WiFi does NOT skip this check
-    final geoDecision = await GeoFenceChecker.checkAttendanceFence();
-    if (geoDecision.error != null) {
+    // 3. Geofence check
+    final geoDecision = preVerif.geoDecision;
+    if (geoDecision != null && geoDecision.error != null) {
       onError?.call(geoDecision.error!);
       return {'success': false, 'error': geoDecision.error, 'geo_blocked': true};
     }
+
+    // Resolve the effective geo decision — use cached one from the service.
+    // If no geo decision is cached (geofence disabled), create a no-enforce sentinel.
+    final effectiveGeoDecision = geoDecision ??
+        const GeoFenceDecision(
+          enforced: false,
+          insideOuter: null,
+          insideInner: null,
+          error: null,
+        );
 
     try {
       // Read image bytes
@@ -172,9 +179,11 @@ class FaceVerificationService {
       request.fields['client_platform'] = clientPlatform;
       request.headers['X-Client-Platform'] = clientPlatform;
 
-      // Send location coordinates when geofence was enforced and position was fetched
-      final position = GeoFenceChecker.lastFetchedPosition;
-      if (geoDecision.enforced) {
+      // Send location coordinates when geofence was enforced and position was fetched.
+      // Use the position cached by PreVerificationService, falling back to the
+      // static GeoFenceChecker cache if needed.
+      final position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
+      if (effectiveGeoDecision.enforced) {
         if (position == null) {
           final errorMsg = "Unable to verify your location. Please enable GPS/location services and try again.";
           onError?.call(errorMsg);
@@ -183,6 +192,7 @@ class FaceVerificationService {
         request.fields['client_lat'] = position.latitude.toString();
         request.fields['client_lng'] = position.longitude.toString();
       }
+
 
       // Add image as multipart file
       request.files.add(
@@ -289,7 +299,7 @@ class FaceVerificationService {
         };
       }
     } catch (e) {
-      final errorMsg = "Connection error: ${e.toString()}";
+      final errorMsg = ApiResponseUtils.sanitize(e);
       onError?.call(errorMsg);
 
       return {'success': false, 'error': errorMsg};
@@ -417,7 +427,7 @@ class FaceVerificationService {
         return {'success': false, 'error': errorMsg};
       }
     } catch (e) {
-      final errorMsg = "Connection error: ${e.toString()}";
+      final errorMsg = ApiResponseUtils.sanitize(e);
       onError?.call(errorMsg);
       return {'success': false, 'error': errorMsg};
     }
@@ -447,6 +457,52 @@ class FaceVerificationService {
   static void resetFailedAttempts() {
     _failedAttempts = 0;
     _lockoutEndTime = null;
+  }
+
+  /// Verify admin face specifically for settings verification (no checks for wifi/gps/etc)
+  static Future<Map<String, dynamic>> verifyAdminExclusive({
+    required XFile image,
+    required String token,
+    VoidCallback? onSuccess,
+    Function(String)? onError,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$API_URL/admin/face/verify-own-exclusive'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
+
+      final fileBytes = await image.readAsBytes();
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          fileBytes,
+          filename: 'admin_verify.jpg',
+        ),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final result = jsonDecode(response.body);
+        onSuccess?.call();
+        return {
+          'success': true,
+          'message': result['message'] ?? 'Admin verified successfully',
+        };
+      } else {
+        final data = jsonDecode(response.body);
+        final errorMsg = data['detail'] ?? data['error'] ?? 'Face verification failed';
+        onError?.call(errorMsg);
+        return {'success': false, 'error': errorMsg};
+      }
+    } catch (e) {
+      final errorMsg = ApiResponseUtils.sanitize(e);
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg};
+    }
   }
 }
 

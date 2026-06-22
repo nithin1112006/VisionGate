@@ -4,6 +4,9 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../config/college_ip_config.dart';
 import '../services/api_client.dart';
 import '../services/location_tracking_service.dart';
@@ -142,7 +145,7 @@ class _HODLoginPageState extends State<HODLoginPage> {
         );
       }
     } catch (e) {
-      setState(() => errorMsg = 'Connection error: $e');
+      setState(() => errorMsg = ApiResponseUtils.sanitize(e));
     } finally {
       setState(() => isLoading = false);
     }
@@ -951,9 +954,11 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
         setState(() => data = jsonDecode(response.body));
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${ApiResponseUtils.sanitize(e)}')),
+        );
+      }
     } finally {
       setState(() => isLoading = false);
     }
@@ -3260,7 +3265,7 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
       }
     } catch (e) {
       setState(() {
-        _message = "Error checking face status: $e";
+        _message = "Error checking face status: ${ApiResponseUtils.sanitize(e)}";
       });
     }
   }
@@ -4029,9 +4034,207 @@ class _DeptStatsInner extends StatefulWidget {
 
 class _DeptStatsInnerState extends State<_DeptStatsInner> {
   bool isLoading = false;
+  bool isGeneratingPdf = false;
   Map<String, dynamic>? statsData;
   String? startDate;
   String? endDate;
+
+  Future<void> _generateAndDownloadPdf() async {
+    if (statsData == null) return;
+    setState(() => isGeneratingPdf = true);
+
+    try {
+      final data = statsData!;
+      final summary = data['summary'] as Map<String, dynamic>;
+      final staffList = data['staff'] as List? ?? [];
+      final workingDays = data['working_days'] ?? 0;
+      final totalStaff = data['total_staff'] ?? 0;
+      final overallPct = (summary['overall_attendance_pct'] ?? 0).toDouble();
+      
+      final startDateStr = startDate ?? 'Start';
+      final endDateStr = endDate ?? 'End';
+      final deptName = widget.dept.replaceAll(' ', '_');
+      final filename = 'attendance_report_${deptName}_${startDateStr}_to_$endDateStr.pdf';
+
+      final pdf = pw.Document();
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (context) => [
+            pw.Header(
+              level: 0,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'DEPARTMENT ATTENDANCE REPORT',
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Department: ${widget.dept.toUpperCase()}',
+                    style: pw.TextStyle(
+                      fontSize: 14,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.teal,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Period: $startDateStr to $endDateStr',
+                    style: const pw.TextStyle(
+                      fontSize: 12,
+                      color: PdfColors.grey700,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Generated: ${DateTime.now().toString()}',
+                    style: const pw.TextStyle(
+                      fontSize: 10,
+                      color: PdfColors.grey500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 20),
+            
+            // Summary Cards
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.teal, width: 1.5),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Overall Attendance', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text('${overallPct.toStringAsFixed(1)}%', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
+                      ],
+                    ),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.grey300),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Total Staff', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text(totalStaff.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.grey300),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Working Days', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text(workingDays.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 24),
+            
+            // Stats Breakdown
+            pw.Text(
+              'Detailed Summary Metrics',
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              context: context,
+              headers: ['Metric', 'Count / Value'],
+              data: [
+                ['Total Present Days (Scan)', summary['total_present'].toString()],
+                ['Total Absent Days', summary['total_absent'].toString()],
+                ['Total Approved Leaves', summary['total_leave'].toString()],
+                ['Total On Duty (OD) Days', summary['total_od'].toString()],
+              ],
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              cellAlignment: pw.Alignment.centerLeft,
+            ),
+            pw.SizedBox(height: 24),
+            
+            // Staff Table
+            pw.Text(
+              'Staff Performance & Attendance Breakdown',
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              context: context,
+              headers: ['Name', 'Reg No', 'Present', 'Absent', 'Leave', 'OD', 'Attendance %'],
+              data: staffList.map((s) {
+                return [
+                  s['name'] ?? 'Unknown',
+                  s['reg_no'] ?? '',
+                  s['present']?.toString() ?? '0',
+                  s['absent']?.toString() ?? '0',
+                  s['leave']?.toString() ?? '0',
+                  s['od']?.toString() ?? '0',
+                  '${(s['attendance_pct'] ?? 0).toStringAsFixed(1)}%',
+                ];
+              }).toList(),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              cellAlignment: pw.Alignment.centerLeft,
+            ),
+          ],
+        ),
+      );
+
+      await Printing.sharePdf(bytes: await pdf.save(), filename: filename);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('PDF report downloaded successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error generating PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() => isGeneratingPdf = false);
+    }
+  }
 
   @override
   void initState() {
@@ -4385,15 +4588,39 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Icon(Icons.summarize, color: Colors.teal),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Summary (${_formatDate(data['start_date'])} - ${_formatDate(data['end_date'])})',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(Icons.summarize, color: Colors.teal),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Summary (${_formatDate(data['start_date'])} - ${_formatDate(data['end_date'])})',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    IconButton(
+                      icon: isGeneratingPdf
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(Colors.teal),
+                              ),
+                            )
+                          : const Icon(Icons.download, color: Colors.teal),
+                      onPressed: isGeneratingPdf ? null : _generateAndDownloadPdf,
+                      tooltip: 'Download Report',
                     ),
                   ],
                 ),
@@ -5392,7 +5619,7 @@ class _HODAttendanceAnalyticsTabState extends State<HODAttendanceAnalyticsTab> {
       if (mounted)
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error loading staff: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error loading staff: ${ApiResponseUtils.sanitize(e)}')));
     } finally {
       setState(() => isLoadingStaff = false);
     }
@@ -5419,7 +5646,7 @@ class _HODAttendanceAnalyticsTabState extends State<HODAttendanceAnalyticsTab> {
       if (mounted)
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error loading details: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error loading details: ${ApiResponseUtils.sanitize(e)}')));
     } finally {
       setState(() => isLoadingDetails = false);
     }
@@ -5898,9 +6125,207 @@ class HODDeptStatsTab extends StatefulWidget {
 
 class _HODDeptStatsTabState extends State<HODDeptStatsTab> {
   bool isLoading = false;
+  bool isGeneratingPdf = false;
   Map<String, dynamic>? statsData;
   String? startDate;
   String? endDate;
+
+  Future<void> _generateAndDownloadPdf() async {
+    if (statsData == null) return;
+    setState(() => isGeneratingPdf = true);
+
+    try {
+      final data = statsData!;
+      final summary = data['summary'] as Map<String, dynamic>;
+      final staffList = data['staff'] as List? ?? [];
+      final workingDays = data['working_days'] ?? 0;
+      final totalStaff = data['total_staff'] ?? 0;
+      final overallPct = (summary['overall_attendance_pct'] ?? 0).toDouble();
+      
+      final startDateStr = startDate ?? 'Start';
+      final endDateStr = endDate ?? 'End';
+      final deptName = widget.dept.replaceAll(' ', '_');
+      final filename = 'attendance_report_${deptName}_${startDateStr}_to_$endDateStr.pdf';
+
+      final pdf = pw.Document();
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (context) => [
+            pw.Header(
+              level: 0,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'DEPARTMENT ATTENDANCE REPORT',
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Department: ${widget.dept.toUpperCase()}',
+                    style: pw.TextStyle(
+                      fontSize: 14,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.teal,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Period: $startDateStr to $endDateStr',
+                    style: const pw.TextStyle(
+                      fontSize: 12,
+                      color: PdfColors.grey700,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Generated: ${DateTime.now().toString()}',
+                    style: const pw.TextStyle(
+                      fontSize: 10,
+                      color: PdfColors.grey500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 20),
+            
+            // Summary Cards
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.teal, width: 1.5),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Overall Attendance', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text('${overallPct.toStringAsFixed(1)}%', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
+                      ],
+                    ),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.grey300),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Total Staff', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text(totalStaff.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  child: pw.Container(
+                    padding: const pw.EdgeInsets.all(12),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.grey300),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('Working Days', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                        pw.SizedBox(height: 4),
+                        pw.Text(workingDays.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 24),
+            
+            // Stats Breakdown
+            pw.Text(
+              'Detailed Summary Metrics',
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              context: context,
+              headers: ['Metric', 'Count / Value'],
+              data: [
+                ['Total Present Days (Scan)', summary['total_present'].toString()],
+                ['Total Absent Days', summary['total_absent'].toString()],
+                ['Total Approved Leaves', summary['total_leave'].toString()],
+                ['Total On Duty (OD) Days', summary['total_od'].toString()],
+              ],
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              cellAlignment: pw.Alignment.centerLeft,
+            ),
+            pw.SizedBox(height: 24),
+            
+            // Staff Table
+            pw.Text(
+              'Staff Performance & Attendance Breakdown',
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              context: context,
+              headers: ['Name', 'Reg No', 'Present', 'Absent', 'Leave', 'OD', 'Attendance %'],
+              data: staffList.map((s) {
+                return [
+                  s['name'] ?? 'Unknown',
+                  s['reg_no'] ?? '',
+                  s['present']?.toString() ?? '0',
+                  s['absent']?.toString() ?? '0',
+                  s['leave']?.toString() ?? '0',
+                  s['od']?.toString() ?? '0',
+                  '${(s['attendance_pct'] ?? 0).toStringAsFixed(1)}%',
+                ];
+              }).toList(),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              cellAlignment: pw.Alignment.centerLeft,
+            ),
+          ],
+        ),
+      );
+
+      await Printing.sharePdf(bytes: await pdf.save(), filename: filename);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('PDF report downloaded successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error generating PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() => isGeneratingPdf = false);
+    }
+  }
 
   @override
   void initState() {
@@ -6272,15 +6697,39 @@ class _HODDeptStatsTabState extends State<HODDeptStatsTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Icon(Icons.summarize, color: Colors.teal),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Summary (${_formatDate(data['start_date'])} - ${_formatDate(data['end_date'])})',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(Icons.summarize, color: Colors.teal),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Summary (${_formatDate(data['start_date'])} - ${_formatDate(data['end_date'])})',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    IconButton(
+                      icon: isGeneratingPdf
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(Colors.teal),
+                              ),
+                            )
+                          : const Icon(Icons.download, color: Colors.teal),
+                      onPressed: isGeneratingPdf ? null : _generateAndDownloadPdf,
+                      tooltip: 'Download Report',
                     ),
                   ],
                 ),

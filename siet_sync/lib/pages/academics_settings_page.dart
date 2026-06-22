@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/college_ip_config.dart';
+import '../utils/api_response_utils.dart';
 
 class AcademicsSettingsPage extends StatefulWidget {
   final String token;
@@ -264,7 +265,7 @@ class _AcademicsSettingsPageState extends State<AcademicsSettingsPage>
         throw Exception('Failed to save');
       }
     } catch (e) {
-      if (mounted) _showSnack('Error: $e');
+      if (mounted) _showSnack('Error: ${ApiResponseUtils.sanitize(e)}');
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
