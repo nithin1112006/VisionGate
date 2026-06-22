@@ -823,6 +823,7 @@ _app_settings = {
     "enforce_geo_fence": True,
     "enforce_app_geo_fence": True,
     "enforce_vpn_blocking": True,
+    "profile_password": "admin123",
 }
 
 _academic_settings = {}
@@ -1180,6 +1181,12 @@ async def update_settings(request: Request):
         except Exception:
             raise HTTPException(status_code=401, detail="Authentication required")
 
+        # Verify profile password
+        profile_password = body.get("profile_password")
+        stored_password = _app_settings.get("profile_password", "admin123")
+        if not profile_password or profile_password != stored_password:
+            raise HTTPException(status_code=403, detail="Invalid profile password")
+
         # Update settings and track changes
         changes = []
         if "allow_any_network" in body:
@@ -1229,6 +1236,39 @@ async def update_settings(request: Request):
     except Exception as e:
         print(f"Error updating settings: {e}")
         raise HTTPException(status_code=500, detail="Failed to update settings")
+
+
+@app.post("/admin/change_profile_password")
+async def change_profile_password(request: Request):
+    """Change settings profile password - requires admin authentication"""
+    try:
+        admin_user = verify_admin_token(request)
+    except HTTPException as e:
+        raise e
+    except Exception:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        body = await request.json()
+        current_password = body.get("current_password")
+        new_password = body.get("new_password")
+
+        if not current_password or not new_password:
+            raise HTTPException(status_code=400, detail="Current and new passwords are required")
+
+        stored_password = _app_settings.get("profile_password", "admin123")
+        if current_password != stored_password:
+            raise HTTPException(status_code=403, detail="Incorrect current profile password")
+
+        _app_settings["profile_password"] = new_password
+        save_system_config("profile_password", new_password)
+
+        return {"success": True, "message": "Profile password updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error changing profile password: {e}")
+        raise HTTPException(status_code=500, detail="Failed to change profile password")
 
 
 @app.get("/api/health")
@@ -2093,6 +2133,23 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
 
 
+def is_user_suspended(username: str, is_other_staff: bool = False) -> bool:
+    """Check if a user is suspended by querying their suspended status from the database by username or reg_no"""
+    try:
+        table = "other_staff" if is_other_staff else "users"
+        # Check by username
+        cursor.execute(f"SELECT COALESCE(suspended, FALSE) FROM {table} WHERE username = %s", (username,))
+        row = cursor.fetchone()
+        if not row:
+            # Check by reg_no (case-insensitive)
+            cursor.execute(f"SELECT COALESCE(suspended, FALSE) FROM {table} WHERE LOWER(reg_no) = LOWER(%s)", (username,))
+            row = cursor.fetchone()
+        return row[0] if row else False
+    except Exception as e:
+        print(f"Error checking user suspension status: {e}")
+        return False
+
+
 def get_user_by_username(username: str):
     """Get user by username"""
     cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
@@ -2105,10 +2162,17 @@ def get_user_by_reg_no(reg_no: str):
     return cursor.fetchone()
 
 
-def get_user_by_reg_no(reg_no: str):
-    """Get user by registration number (case-insensitive)"""
-    cursor.execute("SELECT * FROM users WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
-    return cursor.fetchone()
+def delete_user_data_by_reg_no(reg_no: str):
+    """Delete all attendance, leaves, location records, and face samples for a user"""
+    cursor.execute("DELETE FROM attendance WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM daily_attendance_status WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM casual_leave WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM user_location_logs WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM other_staff_attendance WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM leave_requests WHERE user_reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM face_reregister_requests WHERE staff_reg_no = ?", (reg_no,))
 
 
 # -------------------------------------------------
@@ -2240,6 +2304,13 @@ async def login(request: Request):
         # Verify password
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Check if user is suspended
+        if is_user_suspended(user[1], is_other_staff):
+            raise HTTPException(
+                status_code=403,
+                detail="Account suspended. Please contact the administrator.",
+            )
 
         device_id = data.get("device_id")
 
@@ -2834,6 +2905,7 @@ def _run_ddl():
             embedding BYTEA,
             can_reregister BOOLEAN DEFAULT FALSE,
             current_device_id VARCHAR(255),
+            suspended BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_by VARCHAR(120)
         )
@@ -2878,6 +2950,8 @@ def _run_ddl():
         "ALTER TABLE user_location_logs ADD COLUMN IF NOT EXISTS warning_message VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
         "ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE",
         "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS slot_type VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE other_staff_attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
@@ -6372,6 +6446,10 @@ def verify_admin_token(request: Request) -> dict:
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=False):
+            raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
+
         # Check if user has admin privileges
         if user[6] not in ["admin", "hod"]:
             raise HTTPException(status_code=403, detail="Admin access required")
@@ -6837,12 +6915,12 @@ async def admin_get_users(request: Request, role: str = None):
     try:
         if role:
             cursor.execute(
-                "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister FROM users WHERE role = ?",
+                "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister, COALESCE(suspended, FALSE) FROM users WHERE role = ?",
                 (role,),
             )
         else:
             cursor.execute(
-                "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister FROM users"
+                "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister, COALESCE(suspended, FALSE) FROM users"
             )
 
         rows = cursor.fetchall()
@@ -6856,6 +6934,7 @@ async def admin_get_users(request: Request, role: str = None):
                 "dept": row[4],
                 "role": row[5],
                 "created_at": row[6],
+                "suspended": bool(row[9]),
             }
             # Add face status for staff and hod
             if row[5] in ["staff", "hod"]:
@@ -7094,6 +7173,451 @@ async def admin_bulk_create_users(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to create users: {str(e)}")
 
 
+@app.post("/admin/users/bulk-upload")
+async def admin_bulk_upload_users(request: Request, file: UploadFile = File(...)):
+    """
+    Bulk upload users via JSON or Excel (.xlsx/.xls) (admin only)
+    """
+    verify_admin_token(request)
+
+    filename = file.filename or ""
+    is_excel = filename.endswith(".xlsx") or filename.endswith(".xls")
+    is_json = filename.endswith(".json")
+
+    if not (is_excel or is_json):
+        raise HTTPException(status_code=400, detail="Only JSON (.json) and Excel (.xlsx, .xls) files are supported")
+
+    users_data = []
+    try:
+        if is_json:
+            contents = await file.read()
+            try:
+                users_data = json.loads(contents.decode("utf-8"))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
+            if not isinstance(users_data, list):
+                raise HTTPException(status_code=400, detail="JSON must be an array of user objects")
+        else:
+            # Excel parsing
+            contents = await file.read()
+            import io
+            from openpyxl import load_workbook
+            f = io.BytesIO(contents)
+            wb = load_workbook(f, read_only=True, data_only=True)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                raise HTTPException(status_code=400, detail="Excel file is empty")
+
+            headers = [str(cell).strip().lower() if cell is not None else "" for cell in rows[0]]
+            
+            idx_username = -1
+            idx_name = -1
+            idx_dept = -1
+            idx_role = -1
+            idx_password = -1
+
+            for idx, h in enumerate(headers):
+                if h in ["username", "user_name", "user"]:
+                    idx_username = idx
+                elif h in ["name", "full name", "fullname", "full_name"]:
+                    idx_name = idx
+                elif h in ["dept", "department", "department name", "department_name"]:
+                    idx_dept = idx
+                elif h in ["role", "user_role"]:
+                    idx_role = idx
+                elif h in ["password", "pass"]:
+                    idx_password = idx
+
+            missing = []
+            if idx_username == -1:
+                missing.append("username")
+            if idx_name == -1:
+                missing.append("name")
+            if idx_dept == -1:
+                missing.append("dept")
+            if idx_role == -1:
+                missing.append("role")
+
+            if missing:
+                raise HTTPException(status_code=400, detail=f"Missing required columns in Excel headers: {', '.join(missing)}")
+
+            for row in rows[1:]:
+                if all(cell is None for cell in row):
+                    continue
+                username = str(row[idx_username]).strip() if idx_username < len(row) and row[idx_username] is not None else None
+                name = str(row[idx_name]).strip() if idx_name < len(row) and row[idx_name] is not None else None
+                dept = str(row[idx_dept]).strip() if idx_dept < len(row) and row[idx_dept] is not None else None
+                role = str(row[idx_role]).strip().lower() if idx_role < len(row) and row[idx_role] is not None else "staff"
+                password = str(row[idx_password]).strip() if idx_password != -1 and idx_password < len(row) and row[idx_password] is not None else "password123"
+
+                users_data.append({
+                    "username": username,
+                    "name": name,
+                    "dept": dept,
+                    "role": role,
+                    "password": password
+                })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
+
+    created_users = []
+    failed_users = []
+    skipped_users = []
+    seen_usernames = set()
+
+    try:
+        # Run everything in a transaction
+        for idx, user_data in enumerate(users_data, start=2):
+            try:
+                username = user_data.get("username")
+                password = user_data.get("password") or "password123"
+                name = user_data.get("name")
+                dept = user_data.get("dept")
+                role = user_data.get("role") or "staff"
+
+                if not all([username, name, dept]):
+                    failed_users.append({
+                        "username": username or f"Row {idx}",
+                        "error": "Missing required fields (username, name, dept)"
+                    })
+                    continue
+
+                username = username.strip()
+                name = name.strip()
+                dept = dept.strip()
+                role = role.strip().lower()
+
+                allowed_roles = ["admin", "hod", "staff", "principal", "vice_chancellor", "director", "dean"]
+                if role not in allowed_roles and not role.startswith("custom_"):
+                    failed_users.append({
+                        "username": username,
+                        "error": f"Invalid role '{role}'"
+                    })
+                    continue
+
+                if username in seen_usernames:
+                    failed_users.append({
+                        "username": username,
+                        "error": "Duplicate username within the uploaded file"
+                    })
+                    continue
+                seen_usernames.add(username)
+
+                existing_user = get_user_by_username(username)
+                if existing_user:
+                    skipped_users.append({
+                        "username": username,
+                        "reason": "Username already exists in database"
+                    })
+                    continue
+
+                # Auto-create department if it does not exist
+                cursor.execute("SELECT id FROM departments WHERE name = ?", (dept,))
+                dept_row = cursor.fetchone()
+                if not dept_row:
+                    cursor.execute("INSERT INTO departments (name) VALUES (?)", (dept,))
+
+                # Generate reg_no
+                if role == "hod":
+                    prefix = "HOD"
+                elif role == "staff":
+                    prefix = "STAFF"
+                elif role == "principal":
+                    prefix = "PRINCIPAL"
+                elif role == "vice_chancellor":
+                    prefix = "VC"
+                elif role == "director":
+                    prefix = "DIR"
+                elif role == "dean":
+                    prefix = "DEAN"
+                elif role.startswith("custom_"):
+                    prefix = role.replace("custom_", "").upper()[:6]
+                else:
+                    prefix = "USR"
+
+                cursor.execute("SELECT COUNT(*) FROM users WHERE role = ?", (role,))
+                count = cursor.fetchone()[0]
+                reg_no = f"{prefix}_{str(count + 1).zfill(4)}"
+
+                while get_user_by_reg_no(reg_no):
+                    count += 1
+                    reg_no = f"{prefix}_{str(count).zfill(4)}"
+
+                password_hash = hash_password(password)
+
+                cursor.execute(
+                    """
+                    INSERT INTO users (username, password_hash, reg_no, name, dept, role, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (username, password_hash, reg_no, name, dept, role, "admin")
+                )
+
+                created_users.append({
+                    "username": username,
+                    "reg_no": reg_no,
+                    "name": name,
+                    "dept": dept,
+                    "role": role,
+                    "password": password
+                })
+            except Exception as row_err:
+                failed_users.append({
+                    "username": user_data.get("username") or f"Row {idx}",
+                    "error": str(row_err)
+                })
+
+        conn.commit()
+
+        log_audit_event(
+            "USERS_BULK_UPLOADED",
+            None,
+            True,
+            f"Uploaded {len(created_users)} users, {len(failed_users)} failed via file"
+        )
+
+        return success_response(
+            f"Bulk upload completed. {len(created_users)} created, {len(skipped_users)} skipped, {len(failed_users)} failed.",
+            {
+                "created_count": len(created_users),
+                "skipped_count": len(skipped_users),
+                "failed_count": len(failed_users),
+                "created_users": created_users,
+                "skipped_users": skipped_users,
+                "failed_users": failed_users
+            }
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Database transaction failed: {str(e)}")
+
+
+@app.post("/admin/other_staff/bulk-upload")
+async def admin_bulk_upload_other_staff(request: Request, file: UploadFile = File(...)):
+    """
+    Bulk upload other staff via JSON or Excel (.xlsx/.xls) (admin only)
+    """
+    verify_admin_token(request)
+
+    filename = file.filename or ""
+    is_excel = filename.endswith(".xlsx") or filename.endswith(".xls")
+    is_json = filename.endswith(".json")
+
+    if not (is_excel or is_json):
+        raise HTTPException(status_code=400, detail="Only JSON (.json) and Excel (.xlsx, .xls) files are supported")
+
+    staff_data = []
+    try:
+        if is_json:
+            contents = await file.read()
+            try:
+                staff_data = json.loads(contents.decode("utf-8"))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
+            if not isinstance(staff_data, list):
+                raise HTTPException(status_code=400, detail="JSON must be an array of staff objects")
+        else:
+            # Excel parsing
+            contents = await file.read()
+            import io
+            from openpyxl import load_workbook
+            f = io.BytesIO(contents)
+            wb = load_workbook(f, read_only=True, data_only=True)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                raise HTTPException(status_code=400, detail="Excel file is empty")
+
+            headers = [str(cell).strip().lower() if cell is not None else "" for cell in rows[0]]
+            
+            idx_username = -1
+            idx_name = -1
+            idx_dept = -1
+            idx_role = -1
+            idx_password = -1
+            idx_dob = -1
+
+            for idx, h in enumerate(headers):
+                if h in ["username", "user_name", "user"]:
+                    idx_username = idx
+                elif h in ["name", "full name", "fullname", "full_name"]:
+                    idx_name = idx
+                elif h in ["dept", "department", "department name", "department_name"]:
+                    idx_dept = idx
+                elif h in ["role", "user_role"]:
+                    idx_role = idx
+                elif h in ["password", "pass"]:
+                    idx_password = idx
+                elif h in ["dob", "date of birth", "birth_date", "birthdate"]:
+                    idx_dob = idx
+
+            missing = []
+            if idx_username == -1:
+                missing.append("username")
+            if idx_name == -1:
+                missing.append("name")
+            if idx_dept == -1:
+                missing.append("dept")
+            if idx_role == -1:
+                missing.append("role")
+
+            if missing:
+                raise HTTPException(status_code=400, detail=f"Missing required columns in Excel headers: {', '.join(missing)}")
+
+            for row in rows[1:]:
+                if all(cell is None for cell in row):
+                    continue
+                username = str(row[idx_username]).strip() if idx_username < len(row) and row[idx_username] is not None else None
+                name = str(row[idx_name]).strip() if idx_name < len(row) and row[idx_name] is not None else None
+                dept = str(row[idx_dept]).strip() if idx_dept < len(row) and row[idx_dept] is not None else None
+                role = str(row[idx_role]).strip().lower() if idx_role < len(row) and row[idx_role] is not None else "office_staff"
+                password = str(row[idx_password]).strip() if idx_password != -1 and idx_password < len(row) and row[idx_password] is not None else "password123"
+                dob = str(row[idx_dob]).strip() if idx_dob != -1 and idx_dob < len(row) and row[idx_dob] is not None else None
+
+                staff_data.append({
+                    "username": username,
+                    "name": name,
+                    "dept": dept,
+                    "role": role,
+                    "password": password,
+                    "dob": dob
+                })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
+
+    created_staff = []
+    failed_staff = []
+    skipped_staff = []
+    seen_usernames = set()
+
+    try:
+        for idx, s_data in enumerate(staff_data, start=2):
+            try:
+                username = s_data.get("username")
+                password = s_data.get("password") or "password123"
+                name = s_data.get("name")
+                dept = s_data.get("dept")
+                role = s_data.get("role") or "office_staff"
+                dob = s_data.get("dob")
+
+                if not all([username, name, dept]):
+                    failed_staff.append({
+                        "username": username or f"Row {idx}",
+                        "error": "Missing required fields (username, name, dept)"
+                    })
+                    continue
+
+                username = username.strip()
+                name = name.strip()
+                dept = dept.strip()
+                role = role.strip().lower()
+
+                allowed_roles = list(OTHER_STAFF_ROLES)
+                if role not in allowed_roles:
+                    failed_staff.append({
+                        "username": username,
+                        "error": f"Invalid role '{role}' for other staff"
+                    })
+                    continue
+
+                if username in seen_usernames:
+                    failed_staff.append({
+                        "username": username,
+                        "error": "Duplicate username within the uploaded file"
+                    })
+                    continue
+                seen_usernames.add(username)
+
+                # Auto-create department if it does not exist
+                cursor.execute("SELECT id FROM departments WHERE name = ?", (dept,))
+                dept_row = cursor.fetchone()
+                if not dept_row:
+                    cursor.execute("INSERT INTO departments (name) VALUES (?)", (dept,))
+
+                existing_staff = get_other_staff_by_username(username)
+                if existing_staff:
+                    skipped_staff.append({
+                        "username": username,
+                        "reason": "Username already exists in database"
+                    })
+                    continue
+
+                # Auto-generate reg_no
+                if role == "principal":
+                    prefix = "PRINCIPAL"
+                elif role == "placement_staff":
+                    prefix = "PLACE"
+                elif role == "lab_technician":
+                    prefix = "LAB"
+                elif role == "system_admin":
+                    prefix = "SYS"
+                elif role == "office_staff":
+                    prefix = "OFFICE"
+                else:
+                    prefix = "OS"
+
+                cursor.execute("SELECT COUNT(*) FROM other_staff WHERE role = ?", (role,))
+                count = cursor.fetchone()[0]
+                reg_no = f"{prefix}_{str(count + 1).zfill(4)}"
+
+                while get_other_staff_by_reg_no(reg_no):
+                    count += 1
+                    reg_no = f"{prefix}_{str(count).zfill(4)}"
+
+                password_hash = hash_password(password)
+
+                cursor.execute(
+                    """
+                    INSERT INTO other_staff (username, password_hash, reg_no, name, dob, role, dept, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (username, password_hash, reg_no, name, dob, role, dept, "admin")
+                )
+
+                created_staff.append({
+                    "username": username,
+                    "reg_no": reg_no,
+                    "name": name,
+                    "dept": dept,
+                    "role": role,
+                    "password": password
+                })
+            except Exception as row_err:
+                failed_staff.append({
+                    "username": s_data.get("username") or f"Row {idx}",
+                    "error": str(row_err)
+                })
+
+        conn.commit()
+
+        log_audit_event(
+            "OTHER_STAFF_BULK_UPLOADED",
+            None,
+            True,
+            f"Uploaded {len(created_staff)} other staff, {len(failed_staff)} failed via file"
+        )
+
+        return success_response(
+            f"Bulk upload completed. {len(created_staff)} created, {len(skipped_staff)} skipped, {len(failed_staff)} failed.",
+            {
+                "created_count": len(created_staff),
+                "skipped_count": len(skipped_staff),
+                "failed_count": len(failed_staff),
+                "created_users": created_staff,
+                "skipped_users": skipped_staff,
+                "failed_users": failed_staff
+            }
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Database transaction failed: {str(e)}")
+
+
 @app.put("/admin/users/{user_id}")
 async def admin_update_user(request: Request, user_id: int):
     """
@@ -7110,6 +7634,7 @@ async def admin_update_user(request: Request, user_id: int):
         dept = data.get("dept")
         role = data.get("role")
         password = data.get("password")
+        suspended = data.get("suspended")
     except Exception as e:
         print(f"Parse error: {e}")
         raise HTTPException(status_code=400, detail="Invalid request body")
@@ -7161,6 +7686,9 @@ async def admin_update_user(request: Request, user_id: int):
         if password:
             updates.append("password_hash = ?")
             params.append(hash_password(password))
+        if suspended is not None:
+            updates.append("suspended = ?")
+            params.append(suspended)
 
         if not updates:
             return {"message": "No changes to update"}
@@ -7202,6 +7730,9 @@ async def admin_delete_user(request: Request, user_id: int):
         if existing[6] == "admin":
             raise HTTPException(status_code=400, detail="Cannot delete admin user")
 
+        reg_no = existing[3]
+        delete_user_data_by_reg_no(reg_no)
+
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
 
@@ -7230,12 +7761,12 @@ async def admin_get_other_staff(request: Request, role: str = None):
     try:
         if role:
             cursor.execute(
-                "SELECT id, username, reg_no, name, dob, role, dept, embedding, can_reregister, created_at, created_by FROM other_staff WHERE role = ?",
+                "SELECT id, username, reg_no, name, dob, role, dept, embedding, can_reregister, created_at, created_by, COALESCE(suspended, FALSE) FROM other_staff WHERE role = ?",
                 (role,),
             )
         else:
             cursor.execute(
-                "SELECT id, username, reg_no, name, dob, role, dept, embedding, can_reregister, created_at, created_by FROM other_staff"
+                "SELECT id, username, reg_no, name, dob, role, dept, embedding, can_reregister, created_at, created_by, COALESCE(suspended, FALSE) FROM other_staff"
             )
 
         rows = cursor.fetchall()
@@ -7254,6 +7785,7 @@ async def admin_get_other_staff(request: Request, role: str = None):
                     "can_reregister": row[8] == 1 if row[8] else False,
                     "created_at": row[9],  # Use snake_case
                     "created_by": row[10],  # Use snake_case
+                    "suspended": bool(row[11]),
                 }
             )
         return {"other_staff": staff_list}
@@ -7464,10 +7996,15 @@ async def admin_update_other_staff(request: Request, staff_id: int):
         if data.get("password"):
             password_hash = hash_password(data["password"])
 
+        # Get existing suspended status
+        cursor.execute("SELECT COALESCE(suspended, FALSE) FROM other_staff WHERE id = ?", (staff_id,))
+        existing_suspended = cursor.fetchone()[0]
+        suspended = data.get("suspended", existing_suspended)
+
         cursor.execute(
             """
             UPDATE other_staff 
-            SET username = ?, password_hash = ?, reg_no = ?, name = ?, dob = ?, role = ?, dept = ?, can_reregister = ?
+            SET username = ?, password_hash = ?, reg_no = ?, name = ?, dob = ?, role = ?, dept = ?, can_reregister = ?, suspended = ?
             WHERE id = ?
         """,
             (
@@ -7479,6 +8016,7 @@ async def admin_update_other_staff(request: Request, staff_id: int):
                 role,
                 dept,
                 can_reregister,
+                suspended,
                 staff_id,
             ),
         )
@@ -7535,6 +8073,9 @@ async def admin_delete_other_staff(request: Request, staff_id: int):
             raise HTTPException(status_code=404, detail="Staff not found")
 
         # Delete staff
+        reg_no = staff[3]
+        delete_user_data_by_reg_no(reg_no)
+
         cursor.execute("DELETE FROM other_staff WHERE id = ?", (staff_id,))
         conn.commit()
 
@@ -8049,7 +8590,7 @@ async def admin_get_attendance_stats(
                   AND NOT EXISTS (
                       SELECT 1 FROM daily_attendance_status das 
                       WHERE das.reg_no = a.reg_no 
-                        AND das.date = DATE(a.timestamp) 
+                        AND das.date::date = DATE(a.timestamp) 
                         AND das.status = 'Absent'
                   )
                 GROUP BY a.dept, a.reg_no, DATE(a.timestamp)
@@ -8643,6 +9184,150 @@ async def admin_create_department(request: Request):
         print(f"Error creating department: {e}")
         raise HTTPException(status_code=500, detail="Failed to create department")
 
+@app.post("/admin/departments/bulk-upload")
+async def admin_bulk_upload_departments(request: Request, file: UploadFile = File(...)):
+    """Bulk upload departments via JSON or Excel (admin only)"""
+    verify_admin_token(request)
+    import io
+
+    filename = file.filename or ""
+    content_type = file.content_type or ""
+    
+    # Read the file contents
+    contents = await file.read()
+    
+    # Check if the file is actually a users file
+    is_user_file = False
+    
+    # Parse JSON to check keys
+    if filename.lower().endswith(".json") or "json" in content_type:
+        try:
+            data = json.loads(contents.decode("utf-8"))
+            first_item = None
+            if isinstance(data, list) and data:
+                first_item = data[0]
+            elif isinstance(data, dict):
+                users_list = data.get("users", [])
+                if users_list and isinstance(users_list, list):
+                    first_item = users_list[0]
+                    
+            if isinstance(first_item, dict) and ("username" in first_item or "role" in first_item or "password" in first_item):
+                is_user_file = True
+        except Exception:
+            pass
+            
+    # Parse Excel to check headers
+    elif filename.lower().endswith(".xlsx") or filename.lower().endswith(".xls") or "spreadsheet" in content_type or "excel" in content_type:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(contents), read_only=True)
+            sheet = wb.active
+            first_row = next(sheet.iter_rows(values_only=True), None)
+            if first_row:
+                headers = [str(c).strip().lower() for c in first_row if c is not None]
+                if "username" in headers or "user_name" in headers or "role" in headers:
+                    is_user_file = True
+        except Exception:
+            pass
+
+    if is_user_file:
+        new_file = UploadFile(file=io.BytesIO(contents), filename=filename, headers=file.headers)
+        return await admin_bulk_upload_users(request, new_file)
+
+    dept_names = []
+    
+    # Case 1: JSON file
+    if filename.lower().endswith(".json") or "json" in content_type:
+        try:
+            data = json.loads(contents.decode("utf-8"))
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, str):
+                        dept_names.append(item.strip())
+                    elif isinstance(item, dict):
+                        if "name" in item and ("dept" in item or "department" in item):
+                            name = item.get("dept") or item.get("department") or item.get("department_name")
+                        else:
+                            name = item.get("name") or item.get("department") or item.get("dept") or item.get("department_name")
+                            
+                        if name and isinstance(name, str):
+                            dept_names.append(name.strip())
+            else:
+                raise HTTPException(status_code=400, detail="JSON must be an array of names or objects")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail=f"Failed to parse JSON file: {e}")
+            
+    # Case 2: Excel file
+    elif filename.lower().endswith(".xlsx") or filename.lower().endswith(".xls") or "spreadsheet" in content_type or "excel" in content_type:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(contents), read_only=True)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                raise HTTPException(status_code=400, detail="Excel file is empty")
+                
+            header_row = [str(cell).strip().lower() if cell is not None else "" for cell in rows[0]]
+            name_idx = -1
+            
+            # Map column indices
+            for idx, h in enumerate(header_row):
+                if h in ["name", "department", "dept", "department name", "department_name"]:
+                    name_idx = idx
+                    break
+                    
+            if name_idx == -1:
+                name_idx = 0
+                
+            for row in rows[1:]:
+                if name_idx < len(row):
+                    cell_val = row[name_idx]
+                    if cell_val is not None:
+                        val_str = str(cell_val).strip()
+                        if val_str:
+                            dept_names.append(val_str)
+                            
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {e}")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .json, .xlsx, or .xls file.")
+
+    # Deduplicate within the uploaded file
+    dept_names = list(dict.fromkeys(dept_names))
+    
+    # Process insertion
+    inserted = []
+    skipped_duplicates = []
+    errors = []
+    
+    for dept_name in dept_names:
+        if not dept_name:
+            continue
+        try:
+            cursor.execute("SELECT id FROM departments WHERE name = ?", (dept_name,))
+            if cursor.fetchone():
+                skipped_duplicates.append(dept_name)
+                continue
+                
+            cursor.execute("INSERT INTO departments (name) VALUES (?)", (dept_name,))
+            inserted.append(dept_name)
+        except Exception as e:
+            errors.append(f"Failed to insert '{dept_name}': {e}")
+            
+    conn.commit()
+    
+    return {
+        "success": True,
+        "message": f"Successfully imported {len(inserted)} departments.",
+        "inserted": inserted,
+        "skipped_duplicates": skipped_duplicates,
+        "errors": errors
+    }
+
 
 @app.delete("/admin/departments/{dept_name}")
 async def admin_delete_department(request: Request, dept_name: str):
@@ -8650,22 +9335,29 @@ async def admin_delete_department(request: Request, dept_name: str):
     verify_admin_token(request)
 
     try:
-        # Check if department has users
-        cursor.execute("SELECT COUNT(*) FROM users WHERE dept = ?", (dept_name,))
-        user_count = cursor.fetchone()[0]
+        # Get users belonging to this department
+        cursor.execute("SELECT reg_no FROM users WHERE dept = ?", (dept_name,))
+        users = cursor.fetchall()
+        for u in users:
+            delete_user_data_by_reg_no(u[0])
 
-        if user_count > 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot delete department with {user_count} existing users. Remove or reassign users first.",
-            )
+        cursor.execute("DELETE FROM users WHERE dept = ?", (dept_name,))
 
+        # Get other staff belonging to this department
+        cursor.execute("SELECT reg_no FROM other_staff WHERE dept = ?", (dept_name,))
+        other_staff_members = cursor.fetchall()
+        for os_member in other_staff_members:
+            delete_user_data_by_reg_no(os_member[0])
+
+        cursor.execute("DELETE FROM other_staff WHERE dept = ?", (dept_name,))
+
+        # Delete department
         cursor.execute("DELETE FROM departments WHERE name = ?", (dept_name,))
         conn.commit()
 
-        print(f"[ADMIN] Deleted department: {dept_name}")
+        print(f"[ADMIN] Deleted department and its users: {dept_name}")
 
-        return {"message": "Department deleted successfully"}
+        return {"message": f"Department '{dept_name}' and all associated users/data deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
@@ -8762,6 +9454,10 @@ def verify_hod_token(request: Request) -> dict:
 
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=False):
+            raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
 
         # Check if user is HOD
         if user[6] != "hod":
@@ -9186,7 +9882,7 @@ async def hod_get_attendance_range_stats(
                   AND NOT EXISTS (
                       SELECT 1 FROM daily_attendance_status das 
                       WHERE das.reg_no = a.reg_no 
-                        AND das.date = DATE(a.timestamp) 
+                        AND das.date::date = DATE(a.timestamp) 
                         AND das.status = 'Absent'
                   )
                 GROUP BY reg_no, DATE(timestamp)
@@ -9393,7 +10089,7 @@ async def hod_get_analytics_summary(
                   AND NOT EXISTS (
                       SELECT 1 FROM daily_attendance_status das 
                       WHERE das.reg_no = a.reg_no 
-                        AND das.date = DATE(a.timestamp) 
+                        AND das.date::date = DATE(a.timestamp) 
                         AND das.status = 'Absent'
                   )
                 GROUP BY reg_no, DATE(timestamp)
@@ -9749,6 +10445,9 @@ async def hod_delete_staff(request: Request, staff_id: int):
             raise HTTPException(
                 status_code=404, detail="Staff not found in your department"
             )
+
+        reg_no = existing[3]
+        delete_user_data_by_reg_no(reg_no)
 
         cursor.execute("DELETE FROM users WHERE id = ?", (staff_id,))
         conn.commit()
@@ -12485,6 +13184,13 @@ async def staff_login(request: Request):
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=False):
+            raise HTTPException(
+                status_code=403,
+                detail="Account suspended. Please contact the administrator.",
+            )
+
         # Check role
         if user[6] != "staff":
             raise HTTPException(status_code=403, detail="Staff access required")
@@ -12542,6 +13248,10 @@ def verify_staff_token(request: Request) -> dict:
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=False):
+            raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
+
         # Check if user is staff
         if user[6] != "staff":
             raise HTTPException(status_code=403, detail="Staff access required")
@@ -12580,6 +13290,10 @@ def verify_user_token(request: Request) -> dict:
             if not verify_password(password, user[2]):
                 raise HTTPException(status_code=401, detail="Invalid credentials")
 
+            # Check if user is suspended
+            if is_user_suspended(username, is_other_staff=False):
+                raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
+
             # Return user info from users table
             return {
                 "id": user[0],
@@ -12595,6 +13309,10 @@ def verify_user_token(request: Request) -> dict:
         if other_staff:
             if not verify_password(password, other_staff[2]):
                 raise HTTPException(status_code=401, detail="Invalid credentials")
+
+            # Check if user is suspended
+            if is_user_suspended(username, is_other_staff=True):
+                raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
 
             # Return user info from other_staff table
             return {
@@ -12637,6 +13355,13 @@ async def other_staff_login(request: Request):
         # Verify password
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=True):
+            raise HTTPException(
+                status_code=403,
+                detail="Account suspended. Please contact the administrator.",
+            )
 
         device_id = data.get("device_id")
         cursor.execute("UPDATE other_staff SET current_device_id = ? WHERE username = ?", (device_id, user[1]))
@@ -12696,6 +13421,10 @@ def verify_other_staff_token(request: Request) -> dict:
 
         if not verify_password(password, user[2]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Check if user is suspended
+        if is_user_suspended(username, is_other_staff=True):
+            raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
 
         # Check if face registered (embedding is at index 8)
         face_registered = user[8] is not None if len(user) > 8 else False
