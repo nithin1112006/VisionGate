@@ -27,7 +27,9 @@ import '../widgets/three_option_toggle.dart';
 import 'academics_settings_page.dart';
 import 'attendance_duration_settings.dart';
 import 'cl_management_page.dart';
+import 'ccl_management_page.dart';
 import 'package:file_picker/file_picker.dart';
+import '../utils/file_saver.dart';
 
 // ============================================
 // ERROR CLEANING HELPERS
@@ -90,6 +92,53 @@ String cleanAdminErrorMessage(dynamic e) {
 // ============================================
 // BULK UPLOAD HELPER
 // ============================================
+
+Future<void> downloadTemplateHelper(BuildContext context, String token, String type, String format) async {
+  final endpoint = '${CollegeIPConfig.defaultURL}/admin/templates/$type/$format';
+  final filename = '${type}_template.${format == "excel" ? "xlsx" : "json"}';
+  try {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    final response = await http.get(
+      Uri.parse(endpoint),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    if (context.mounted) {
+      Navigator.pop(context);
+    }
+
+    if (response.statusCode == 200) {
+      await saveFile(response.bodyBytes, filename);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$filename downloaded successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } else {
+      throw Exception('Server returned status code ${response.statusCode}');
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error downloading template: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+}
+
 
 Future<void> performBulkUpload(BuildContext context, String token, String endpointUrl, VoidCallback onSuccess) async {
   try {
@@ -2843,6 +2892,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     'Other User Departments',
     'Leave Management',
     'Casual Leave',
+    'CCL Management',
     'Live Locations',
     'Academics',
     'Settings',
@@ -2859,6 +2909,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       OtherStaffAttendanceTab(token: widget.token),
       AdminLeaveManagement(token: widget.token),
       CLManagementPage(token: widget.token),
+      CCLManagementPage(token: widget.token),
       LiveLocationsTab(token: widget.token),
       AcademicsSettingsPage(token: widget.token),
       SettingsTab(token: widget.token),
@@ -2972,6 +3023,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                   OtherStaffAttendanceTab(token: widget.token),
                   AdminLeaveManagement(token: widget.token),
                   CLManagementPage(token: widget.token),
+                  CCLManagementPage(token: widget.token),
                   LiveLocationsTab(token: widget.token),
                   AcademicsSettingsPage(token: widget.token),
                   SettingsTab(token: widget.token),
@@ -3092,6 +3144,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       NavigationRailDestination(
                         icon: Icon(Icons.beach_access),
                         label: Text('CL'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.more_time),
+                        label: Text('CCL'),
                       ),
                       NavigationRailDestination(
                         icon: Icon(Icons.location_on),
@@ -3223,12 +3279,18 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             ),
             _buildDrawerItem(
               7,
+              Icons.more_time_rounded,
+              'CCL Management',
+              Icons.more_time_outlined,
+            ),
+            _buildDrawerItem(
+              8,
               Icons.location_on_rounded,
               'Live Locations',
               Icons.location_on_outlined,
             ),
             _buildDrawerItem(
-              8,
+              9,
               Icons.school_rounded,
               'Academics',
               Icons.school_outlined,
@@ -3949,18 +4011,68 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                           icon: const Icon(Icons.add, size: 18),
                           label: const Text('Add Staff'),
                         ),
-                        FilledButton.icon(
-                          onPressed: () => performBulkUpload(
-                            context,
-                            widget.token,
-                            '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
-                            fetchStaff,
+                        PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'upload') {
+                              performBulkUpload(
+                                context,
+                                widget.token,
+                                '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
+                                fetchStaff,
+                              );
+                            } else if (value == 'excel') {
+                              downloadTemplateHelper(context, widget.token, 'users', 'excel');
+                            } else if (value == 'json') {
+                              downloadTemplateHelper(context, widget.token, 'users', 'json');
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'upload',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.upload_file, color: Colors.indigo),
+                                  SizedBox(width: 8),
+                                  Text('Upload File'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'excel',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.download, color: Colors.green),
+                                  SizedBox(width: 8),
+                                  Text('Download Excel Template'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'json',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.download, color: Colors.amber),
+                                  SizedBox(width: 8),
+                                  Text('Download JSON Template'),
+                                ],
+                              ),
+                            ),
+                          ],
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.indigo,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.upload_file, size: 18, color: Colors.white),
+                                SizedBox(width: 8),
+                                Text('Bulk Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+                              ],
+                            ),
                           ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Colors.indigo,
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Bulk Upload'),
                         ),
                         OutlinedButton.icon(
                           onPressed: fetchStaff,
@@ -3999,18 +4111,68 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                       label: const Text('Add'),
                     ),
                     const SizedBox(width: 8),
-                    FilledButton.icon(
-                      onPressed: () => performBulkUpload(
-                        context,
-                        widget.token,
-                        '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
-                        fetchStaff,
+                    PopupMenuButton<String>(
+                      onSelected: (value) {
+                        if (value == 'upload') {
+                          performBulkUpload(
+                            context,
+                            widget.token,
+                            '${CollegeIPConfig.defaultURL}/admin/users/bulk-upload',
+                            fetchStaff,
+                          );
+                        } else if (value == 'excel') {
+                          downloadTemplateHelper(context, widget.token, 'users', 'excel');
+                        } else if (value == 'json') {
+                          downloadTemplateHelper(context, widget.token, 'users', 'json');
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'upload',
+                          child: Row(
+                            children: [
+                              Icon(Icons.upload_file, color: Colors.indigo),
+                              SizedBox(width: 8),
+                              Text('Upload File'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'excel',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download, color: Colors.green),
+                              SizedBox(width: 8),
+                              Text('Download Excel Template'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'json',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download, color: Colors.amber),
+                              SizedBox(width: 8),
+                              Text('Download JSON Template'),
+                            ],
+                          ),
+                        ),
+                      ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.upload_file, size: 18, color: Colors.white),
+                            SizedBox(width: 8),
+                            Text('Bulk Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+                          ],
+                        ),
                       ),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                      ),
-                      icon: const Icon(Icons.upload_file, size: 18),
-                      label: const Text('Bulk Upload'),
                     ),
                     const SizedBox(width: 8),
                     IconButton.filled(
@@ -7043,90 +7205,266 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                 ),
               ],
             ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(Icons.domain_rounded, color: Colors.white, size: 26),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
+            child: isMobile
+                ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Departments',
-                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(Icons.domain_rounded, color: Colors.white, size: 26),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Departments',
+                                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  '${departments.length} department${departments.length != 1 ? "s" : ""} registered',
+                                  style: TextStyle(color: Colors.white.withValues(alpha: 0.80), fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
+                            onPressed: fetchDepartmentData,
+                            tooltip: 'Refresh',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.white.withValues(alpha: 0.15),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        '${departments.length} department${departments.length != 1 ? 's' : ''} registered',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.80), fontSize: 12),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: _createDepartment,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.add_rounded, color: Colors.white, size: 18),
+                                    SizedBox(width: 4),
+                                    Text('Add', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'upload') {
+                                  performBulkUpload(
+                                    context,
+                                    widget.token,
+                                    '${CollegeIPConfig.defaultURL}/admin/departments/bulk-upload',
+                                    fetchDepartmentData,
+                                  );
+                                } else if (value == 'excel') {
+                                  downloadTemplateHelper(context, widget.token, 'departments', 'excel');
+                                } else if (value == 'json') {
+                                  downloadTemplateHelper(context, widget.token, 'departments', 'json');
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(
+                                  value: 'upload',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.upload_file, color: Colors.indigo),
+                                      SizedBox(width: 8),
+                                      Text('Upload File'),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'excel',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.download, color: Colors.green),
+                                      SizedBox(width: 8),
+                                      Text('Download Excel Template'),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'json',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.download, color: Colors.amber),
+                                      SizedBox(width: 8),
+                                      Text('Download JSON Template'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
+                                    SizedBox(width: 4),
+                                    Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.domain_rounded, color: Colors.white, size: 26),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Departments',
+                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              '${departments.length} department${departments.length != 1 ? "s" : ""} registered',
+                              style: TextStyle(color: Colors.white.withValues(alpha: 0.80), fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Add dept button
+                      GestureDetector(
+                        onTap: _createDepartment,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.add_rounded, color: Colors.white, size: 18),
+                              SizedBox(width: 4),
+                              Text('Add', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Upload button
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          if (value == 'upload') {
+                            performBulkUpload(
+                              context,
+                              widget.token,
+                              '${CollegeIPConfig.defaultURL}/admin/departments/bulk-upload',
+                              fetchDepartmentData,
+                            );
+                          } else if (value == 'excel') {
+                            downloadTemplateHelper(context, widget.token, 'departments', 'excel');
+                          } else if (value == 'json') {
+                            downloadTemplateHelper(context, widget.token, 'departments', 'json');
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'upload',
+                            child: Row(
+                              children: [
+                                Icon(Icons.upload_file, color: Colors.indigo),
+                                SizedBox(width: 8),
+                                Text('Upload File'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'excel',
+                            child: Row(
+                              children: [
+                                Icon(Icons.download, color: Colors.green),
+                                SizedBox(width: 8),
+                                Text('Download Excel Template'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'json',
+                            child: Row(
+                              children: [
+                                Icon(Icons.download, color: Colors.amber),
+                                SizedBox(width: 8),
+                                Text('Download JSON Template'),
+                              ],
+                            ),
+                          ),
+                        ],
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
+                              SizedBox(width: 4),
+                              Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
+                        onPressed: fetchDepartmentData,
+                        tooltip: 'Refresh',
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: 0.15),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
                       ),
                     ],
                   ),
-                ),
-                // Add dept button
-                GestureDetector(
-                  onTap: _createDepartment,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.add_rounded, color: Colors.white, size: 18),
-                        SizedBox(width: 4),
-                        Text('Add', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Upload button
-                GestureDetector(
-                  onTap: () => performBulkUpload(
-                    context,
-                    widget.token,
-                    '${CollegeIPConfig.defaultURL}/admin/departments/bulk-upload',
-                    fetchDepartmentData,
-                  ),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
-                        SizedBox(width: 4),
-                        Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
-                  onPressed: fetchDepartmentData,
-                  tooltip: 'Refresh',
-                  style: IconButton.styleFrom(
-                    backgroundColor: Colors.white.withValues(alpha: 0.15),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-              ],
-            ),
           ),
           const SizedBox(height: 12),
 
@@ -14114,24 +14452,66 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
                             ),
                           ),
                           // Bulk Upload button
-                          IconButton(
-                            onPressed: () => performBulkUpload(
-                              context,
-                              widget.token,
-                              '${CollegeIPConfig.defaultURL}/admin/other_staff/bulk-upload',
-                              fetchOtherStaffDepartments,
-                            ),
-                            tooltip: 'Bulk Upload',
-                            icon: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
+                          PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'upload') {
+                                performBulkUpload(
+                                  context,
+                                  widget.token,
+                                  '${CollegeIPConfig.defaultURL}/admin/other_staff/bulk-upload',
+                                  fetchOtherStaffDepartments,
+                                );
+                              } else if (value == 'excel') {
+                                downloadTemplateHelper(context, widget.token, 'other_staff', 'excel');
+                              } else if (value == 'json') {
+                                downloadTemplateHelper(context, widget.token, 'other_staff', 'json');
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem(
+                                value: 'upload',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.upload_file, color: Colors.blue),
+                                    SizedBox(width: 8),
+                                    Text('Upload File'),
+                                  ],
+                                ),
                               ),
-                              child: const Icon(
-                                Icons.upload_file,
-                                color: Colors.blue,
-                                size: 20,
+                              const PopupMenuItem(
+                                value: 'excel',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.download, color: Colors.green),
+                                    SizedBox(width: 8),
+                                    Text('Download Excel Template'),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'json',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.download, color: Colors.amber),
+                                    SizedBox(width: 8),
+                                    Text('Download JSON Template'),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            child: Tooltip(
+                              message: 'Bulk Upload / Templates',
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(
+                                  Icons.upload_file,
+                                  color: Colors.blue,
+                                  size: 20,
+                                ),
                               ),
                             ),
                           ),
@@ -18051,6 +18431,7 @@ class _SettingsTabState extends State<SettingsTab> {
             return AlertDialog(
               backgroundColor: isDark ? const Color(0xFF1E1E22) : Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
               title: Text(
                 'Confirm Action',
                 style: TextStyle(
@@ -18058,33 +18439,40 @@ class _SettingsTabState extends State<SettingsTab> {
                   color: isDark ? Colors.white : Colors.black87,
                 ),
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Please enter the profile password to confirm changes.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark ? Colors.white70 : Colors.grey[700],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: passwordCtrl,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: 'Profile Password',
-                      prefixIcon: const Icon(Icons.security, color: accent),
-                      filled: true,
-                      fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
+              content: SizedBox(
+                width: MediaQuery.of(context).size.width > 480
+                    ? 400
+                    : MediaQuery.of(context).size.width * 0.9,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Please enter the profile password to confirm changes.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: isDark ? Colors.white70 : Colors.grey[700],
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: passwordCtrl,
+                        obscureText: true,
+                        decoration: InputDecoration(
+                          labelText: 'Profile Password',
+                          prefixIcon: const Icon(Icons.security, color: accent),
+                          filled: true,
+                          fillColor: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.withOpacity(0.05),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -18178,6 +18566,7 @@ class _SettingsTabState extends State<SettingsTab> {
           builder: (context, setDialogState) => AlertDialog(
             backgroundColor: isDark ? const Color(0xFF1E1E22) : Colors.white,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             title: Row(
               children: [
                 Container(
@@ -18189,59 +18578,67 @@ class _SettingsTabState extends State<SettingsTab> {
                   child: const Icon(Icons.admin_panel_settings_rounded, color: accent, size: 24),
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  'Change Password',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : Colors.black87,
+                Expanded(
+                  child: Text(
+                    'Change Password',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildDialogTextField(
-                    label: 'Current Password',
-                    controller: currentCtrl,
-                    icon: Icons.lock_outline_rounded,
-                    isDark: isDark,
-                    accentColor: accent,
-                  ),
-                  const SizedBox(height: 14),
-                  _buildDialogTextField(
-                    label: 'New Password',
-                    controller: newCtrl,
-                    icon: Icons.lock_rounded,
-                    isDark: isDark,
-                    accentColor: accent,
-                  ),
-                  const SizedBox(height: 14),
-                  _buildDialogTextField(
-                    label: 'Confirm New Password',
-                    controller: confirmCtrl,
-                    icon: Icons.check_circle_outline_rounded,
-                    isDark: isDark,
-                    accentColor: accent,
-                  ),
-                  if (errorText != null) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.withOpacity(0.3)),
-                      ),
-                      child: Text(
-                        errorText!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
+            content: SizedBox(
+              width: MediaQuery.of(context).size.width > 480
+                  ? 400
+                  : MediaQuery.of(context).size.width * 0.9,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildDialogTextField(
+                      label: 'Current Password',
+                      controller: currentCtrl,
+                      icon: Icons.lock_outline_rounded,
+                      isDark: isDark,
+                      accentColor: accent,
                     ),
+                    const SizedBox(height: 14),
+                    _buildDialogTextField(
+                      label: 'New Password',
+                      controller: newCtrl,
+                      icon: Icons.lock_rounded,
+                      isDark: isDark,
+                      accentColor: accent,
+                    ),
+                    const SizedBox(height: 14),
+                    _buildDialogTextField(
+                      label: 'Confirm New Password',
+                      controller: confirmCtrl,
+                      icon: Icons.check_circle_outline_rounded,
+                      isDark: isDark,
+                      accentColor: accent,
+                    ),
+                    if (errorText != null) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.withOpacity(0.3)),
+                        ),
+                        child: Text(
+                          errorText!,
+                          style: const TextStyle(color: Colors.red, fontSize: 13),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
             actions: [
@@ -18267,6 +18664,12 @@ class _SettingsTabState extends State<SettingsTab> {
                             confirm.isEmpty) {
                           setDialogState(() {
                             errorText = 'All fields are required.';
+                          });
+                          return;
+                        }
+                        if (newPass.length < 6) {
+                          setDialogState(() {
+                            errorText = 'New password must be at least 6 characters.';
                           });
                           return;
                         }
@@ -18374,6 +18777,7 @@ class _SettingsTabState extends State<SettingsTab> {
           builder: (context, setDialogState) => AlertDialog(
             backgroundColor: isDark ? const Color(0xFF1E1E22) : Colors.white,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             title: Row(
               children: [
                 Container(
@@ -18385,59 +18789,67 @@ class _SettingsTabState extends State<SettingsTab> {
                   child: const Icon(Icons.admin_panel_settings_rounded, color: Colors.orange, size: 24),
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  'Change Profile Password',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : Colors.black87,
+                Expanded(
+                  child: Text(
+                    'Change Profile Password',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildDialogTextField(
-                    label: 'Current Profile Password',
-                    controller: currentCtrl,
-                    icon: Icons.lock_outline_rounded,
-                    isDark: isDark,
-                    accentColor: Colors.orange,
-                  ),
-                  const SizedBox(height: 14),
-                  _buildDialogTextField(
-                    label: 'New Profile Password',
-                    controller: newCtrl,
-                    icon: Icons.lock_rounded,
-                    isDark: isDark,
-                    accentColor: Colors.orange,
-                  ),
-                  const SizedBox(height: 14),
-                  _buildDialogTextField(
-                    label: 'Confirm New Profile Password',
-                    controller: confirmCtrl,
-                    icon: Icons.check_circle_outline_rounded,
-                    isDark: isDark,
-                    accentColor: Colors.orange,
-                  ),
-                  if (errorText != null) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.withOpacity(0.3)),
-                      ),
-                      child: Text(
-                        errorText!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
+            content: SizedBox(
+              width: MediaQuery.of(context).size.width > 480
+                  ? 400
+                  : MediaQuery.of(context).size.width * 0.9,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildDialogTextField(
+                      label: 'Current Profile Password',
+                      controller: currentCtrl,
+                      icon: Icons.lock_outline_rounded,
+                      isDark: isDark,
+                      accentColor: Colors.orange,
                     ),
+                    const SizedBox(height: 14),
+                    _buildDialogTextField(
+                      label: 'New Profile Password',
+                      controller: newCtrl,
+                      icon: Icons.lock_rounded,
+                      isDark: isDark,
+                      accentColor: Colors.orange,
+                    ),
+                    const SizedBox(height: 14),
+                    _buildDialogTextField(
+                      label: 'Confirm New Profile Password',
+                      controller: confirmCtrl,
+                      icon: Icons.check_circle_outline_rounded,
+                      isDark: isDark,
+                      accentColor: Colors.orange,
+                    ),
+                    if (errorText != null) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.withOpacity(0.3)),
+                        ),
+                        child: Text(
+                          errorText!,
+                          style: const TextStyle(color: Colors.red, fontSize: 13),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
             actions: [
@@ -18463,6 +18875,12 @@ class _SettingsTabState extends State<SettingsTab> {
                             confirm.isEmpty) {
                           setDialogState(() {
                             errorText = 'All fields are required.';
+                          });
+                          return;
+                        }
+                        if (newPass.length < 6) {
+                          setDialogState(() {
+                            errorText = 'New password must be at least 6 characters.';
                           });
                           return;
                         }

@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/college_ip_config.dart';
+import '../services/session_service.dart';
 import '../services/leave_request_service.dart';
+import '../services/leave_balance_notifier.dart';
+
 
 /// Helper function to format date as yyyy-MM-dd
 String _formatDate(DateTime date) {
@@ -30,6 +36,10 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
   DateTime? _endDate;
   bool _isLoading = false;
   String? _errorMessage;
+  
+  double? _availableCL;
+  double? _availableCCL;
+  bool _loadingBalances = false;
 
   final List<Map<String, String>> _leaveTypes = [
     {'value': 'sick', 'label': 'Sick Leave'},
@@ -43,7 +53,109 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _fetchBalances();
+    LeaveBalanceNotifier.instance.addListener(_fetchBalances);
+  }
+
+
+
+  Future<void> _fetchBalances() async {
+    setState(() => _loadingBalances = true);
+    try {
+      final session = await sessionService.getSession();
+      String? regNo = session?.user['regNo'] ?? session?.user['reg_no'];
+
+      // Fallback: If session user is not found or regNo is null, decode registration number from token
+      if (regNo == null && widget.token.isNotEmpty) {
+        try {
+          final parts = widget.token.split('.');
+          // The token here is base64(username:password) or a standard JWT
+          if (parts.length == 3) {
+            // It's a JWT token
+            final payload = utf8.decode(base64.decode(base64.normalize(parts[1])));
+            final payloadMap = json.decode(payload);
+            regNo = payloadMap['sub'] ?? payloadMap['username'] ?? payloadMap['regNo'] ?? payloadMap['reg_no'];
+          } else {
+            // It's standard base64(username:password)
+            final decoded = utf8.decode(base64.decode(base64.normalize(widget.token)));
+            regNo = decoded.split(':').first;
+          }
+          print('Fetched regNo from token fallback: $regNo');
+        } catch (e) {
+          print('Error decoding token fallback: $e');
+        }
+      }
+
+      if (regNo != null && regNo.isNotEmpty) {
+        print('Fetching leave balances for regNo: $regNo');
+        
+        // Fetch CL Status
+        final clUrl = '${CollegeIPConfig.defaultURL}/cl/status/$regNo';
+        final clResponse = await http.get(
+          Uri.parse(clUrl),
+          headers: {'Authorization': 'Bearer ${widget.token}'},
+        );
+
+        if (clResponse.statusCode == 200) {
+          final clData = json.decode(clResponse.body);
+          if (clData['success'] == true && clData['data'] != null) {
+            setState(() {
+              _availableCL = (clData['data']['total_cl_available'] as num?)?.toDouble() ?? 0.0;
+            });
+            print('CL Balance fetched: $_availableCL');
+          }
+        } else {
+          print('CL API responded with status: ${clResponse.statusCode}');
+        }
+
+        // Fetch CCL/EL Status
+        final cclUrl = '${CollegeIPConfig.defaultURL}/ccl/status/$regNo';
+        final cclResponse = await http.get(
+          Uri.parse(cclUrl),
+          headers: {'Authorization': 'Bearer ${widget.token}'},
+        );
+
+        if (cclResponse.statusCode == 200) {
+          final cclData = json.decode(cclResponse.body);
+          if (cclData['success'] == true && cclData['data'] != null) {
+            setState(() {
+              _availableCCL = (cclData['data']['earned_leave_available'] as num?)?.toDouble() ?? 0.0;
+            });
+            print('EL Balance fetched: $_availableCCL');
+          }
+        } else {
+          print('EL API responded with status: ${cclResponse.statusCode}');
+        }
+      } else {
+        print('Could not retrieve a valid regNo for leave balance fetch');
+      }
+    } catch (e) {
+      print('Error fetching balances: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingBalances = false);
+      }
+    }
+  }
+
+  int _calculateWorkingDays() {
+    if (_startDate == null || _endDate == null) return 0;
+    int workingDays = 0;
+    DateTime temp = _startDate!;
+    while (temp.isBefore(_endDate!) || temp.isAtSameMomentAs(_endDate!)) {
+      if (temp.weekday != DateTime.saturday && temp.weekday != DateTime.sunday) {
+        workingDays++;
+      }
+      temp = temp.add(const Duration(days: 1));
+    }
+    return workingDays;
+  }
+
+  @override
   void dispose() {
+    LeaveBalanceNotifier.instance.removeListener(_fetchBalances);
     _reasonController.dispose();
     super.dispose();
   }
@@ -124,6 +236,9 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
           _selectedLeaveType = 'sick';
         });
 
+        // Notify balance changed
+        LeaveBalanceNotifier.instance.notifyBalanceChanged();
+
         widget.onRequestSubmitted?.call();
       }
     } else {
@@ -174,6 +289,52 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
                 });
               },
             ),
+
+            const SizedBox(height: 12),
+            if (_loadingBalances)
+              const LinearProgressIndicator(color: Colors.deepPurple)
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Casual Leaves Left', style: TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 4),
+                          Text('${_availableCL ?? 0.0} CL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Earned Leaves Left', style: TextStyle(fontSize: 12, color: Colors.deepPurple, fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 4),
+                          Text('${_availableCCL ?? 0.0} EL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
 
             const SizedBox(height: 20),
 
@@ -335,6 +496,67 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
                   ],
                 ),
               ),
+
+            // Balance Warnings
+            if (_startDate != null && _endDate != null) ...[
+              Builder(
+                builder: (context) {
+                  final requestedDays = _calculateWorkingDays();
+                  bool showCLWarning = _selectedLeaveType == 'casual' && requestedDays > (_availableCL ?? 0.0);
+                  bool showCCLWarning = _selectedLeaveType == 'earned' && requestedDays > (_availableCCL ?? 0.0);
+                  
+                  if (showCLWarning) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Warning: Selected range requires $requestedDays working days, but you only have ${_availableCL ?? 0.0} Casual Leaves available.',
+                              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  
+                  if (showCCLWarning) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Warning: Selected range requires $requestedDays working days, but you only have ${_availableCCL ?? 0.0} Earned Leaves available.',
+                              style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  
+                  return const SizedBox.shrink();
+                },
+              ),
+            ],
 
             const SizedBox(height: 20),
 
@@ -1331,6 +1553,54 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
   final _commentController = TextEditingController();
   bool _isLoading = false;
 
+  double? _userAvailableCL;
+  double? _userAvailableEL;
+  bool _loadingUserBalances = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserBalances();
+  }
+
+  Future<void> _fetchUserBalances() async {
+    final regNo = widget.request['user_reg_no'];
+    if (regNo == null) return;
+    if (!mounted) return;
+    setState(() => _loadingUserBalances = true);
+    try {
+      // CL Status
+      final clResponse = await http.get(
+        Uri.parse('${CollegeIPConfig.defaultURL}/cl/status/$regNo'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (clResponse.statusCode == 200) {
+        final clData = json.decode(clResponse.body);
+        if (clData['success'] == true) {
+          _userAvailableCL = (clData['data']['total_cl_available'] as num?)?.toDouble();
+        }
+      }
+
+      // EL Status
+      final cclResponse = await http.get(
+        Uri.parse('${CollegeIPConfig.defaultURL}/ccl/status/$regNo'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (cclResponse.statusCode == 200) {
+        final cclData = json.decode(cclResponse.body);
+        if (cclData['success'] == true) {
+          _userAvailableEL = (cclData['data']['earned_leave_available'] as num?)?.toDouble();
+        }
+      }
+    } catch (e) {
+      print('Error fetching requester balances: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingUserBalances = false);
+      }
+    }
+  }
+
   @override
   void dispose() {
     _commentController.dispose();
@@ -1361,6 +1631,7 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
             backgroundColor: Colors.green,
           ),
         );
+        LeaveBalanceNotifier.instance.notifyBalanceChanged();
         widget.onActionCompleted?.call();
       }
     } else {
@@ -1409,6 +1680,7 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
             backgroundColor: Colors.red,
           ),
         );
+        LeaveBalanceNotifier.instance.notifyBalanceChanged();
         widget.onActionCompleted?.call();
       }
     } else {
@@ -1472,6 +1744,25 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
               _buildInfoRow('Start Date', request['start_date'] ?? ''),
               _buildInfoRow('End Date', request['end_date'] ?? ''),
               _buildInfoRow('Submitted', request['submission_date'] ?? ''),
+
+              // Available Balances for this user
+              const SizedBox(height: 8),
+              if (_loadingUserBalances)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8.0),
+                  child: Center(
+                    child: SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.deepPurple),
+                    ),
+                  ),
+                )
+              else ...[
+                _buildInfoRow('Available CL', _userAvailableCL != null ? '$_userAvailableCL CL' : 'Loading...'),
+                _buildInfoRow('Available EL', _userAvailableEL != null ? '$_userAvailableEL EL' : 'Loading...'),
+              ],
+
 
               // Status
               const SizedBox(height: 16),

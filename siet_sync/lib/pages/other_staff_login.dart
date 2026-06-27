@@ -16,6 +16,8 @@ import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
 import '../utils/responsive.dart';
 import '../utils/api_response_utils.dart';
+import '../services/leave_balance_notifier.dart';
+
 
 String get API_URL => CollegeIPConfig.defaultURL;
 
@@ -430,6 +432,9 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
     setState(() {
       _selectedIndex = index;
     });
+    if (index == 3) {
+      LeaveBalanceNotifier.instance.notifyBalanceChanged();
+    }
   }
 
   @override
@@ -563,7 +568,12 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
     final scaffold = AdaptiveScaffold(
       title: _titles[_selectedIndex],
       selectedIndex: _selectedIndex,
-      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+      onDestinationSelected: (index) {
+        setState(() => _selectedIndex = index);
+        if (index == 3) {
+          LeaveBalanceNotifier.instance.notifyBalanceChanged();
+        }
+      },
       destinations: const [
         NavDestination(
           icon: Icons.dashboard_outlined,

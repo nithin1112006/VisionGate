@@ -17,6 +17,8 @@ import '../widgets/face_registration_widget.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
+import '../services/leave_balance_notifier.dart';
+
 
 String get API_URL => CollegeIPConfig.defaultURL;
 
@@ -435,6 +437,9 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     setState(() {
       _selectedIndex = index;
     });
+    if (index == 3) {
+      LeaveBalanceNotifier.instance.notifyBalanceChanged();
+    }
   }
 
   @override
@@ -533,7 +538,12 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     final scaffold = AdaptiveScaffold(
       title: _titles[_selectedIndex],
       selectedIndex: _selectedIndex,
-      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+      onDestinationSelected: (index) {
+        setState(() => _selectedIndex = index);
+        if (index == 3) {
+          LeaveBalanceNotifier.instance.notifyBalanceChanged();
+        }
+      },
       destinations: _navDestinations,
       accentColor: iOSBlue,
       drawer: _buildDrawer(context),

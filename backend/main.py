@@ -1255,6 +1255,8 @@ async def change_profile_password(request: Request):
 
         if not current_password or not new_password:
             raise HTTPException(status_code=400, detail="Current and new passwords are required")
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="New password must be at least 6 characters long")
 
         stored_password = _app_settings.get("profile_password", "admin123")
         if current_password != stored_password:
@@ -1836,6 +1838,62 @@ async def save_attendance_duration_settings(request: Request):
     if not settings:
         raise HTTPException(status_code=400, detail="No settings provided")
 
+    # Helper to convert HH:MM to minutes since midnight
+    def to_minutes(time_str):
+        try:
+            parts = time_str.split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid time format: {time_str}")
+
+    # Validate against active CCL settings
+    cursor.execute("SELECT key, value FROM ccl_settings")
+    ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+    early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+    late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+
+    if early_enabled or late_enabled:
+        early_start_str = ccl_settings.get("early_check_in_start", "07:00")
+        early_end_str = ccl_settings.get("early_check_in_end", "08:00")
+        late_start_str = ccl_settings.get("late_check_out_start", "17:00")
+        late_end_str = ccl_settings.get("late_check_out_end", "18:00")
+
+        ccl_early_start = to_minutes(early_start_str)
+        ccl_early_end = to_minutes(early_end_str)
+        ccl_late_start = to_minutes(late_start_str)
+        ccl_late_end = to_minutes(late_end_str)
+
+        for setting in settings:
+            slot_number = setting.get("slot_number")
+            start_time = setting.get("start_time")
+            duration_minutes = int(setting.get("duration_minutes", 30))
+            slot_type = setting.get("slot_type", "check_in")
+            is_enabled_val = setting.get("is_enabled", True)
+            is_enabled = (
+                is_enabled_val is True
+                or is_enabled_val == 1
+                or is_enabled_val == "true"
+            )
+
+            if not slot_number or not start_time or not is_enabled:
+                continue
+
+            slot_start_min = to_minutes(start_time)
+            slot_end_min = slot_start_min + duration_minutes
+
+            if slot_type == "check_in" and early_enabled:
+                if max(ccl_early_start, slot_start_min) < min(ccl_early_end, slot_end_min):
+                    err_msg = (f"The Check-In Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
+                               f"the active Early Check-In CCL window ({early_start_str} - {early_end_str}). "
+                               f"Please set the slot timing outside the CCL window.")
+                    raise HTTPException(status_code=400, detail=err_msg)
+            elif slot_type == "check_out" and late_enabled:
+                if max(ccl_late_start, slot_start_min) < min(ccl_late_end, slot_end_min):
+                    err_msg = (f"The Check-Out Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
+                               f"the active Late Check-Out CCL window ({late_start_str} - {late_end_str}). "
+                               f"Please set the slot timing outside the CCL window.")
+                    raise HTTPException(status_code=400, detail=err_msg)
+
     try:
         # Delete existing settings and insert new ones
         cursor.execute("DELETE FROM attendance_duration_settings")
@@ -1906,6 +1964,50 @@ async def check_attendance_window():
     rows = cursor.fetchall()
 
     if not rows:
+        ccl_slot_type = get_active_ccl_slot_type()
+        if ccl_slot_type:
+            cursor.execute("SELECT key, value FROM ccl_settings")
+            ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+            
+            if ccl_slot_type == "check_in":
+                start_time = ccl_settings.get("early_check_in_start", "07:00")
+                end_time = ccl_settings.get("early_check_in_end", "08:00")
+            else:
+                start_time = ccl_settings.get("late_check_out_start", "17:00")
+                end_time = ccl_settings.get("late_check_out_end", "18:00")
+                
+            def time_to_min(t_str):
+                p = t_str.split(":")
+                return int(p[0]) * 60 + int(p[1])
+                
+            now_time = datetime.now()
+            curr_min = now_time.hour * 60 + now_time.minute
+            remaining = max(0, time_to_min(end_time) - curr_min)
+            
+            return {
+                "allowed": True,
+                "message": f"Within CCL window ({ccl_slot_type})",
+                "current_slot": -1,
+                "slot_type": ccl_slot_type,
+                "start_time": start_time,
+                "end_time": end_time,
+                "remaining_minutes": remaining,
+            }
+            
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if early_enabled or late_enabled:
+            return {
+                "allowed": False,
+                "message": "Outside attendance window",
+                "current_slot": None,
+                "slot_type": "check_in",
+                "available_slots": [],
+            }
+            
         return {
             "allowed": True,
             "message": "No duration restrictions",
@@ -1943,6 +2045,37 @@ async def check_attendance_window():
                 ),
             }
 
+    # If not in normal slot, check active CCL slot
+    ccl_slot_type = get_active_ccl_slot_type()
+    if ccl_slot_type:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        
+        if ccl_slot_type == "check_in":
+            start_time = ccl_settings.get("early_check_in_start", "07:00")
+            end_time = ccl_settings.get("early_check_in_end", "08:00")
+        else:
+            start_time = ccl_settings.get("late_check_out_start", "17:00")
+            end_time = ccl_settings.get("late_check_out_end", "18:00")
+            
+        def time_to_min(t_str):
+            p = t_str.split(":")
+            return int(p[0]) * 60 + int(p[1])
+            
+        now_time = datetime.now()
+        curr_min = now_time.hour * 60 + now_time.minute
+        remaining = max(0, time_to_min(end_time) - curr_min)
+        
+        return {
+            "allowed": True,
+            "message": f"Within CCL window ({ccl_slot_type})",
+            "current_slot": -1,
+            "slot_type": ccl_slot_type,
+            "start_time": start_time,
+            "end_time": end_time,
+            "remaining_minutes": remaining,
+        }
+
     # Check if before first slot or after last slot
     return {
         "allowed": False,
@@ -1958,6 +2091,304 @@ async def check_attendance_window():
             }
             for row in rows
         ],
+    }
+
+
+# -------------------------------------------------
+# CCL (COMPENSATORY CASUAL LEAVE) SETTINGS & BALANCES
+# -------------------------------------------------
+
+@app.get("/admin/ccl/settings")
+async def get_ccl_settings(request: Request):
+    """Get CCL settings - Admin only"""
+    verify_admin_token(request)
+    
+    cursor.execute("SELECT key, value FROM ccl_settings")
+    rows = cursor.fetchall()
+    
+    settings = {}
+    for row in rows:
+        settings[row[0]] = row[1]
+        
+    return {
+        "success": True,
+        "data": {
+            "early_check_in_ccl_enabled": settings.get("early_check_in_ccl_enabled", "false") == "true",
+            "late_check_out_ccl_enabled": settings.get("late_check_out_ccl_enabled", "false") == "true",
+            "early_check_in_start": settings.get("early_check_in_start", "07:00"),
+            "early_check_in_end": settings.get("early_check_in_end", "08:00"),
+            "late_check_out_start": settings.get("late_check_out_start", "17:00"),
+            "late_check_out_end": settings.get("late_check_out_end", "18:00")
+        }
+    }
+
+
+@app.post("/admin/ccl/settings")
+async def save_ccl_settings(request: Request):
+    """Save CCL settings with validation - Admin only"""
+    verify_admin_token(request)
+    
+    try:
+        body = await request.json()
+        print(f"[CCL SETTINGS] Received body: {body}")
+        early_check_in_ccl_enabled = body.get("early_check_in_ccl_enabled", False)
+        late_check_out_ccl_enabled = body.get("late_check_out_ccl_enabled", False)
+        early_check_in_start = body.get("early_check_in_start", "07:00")
+        early_check_in_end = body.get("early_check_in_end", "08:00")
+        late_check_out_start = body.get("late_check_out_start", "17:00")
+        late_check_out_end = body.get("late_check_out_end", "18:00")
+    except Exception as e:
+        print(f"[CCL SETTINGS ERROR] Failed to parse JSON body: {e}")
+        raise HTTPException(status_code=400, detail="Invalid request body")
+        
+    # Helper to convert HH:MM to minutes since midnight
+    def to_minutes(time_str):
+        try:
+            parts = time_str.split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid time format: {time_str}")
+            
+    ccl_early_start = to_minutes(early_check_in_start)
+    ccl_early_end = to_minutes(early_check_in_end)
+    ccl_late_start = to_minutes(late_check_out_start)
+    ccl_late_end = to_minutes(late_check_out_end)
+    
+    if ccl_early_start >= ccl_early_end:
+        print("[CCL SETTINGS ERROR] Early check-in start must be before end time")
+        raise HTTPException(status_code=400, detail="Early check-in start must be before end time")
+        
+    if ccl_late_start >= ccl_late_end:
+        print("[CCL SETTINGS ERROR] Late check-out start must be before end time")
+        raise HTTPException(status_code=400, detail="Late check-out start must be before end time")
+        
+    # Validation against duration settings (normal timing)
+    if early_check_in_ccl_enabled or late_check_out_ccl_enabled:
+        cursor.execute("""
+            SELECT slot_number, start_time, duration_minutes, slot_type 
+            FROM attendance_duration_settings 
+            WHERE is_enabled = 1
+        """)
+        duration_slots = cursor.fetchall()
+        
+        for slot in duration_slots:
+            slot_num = slot[0]
+            slot_start_time = slot[1]
+            slot_dur = slot[2]
+            slot_type = slot[3] or "check_in"
+            
+            slot_start_min = to_minutes(slot_start_time)
+            slot_end_min = slot_start_min + slot_dur
+            
+            # Check overlap logic
+            if slot_type == "check_in" and early_check_in_ccl_enabled:
+                # Check early check-in window overlap with check-in slots
+                if max(ccl_early_start, slot_start_min) < min(ccl_early_end, slot_end_min):
+                    err_msg = (f"The proposed Early Check-In window ({early_check_in_start} - {early_check_in_end}) overlaps with "
+                               f"normal Check-In Slot {slot_num} ({slot_start_time} - {slot_start_time} + {slot_dur}m). "
+                               f"Please set the CCL early timing outside normal check-in timing.")
+                    print(f"[CCL SETTINGS ERROR] {err_msg}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=err_msg
+                    )
+            elif slot_type == "check_out" and late_check_out_ccl_enabled:
+                # Check late check-out window overlap with check-out slots
+                if max(ccl_late_start, slot_start_min) < min(ccl_late_end, slot_end_min):
+                    err_msg = (f"The proposed Late Check-Out window ({late_check_out_start} - {late_check_out_end}) overlaps with "
+                               f"normal Check-Out Slot {slot_num} ({slot_start_time} - {slot_start_time} + {slot_dur}m). "
+                               f"Please set the CCL late timing outside normal check-out timing.")
+                    print(f"[CCL SETTINGS ERROR] {err_msg}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=err_msg
+                    )
+
+    # Save to database
+    early_enabled_str = "true" if early_check_in_ccl_enabled else "false"
+    late_enabled_str = "true" if late_check_out_ccl_enabled else "false"
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'early_check_in_ccl_enabled'", (early_enabled_str,))
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'late_check_out_ccl_enabled'", (late_enabled_str,))
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'early_check_in_start'", (early_check_in_start,))
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'early_check_in_end'", (early_check_in_end,))
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'late_check_out_start'", (late_check_out_start,))
+    cursor.execute("UPDATE ccl_settings SET value = ? WHERE key = 'late_check_out_end'", (late_check_out_end,))
+    conn.commit()
+    
+    return {"success": True, "message": "CCL settings updated successfully"}
+
+
+@app.get("/admin/ccl/balances")
+async def get_ccl_balances(request: Request):
+    """Get all staff members' Earned Leave (CCL) balances - Admin only"""
+    verify_admin_token(request)
+    
+    # Ensure everyone in users and other_staff is in earned_leave
+    cursor.execute("""
+        SELECT reg_no, name, dept, role FROM users WHERE role IN ('hod', 'staff')
+        UNION ALL
+        SELECT reg_no, name, dept, role FROM other_staff
+    """)
+    all_users = cursor.fetchall()
+    
+    # Initialize missing balances
+    for row in all_users:
+        reg_no, name, dept, role = row
+        cursor.execute("SELECT 1 FROM earned_leave WHERE reg_no = ?", (reg_no,))
+        if not cursor.fetchone():
+            cursor.execute("""
+                INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+                VALUES (?, ?, ?, ?, 0.0)
+            """, (reg_no, name, dept, role))
+            
+    cursor.execute("SELECT reg_no, user_name, dept, role, balance, updated_at FROM earned_leave ORDER BY dept, user_name")
+    rows = cursor.fetchall()
+    
+    balances = []
+    for row in rows:
+        balances.append({
+            "reg_no": row[0],
+            "name": row[1],
+            "dept": row[2],
+            "role": row[3],
+            "balance": float(row[4]),
+            "updated_at": row[5]
+        })
+        
+    return {"success": True, "data": balances}
+
+
+@app.post("/admin/ccl/adjust")
+async def adjust_ccl_balance(request: Request):
+    """Manually adjust CCL/Earned Leave balance for a user - Admin only"""
+    verify_admin_token(request)
+    
+    try:
+        body = await request.json()
+        reg_no = body.get("reg_no")
+        adjustment = float(body.get("adjustment", 0.0))
+        balance = body.get("balance")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+        
+    if not reg_no:
+        raise HTTPException(status_code=400, detail="reg_no is required")
+        
+    # Get user info
+    cursor.execute("SELECT name, dept, role FROM users WHERE reg_no = ?", (reg_no,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("SELECT name, dept, role FROM other_staff WHERE reg_no = ?", (reg_no,))
+        user = cursor.fetchone()
+        
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    name, dept, role = user
+    
+    # Ensure entry exists
+    cursor.execute("SELECT balance FROM earned_leave WHERE reg_no = ?", (reg_no,))
+    record = cursor.fetchone()
+    if not record:
+        cursor.execute("""
+            INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+            VALUES (?, ?, ?, ?, 0.0)
+        """, (reg_no, name, dept, role))
+        current_bal = 0.0
+    else:
+        current_bal = float(record[0])
+        
+    if balance is not None:
+        new_bal = float(balance)
+    else:
+        new_bal = current_bal + adjustment
+        
+    if new_bal < 0:
+        new_bal = 0.0
+        
+    cursor.execute("""
+        UPDATE earned_leave 
+        SET balance = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE reg_no = ?
+    """, (new_bal, reg_no))
+    conn.commit()
+    
+    return {
+        "success": True,
+        "message": f"Earned Leave balance updated successfully to {new_bal}",
+        "data": {
+            "reg_no": reg_no,
+            "balance": new_bal
+        }
+    }
+
+
+@app.get("/admin/ccl/history")
+async def get_ccl_history(request: Request):
+    """Get all CCL earnings history - Admin only"""
+    verify_admin_token(request)
+    
+    cursor.execute("""
+        SELECT id, reg_no, name, dept, date, time, slot_type, earned_points, created_at
+        FROM ccl_earned_history
+        ORDER BY created_at DESC
+        LIMIT 1000
+    """)
+    rows = cursor.fetchall()
+    
+    history = []
+    for row in rows:
+        history.append({
+            "id": row[0],
+            "reg_no": row[1],
+            "name": row[2],
+            "dept": row[3],
+            "date": str(row[4]),
+            "time": str(row[5]),
+            "slot_type": row[6],
+            "earned_points": float(row[7]),
+            "created_at": row[8]
+        })
+        
+    return {"success": True, "data": history}
+
+
+@app.get("/ccl/status/{reg_no}")
+async def get_ccl_status(reg_no: str):
+    """Get CCL balance for a specific user"""
+    # Get user info
+    cursor.execute("SELECT name, dept, role FROM users WHERE reg_no = ?", (reg_no,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("SELECT name, dept, role FROM other_staff WHERE reg_no = ?", (reg_no,))
+        user = cursor.fetchone()
+        
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    name, dept, role = user
+    
+    cursor.execute("SELECT balance FROM earned_leave WHERE reg_no = ?", (reg_no,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.execute("""
+            INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+            VALUES (?, ?, ?, ?, 0.0)
+        """, (reg_no, name, dept, role))
+        conn.commit()
+        balance = 0.0
+    else:
+        balance = float(row[0])
+        
+    return {
+        "success": True,
+        "data": {
+            "reg_no": reg_no,
+            "name": name,
+            "dept": dept,
+            "role": role,
+            "earned_leave_available": balance
+        }
     }
 
 
@@ -2164,6 +2595,21 @@ def get_user_by_reg_no(reg_no: str):
 
 def delete_user_data_by_reg_no(reg_no: str):
     """Delete all attendance, leaves, location records, and face samples for a user"""
+    # Delete from audit logs & notifications referring to leave requests first
+    cursor.execute("""
+        DELETE FROM leave_request_audit_log 
+        WHERE leave_request_id IN (
+            SELECT id FROM leave_requests WHERE user_reg_no = ?
+        )
+    """, (reg_no,))
+    cursor.execute("""
+        DELETE FROM admin_notifications 
+        WHERE notification_type = 'leave_request' AND related_id IN (
+            SELECT id FROM leave_requests WHERE user_reg_no = ?
+        )
+    """, (reg_no,))
+
+    # Now delete primary records
     cursor.execute("DELETE FROM attendance WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM daily_attendance_status WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ?", (reg_no,))
@@ -2173,6 +2619,14 @@ def delete_user_data_by_reg_no(reg_no: str):
     cursor.execute("DELETE FROM other_staff_attendance WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM leave_requests WHERE user_reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM face_reregister_requests WHERE staff_reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM user_locations WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM attendance_locations WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM geofence_breach_monitoring WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM students WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM earned_leave WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM ccl_earned_history WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM users WHERE reg_no = ?", (reg_no,))
+    cursor.execute("DELETE FROM other_staff WHERE reg_no = ?", (reg_no,))
 
 
 # -------------------------------------------------
@@ -3014,6 +3468,51 @@ def _run_ddl():
         BEGIN REFRESH MATERIALIZED VIEW mv_attendance_summary; END;
         $$ LANGUAGE plpgsql;
     """)
+
+    # New CCL Feature tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ccl_settings (
+            key VARCHAR(50) PRIMARY KEY,
+            value VARCHAR(255)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS earned_leave (
+            reg_no VARCHAR(64) PRIMARY KEY,
+            user_name VARCHAR(160) NOT NULL,
+            dept VARCHAR(160) NOT NULL,
+            role VARCHAR(80) NOT NULL,
+            balance DECIMAL(10, 2) DEFAULT 0.0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ccl_earned_history (
+            id SERIAL PRIMARY KEY,
+            reg_no VARCHAR(64) NOT NULL,
+            name VARCHAR(160) NOT NULL,
+            dept VARCHAR(160) NOT NULL,
+            date DATE NOT NULL,
+            time TIME NOT NULL,
+            slot_type VARCHAR(30) NOT NULL,
+            earned_points DECIMAL(10, 2) DEFAULT 1.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ccl_earned_history_reg_no ON ccl_earned_history (reg_no)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ccl_earned_history_date ON ccl_earned_history (date DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_earned_leave_dept ON earned_leave (dept)")
+
+    # Initialize default CCL configurations
+    cursor.execute("SELECT 1 FROM ccl_settings WHERE key = 'early_check_in_ccl_enabled'")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('early_check_in_ccl_enabled', 'false')")
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('late_check_out_ccl_enabled', 'false')")
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('early_check_in_start', '07:00')")
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('early_check_in_end', '08:00')")
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('late_check_out_start', '17:00')")
+        cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('late_check_out_end', '18:00')")
+
     print("Database indexes and materialized views created successfully")
 
 
@@ -5282,6 +5781,41 @@ def _attendance_sync_work(
     return _secure_verify_and_mark(reg_no, img_bytes, user_role, form_data, active_slot_type)
 
 
+def get_active_ccl_slot_type() -> str:
+    """Returns 'check_in' or 'check_out' if current time falls in enabled CCL windows, else None."""
+    try:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if not (early_enabled or late_enabled):
+            return None
+            
+        now_time = datetime.now()
+        curr_min = now_time.hour * 60 + now_time.minute
+        
+        def time_to_min(t_str):
+            p = t_str.split(":")
+            return int(p[0]) * 60 + int(p[1])
+            
+        if early_enabled:
+            early_start = time_to_min(ccl_settings.get("early_check_in_start", "07:00"))
+            early_end = time_to_min(ccl_settings.get("early_check_in_end", "08:00"))
+            if early_start <= curr_min < early_end:
+                return "check_in"
+                
+        if late_enabled:
+            late_start = time_to_min(ccl_settings.get("late_check_out_start", "17:00"))
+            late_end = time_to_min(ccl_settings.get("late_check_out_end", "18:00"))
+            if late_start <= curr_min < late_end:
+                return "check_out"
+    except Exception as e:
+        print(f"Error checking active CCL slot: {e}")
+    return None
+
+
 @app.post("/mark_attendance")
 async def mark_attendance_secure(
     background_tasks: BackgroundTasks,
@@ -5361,6 +5895,13 @@ async def mark_attendance_secure(
                 break
 
         if not allowed:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                allowed = True
+                active_slot = -1
+                active_slot_type = ccl_slot_type
+                
+        if not allowed:
             slots_info = ", ".join(
                 [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
             )
@@ -5368,6 +5909,22 @@ async def mark_attendance_secure(
                 status_code=403,
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
+    else:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if early_enabled or late_enabled:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                active_slot = -1
+                active_slot_type = ccl_slot_type
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attendance marking is not allowed at this time. (Outside CCL window)",
+                )
 
     if reg_no is None:
         reg_no = request.query_params.get("reg_no")
@@ -5712,16 +6269,12 @@ def _secure_verify_and_mark(
 
     # Comprehensive image analysis (quality + liveness in one pass)
     analysis = analyze_image_comprehensive(img)
-    print(f"📷 Image quality score: {analysis['quality_score']}")
-    print(f"🔍 Liveness check: {'PASS' if analysis['is_live'] else 'FAIL'}")
-
-    if analysis["all_warnings"]:
-        for warning in analysis["all_warnings"]:
-            print(warning)
 
     # Early rejection for poor quality images
     if analysis.get("is_poor_quality", False):
-        log_audit_event("QUALITY_FAILED", reg_no, False, "; ".join(analysis.get("quality_warnings", [])))
+        quality_msg = "; ".join(analysis.get("quality_warnings", []))
+        print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Image quality too poor ({quality_msg}) | Quality Score: {analysis['quality_score']:.2f}")
+        log_audit_event("QUALITY_FAILED", reg_no, False, quality_msg)
         raise HTTPException(
             status_code=400,
             detail="Image quality is too poor. Please improve lighting and camera stability.",
@@ -5731,6 +6284,7 @@ def _secure_verify_and_mark(
 
     if face is None:
         save_debug_image(img, f"fail_detection_{reg_no}")
+        print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Face not detected | Quality Score: {analysis['quality_score']:.2f}")
         log_audit_event("NO_FACE_DETECTED", reg_no, False)
         raise HTTPException(
             status_code=400,
@@ -5743,40 +6297,26 @@ def _secure_verify_and_mark(
     is_live = analysis.get("is_live", True)
     liveness_reason = analysis.get("liveness_reason", "Analysis completed")
 
-    # Log the result regardless
-    print(f"🔍 Liveness check: {liveness_reason}")
-
     if not is_live:
         if ANTISPOOF_STRICT_MODE:
             save_debug_image(img, f"liveness_fail_{reg_no}")
+            print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Liveness check failed ({liveness_reason}) | Quality Score: {analysis['quality_score']:.2f}")
             log_audit_event("LIVENESS_FAILED", reg_no, False, liveness_reason)
             raise HTTPException(
                 status_code=400,
                 detail=f"Liveness check failed: {liveness_reason}. Please ensure you are using a live camera feed, not a photo or screen.",
             )
         else:
-            # In non-strict mode, just log a warning but allow
-            print(
-                f"⚠️  WARNING: Liveness check suspicious but allowing (non-strict mode): {liveness_reason}"
-            )
+            # In non-strict mode, just log warning but allow
             log_audit_event("LIVENESS_WARNING", reg_no, False, liveness_reason)
-    else:
-        print(f"Liveness check passed: {liveness_reason}")
 
     query_embedding = face.embedding.astype(np.float32)
-
-    # Debug: Print query embedding statistics
-    print(f"DEBUG: Query embedding for attendance:")
-    print(f"  Query embedding shape: {query_embedding.shape}")
-    print(f"  Query embedding norm: {np.linalg.norm(query_embedding):.4f}")
-    print(f"  Query embedding mean: {np.mean(query_embedding):.4f}")
-    print(f"  Query embedding std: {np.std(query_embedding):.4f}")
 
     # Verify face identity against enrolled data
     verified, confidence, reason = verify_face_identity(reg_no, query_embedding)
 
     if not verified:
-        print(f"DEBUG: Verification failed for {reg_no}: {reason}")
+        print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Face verification failed ({reason}) | Liveness: {'PASS' if is_live else 'WARNING'} ({liveness_reason}) | Quality Score: {analysis['quality_score']:.2f}")
         record_failed_attempt(reg_no)
 
         # Check if now locked out
@@ -5802,117 +6342,152 @@ def _secure_verify_and_mark(
             confidence=confidence,
         )
 
+    # Check if this scan falls in an active CCL window (which rewards Earned Leave only)
+    is_ccl_scan = False
+    is_early_check_in = False
+    is_late_check_out = False
+    
+    try:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+
+        if early_enabled or late_enabled:
+            now_time = datetime.now()
+            curr_min = now_time.hour * 60 + now_time.minute
+            
+            def time_to_min(t_str):
+                p = t_str.split(":")
+                return int(p[0]) * 60 + int(p[1])
+
+            ins_slot_type = slot_type or "check_in"
+            if ins_slot_type == "check_in" and early_enabled:
+                early_start_str = ccl_settings.get("early_check_in_start", "07:00")
+                early_end_str = ccl_settings.get("early_check_in_end", "08:00")
+                if time_to_min(early_start_str) <= curr_min < time_to_min(early_end_str):
+                    is_early_check_in = True
+                    is_ccl_scan = True
+            elif ins_slot_type == "check_out" and late_enabled:
+                late_start_str = ccl_settings.get("late_check_out_start", "17:00")
+                late_end_str = ccl_settings.get("late_check_out_end", "18:00")
+                if time_to_min(late_start_str) <= curr_min < time_to_min(late_end_str):
+                    is_late_check_out = True
+                    is_ccl_scan = True
+    except Exception as e:
+        print(f"Error evaluating is_ccl_scan: {e}")
+
     # Use the values we extracted
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Insert attendance into the correct table based on user type
     ins_slot_type = slot_type or "check_in"
-    if is_other_staff:
-        # Insert into other_staff_attendance table
-        cursor.execute(
-            """
-            INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp", status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (reg_no, name, dept, user_type, timestamp, ins_slot_type),
-        )
-    else:
-        # Insert into regular attendance table
-        cursor.execute(
-            """
-            INSERT INTO attendance (reg_no, name, dept, "timestamp", status)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (reg_no, name, dept, timestamp, ins_slot_type),
-        )
-    conn.commit()
-
-    # Sync with daily_attendance_status table (used by admin analysis tab)
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    time_now_str = datetime.now().strftime("%H:%M:%S")
-    sync_slot_type = slot_type or "check_in"
-
-    try:
-        # Check if there's already a status record for this user on this date
-        cursor.execute(
-            """
-            SELECT id, status, leave_type, leave_request_id 
-            FROM daily_attendance_status 
-            WHERE reg_no = ? AND date = ?
-        """,
-            (reg_no, current_date),
-        )
-        existing_status = cursor.fetchone()
-
-        if existing_status:
-            old_status = existing_status[1]
-            # On check-in: set status to Present, in_time, and clear leave tags.
-            # On check-out: set status to Present and out_time.
-            if sync_slot_type == "check_in":
-                cursor.execute(
-                    """
-                    UPDATE daily_attendance_status 
-                    SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
-                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                    WHERE reg_no = ? AND date = ?
-                """,
-                    (time_now_str, reg_no, current_date),
-                )
-            else:
-                # Check-out — complete the attendance
-                cursor.execute(
-                    """
-                    UPDATE daily_attendance_status 
-                    SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
-                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                    WHERE reg_no = ? AND date = ?
-                """,
-                    (time_now_str, reg_no, current_date),
-                )
-            new_status = "Present"
-            print(
-                f"Attendance sync update: User {reg_no} ({sync_slot_type}) status updated to {new_status}."
-            )
-            log_audit_event(
-                "ATTENDANCE_OVERRIDE",
-                reg_no,
-                True,
-                f"User status updated to {new_status} via {sync_slot_type}.",
+    if not is_ccl_scan:
+        # Insert attendance into the correct table based on user type
+        if is_other_staff:
+            # Insert into other_staff_attendance table
+            cursor.execute(
+                """
+                INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp", status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """,
+                (reg_no, name, dept, user_type, timestamp, ins_slot_type),
             )
         else:
-            # No record exists — insert with status 'Present'
-            if sync_slot_type == "check_in":
-                cursor.execute(
-                    """
-                    INSERT INTO daily_attendance_status 
-                    (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
-                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                    ON CONFLICT (reg_no, date) DO UPDATE SET
-                        status = 'Present',
-                        in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
-                        marked_by = 'Attendance System',
-                        marked_at = CURRENT_TIMESTAMP
-                """,
-                    (reg_no, name, dept, current_date, time_now_str),
+            # Insert into regular attendance table
+            cursor.execute(
+                """
+                INSERT INTO attendance (reg_no, name, dept, "timestamp", status)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (reg_no, name, dept, timestamp, ins_slot_type),
+            )
+        conn.commit()
+
+        # Sync with daily_attendance_status table (used by admin analysis tab)
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        time_now_str = datetime.now().strftime("%H:%M:%S")
+        sync_slot_type = slot_type or "check_in"
+
+        try:
+            # Check if there's already a status record for this user on this date
+            cursor.execute(
+                """
+                SELECT id, status, leave_type, leave_request_id 
+                FROM daily_attendance_status 
+                WHERE reg_no = ? AND date = ?
+            """,
+                (reg_no, current_date),
+            )
+            existing_status = cursor.fetchone()
+
+            if existing_status:
+                old_status = existing_status[1]
+                # On check-in: set status to Present, in_time, and clear leave tags.
+                # On check-out: set status to Present and out_time.
+                if sync_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = ? AND date = ?
+                    """,
+                        (time_now_str, reg_no, current_date),
+                    )
+                else:
+                    # Check-out — complete the attendance
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = ? AND date = ?
+                    """,
+                        (time_now_str, reg_no, current_date),
+                    )
+                new_status = "Present"
+                log_audit_event(
+                    "ATTENDANCE_OVERRIDE",
+                    reg_no,
+                    True,
+                    f"User status updated to {new_status} via {sync_slot_type}.",
                 )
             else:
-                cursor.execute(
-                    """
-                    INSERT INTO daily_attendance_status 
-                    (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
-                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                    ON CONFLICT (reg_no, date) DO UPDATE SET
-                        status = 'Present',
-                        out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
-                        marked_by = 'Attendance System',
-                        marked_at = CURRENT_TIMESTAMP
-                """,
-                    (reg_no, name, dept, current_date, time_now_str),
-                )
-    except Exception as e:
-        print(f"Error syncing daily_attendance_status for {reg_no}: {e}")
+                # No record exists — insert with status 'Present'
+                if sync_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
+                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (reg_no, name, dept, current_date, time_now_str),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
+                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (reg_no, name, dept, current_date, time_now_str),
+                    )
+        except Exception as e:
+            print(f"Error syncing daily_attendance_status for {reg_no}: {e}")
 
-    log_audit_event("ATTENDANCE_MARKED", reg_no, True, f"Confidence: {confidence:.3f}")
+        log_audit_event("ATTENDANCE_MARKED", reg_no, True, f"Confidence: {confidence:.3f}")
+    else:
+        log_audit_event("CCL_EARNED_SCAN", reg_no, True, f"Confidence: {confidence:.3f}")
 
     # Update user location when attendance is marked successfully
     if form_data is not None:
@@ -5974,12 +6549,100 @@ def _secure_verify_and_mark(
                             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         ),
                     )
-                    print(f"Location updated via attendance mark for {reg_no}")
+                    # print(f"Location updated via attendance mark for {reg_no}")
+                    pass
         except Exception as e:
-            print(f"Error updating location during attendance mark for {reg_no}: {e}")
+            print(f"[ATTENDANCE WARNING] Error updating location during attendance mark for {reg_no}: {e}")
+
+    # Check CCL Crediting logic
+    earned_ccl = False
+    try:
+        # Check if CCL is enabled for the specific slot type
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings_rows = cursor.fetchall()
+        ccl_settings = {r[0]: r[1] for r in ccl_settings_rows}
+        
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+
+        if early_enabled or late_enabled:
+            # Get current time
+            now_time = datetime.now()
+            now_time_str = now_time.strftime("%H:%M")
+            now_date_str = now_time.strftime("%Y-%m-%d")
+            
+            # Convert to minutes since midnight
+            def time_to_min(t_str):
+                p = t_str.split(":")
+                return int(p[0]) * 60 + int(p[1])
+                
+            curr_min = now_time.hour * 60 + now_time.minute
+            
+            is_early_check_in = False
+            is_late_check_out = False
+            
+            early_start_str = ccl_settings.get("early_check_in_start", "07:00")
+            early_end_str = ccl_settings.get("early_check_in_end", "08:00")
+            late_start_str = ccl_settings.get("late_check_out_start", "17:00")
+            late_end_str = ccl_settings.get("late_check_out_end", "18:00")
+            
+            if ins_slot_type == "check_in" and early_enabled:
+                # Check early check-in window
+                if time_to_min(early_start_str) <= curr_min < time_to_min(early_end_str):
+                    is_early_check_in = True
+            elif ins_slot_type == "check_out" and late_enabled:
+                # Check late check-out window
+                if time_to_min(late_start_str) <= curr_min < time_to_min(late_end_str):
+                    is_late_check_out = True
+                    
+            if is_early_check_in or is_late_check_out:
+                ccl_slot = "early_check_in" if is_early_check_in else "late_check_out"
+                
+                # Verify that they have not already earned CCL for this slot type today
+                cursor.execute(
+                    "SELECT 1 FROM ccl_earned_history WHERE reg_no = ? AND date = ? AND slot_type = ?",
+                    (reg_no, now_date_str, ccl_slot)
+                )
+                already_earned = cursor.fetchone()
+                
+                if not already_earned:
+                    # Insert history log
+                    cursor.execute("""
+                        INSERT INTO ccl_earned_history (reg_no, name, dept, date, time, slot_type, earned_points)
+                        VALUES (?, ?, ?, ?, ?, ?, 1.0)
+                    """, (reg_no, name, dept, now_date_str, now_time.strftime("%H:%M:%S"), ccl_slot))
+                    
+                    # Update earned_leave balance
+                    cursor.execute("SELECT balance FROM earned_leave WHERE reg_no = ?", (reg_no,))
+                    bal_row = cursor.fetchone()
+                    if not bal_row:
+                        cursor.execute("""
+                            INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+                            VALUES (?, ?, ?, ?, 1.0)
+                        """, (reg_no, name, dept, user_type or "staff", 1.0))
+                    else:
+                        new_balance = float(bal_row[0]) + 1.0
+                        cursor.execute("""
+                            UPDATE earned_leave 
+                            SET balance = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE reg_no = ?
+                        """, (new_balance, reg_no))
+                        
+                    conn.commit()
+                    earned_ccl = True
+    except Exception as ccl_err:
+        print(f"[ATTENDANCE WARNING] Error processing CCL credit for {reg_no}: {ccl_err}")
+
+    # Output consolidated debug log with proper context
+    print(f"[ATTENDANCE SUCCESS] RegNo: {reg_no} | Name: {name} | Dept: {dept} | Slot: {ins_slot_type} | Confidence: {confidence:.3f} | Liveness: {'PASS' if is_live else 'WARNING'} ({liveness_reason}) | Quality Score: {analysis['quality_score']:.2f} | CCL Earned: {earned_ccl}")
+
+    if is_ccl_scan:
+        msg = "You earned 1.0 CCL point! (Leave balance updated)" if earned_ccl else "You have already earned your CCL point for today."
+    else:
+        msg = "Attendance marked successfully. You earned 1.0 CCL point!" if earned_ccl else "Attendance marked successfully"
 
     return {
-        "message": "Attendance marked successfully",
+        "message": msg,
         "reg_no": reg_no,
         "name": name,
         "dept": dept,
@@ -6032,6 +6695,12 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
                 break
 
         if not allowed:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                allowed = True
+                active_slot_type = ccl_slot_type
+                
+        if not allowed:
             slots_info = ", ".join(
                 [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
             )
@@ -6039,6 +6708,21 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
                 status_code=403,
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
+    else:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if early_enabled or late_enabled:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                active_slot_type = ccl_slot_type
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attendance marking is not allowed at this time. (Outside CCL window)",
+                )
 
     # Verify admin token
     admin_user = verify_admin_token(request)
@@ -6129,6 +6813,12 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
                 break
 
         if not allowed:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                allowed = True
+                active_slot_type = ccl_slot_type
+                
+        if not allowed:
             slots_info = ", ".join(
                 [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
             )
@@ -6136,6 +6826,21 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
                 status_code=403,
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
+    else:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if early_enabled or late_enabled:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                active_slot_type = ccl_slot_type
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attendance marking is not allowed at this time. (Outside CCL window)",
+                )
 
     # Verify HOD token
     hod_user = verify_hod_token(request)
@@ -7173,6 +7878,193 @@ async def admin_bulk_create_users(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to create users: {str(e)}")
 
 
+@app.get("/admin/templates/users/excel")
+async def get_users_excel_template(request: Request):
+    verify_admin_token(request)
+    import openpyxl
+    import io
+    from fastapi.responses import StreamingResponse
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Staff Users"
+    ws.append(["Username", "Name", "Department", "Role", "Password"])
+    ws["G1"] = "Available Roles:"
+    roles = ["hod", "staff"]
+    for i, r in enumerate(roles, start=2):
+        ws.cell(row=i, column=7, value=r)
+    ws.column_dimensions['G'].width = 25
+
+    cursor.execute("SELECT name FROM departments ORDER BY name")
+    depts = [row[0] for row in cursor.fetchall() if row[0].strip().lower() != "administration"]
+    ws["H1"] = "Available Departments:"
+    for i, d in enumerate(depts, start=2):
+        ws.cell(row=i, column=8, value=d)
+    ws.column_dimensions['H'].width = 35
+    
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=users_template.xlsx"}
+    )
+
+@app.get("/admin/templates/users/json")
+async def get_users_json_template(request: Request):
+    verify_admin_token(request)
+    cursor.execute("SELECT name FROM departments ORDER BY name")
+    depts = [row[0] for row in cursor.fetchall() if row[0].strip().lower() != "administration"]
+    template_data = [
+        {
+            "username": "",
+            "name": "",
+            "dept": "",
+            "role": "",
+            "password": "",
+            "available_roles": ["hod", "staff"],
+            "available_departments": depts
+        }
+    ]
+    import json
+    from fastapi import Response
+    return Response(
+        content=json.dumps(template_data, indent=4),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=users_template.json"}
+    )
+
+@app.get("/admin/templates/other_staff/excel")
+async def get_other_staff_excel_template(request: Request):
+    verify_admin_token(request)
+    import openpyxl
+    import io
+    from fastapi.responses import StreamingResponse
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Other Staff"
+    ws.append(["Username", "Name", "Department", "Role", "Password", "DOB"])
+    
+    ws["H1"] = "Available Roles:"
+    roles = ["principal", "placement_staff", "lab_technician", "system_admin", "office_staff"]
+    for i, r in enumerate(roles, start=2):
+        ws.cell(row=i, column=8, value=r)
+    ws.column_dimensions['H'].width = 25
+
+    cursor.execute("SELECT DISTINCT dept FROM other_staff WHERE dept IS NOT NULL AND dept != '' ORDER BY dept")
+    other_depts = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT name FROM departments")
+    standard_depts = {row[0].strip().lower() for row in cursor.fetchall()}
+    depts = [d for d in other_depts if d.strip().lower() not in standard_depts]
+    default_other_depts = ["Administration", "Placement Staff", "Lab Technician", "System Admin", "Office Staff"]
+    for d in default_other_depts:
+        if d not in depts and d.strip().lower() not in standard_depts:
+            depts.append(d)
+
+    ws["I1"] = "Available Departments:"
+    for i, d in enumerate(depts, start=2):
+        ws.cell(row=i, column=9, value=d)
+    ws.column_dimensions['I'].width = 35
+    
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=other_staff_template.xlsx"}
+    )
+
+@app.get("/admin/templates/other_staff/json")
+async def get_other_staff_json_template(request: Request):
+    verify_admin_token(request)
+    cursor.execute("SELECT DISTINCT dept FROM other_staff WHERE dept IS NOT NULL AND dept != '' ORDER BY dept")
+    other_depts = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT name FROM departments")
+    standard_depts = {row[0].strip().lower() for row in cursor.fetchall()}
+    depts = [d for d in other_depts if d.strip().lower() not in standard_depts]
+    default_other_depts = ["Administration", "Placement Staff", "Lab Technician", "System Admin", "Office Staff"]
+    for d in default_other_depts:
+        if d not in depts and d.strip().lower() not in standard_depts:
+            depts.append(d)
+
+    template_data = [
+        {
+            "username": "",
+            "name": "",
+            "dept": "",
+            "role": "",
+            "password": "",
+            "dob": "",
+            "available_roles": ["principal", "placement_staff", "lab_technician", "system_admin", "office_staff"],
+            "available_departments": depts
+        }
+    ]
+    import json
+    from fastapi import Response
+    return Response(
+        content=json.dumps(template_data, indent=4),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=other_staff_template.json"}
+    )
+
+@app.get("/admin/templates/departments/excel")
+async def get_departments_excel_template(request: Request):
+    verify_admin_token(request)
+    import openpyxl
+    import io
+    from fastapi.responses import StreamingResponse
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Departments"
+    ws.append(["Username", "Name", "Department", "Role", "Password"])
+    ws["G1"] = "Available Roles:"
+    roles = ["hod", "staff"]
+    for i, r in enumerate(roles, start=2):
+        ws.cell(row=i, column=7, value=r)
+    ws.column_dimensions['G'].width = 25
+
+    cursor.execute("SELECT name FROM departments ORDER BY name")
+    depts = [row[0] for row in cursor.fetchall() if row[0].strip().lower() != "administration"]
+    ws["H1"] = "Available Departments:"
+    for i, d in enumerate(depts, start=2):
+        ws.cell(row=i, column=8, value=d)
+    ws.column_dimensions['H'].width = 35
+    
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=departments_template.xlsx"}
+    )
+
+@app.get("/admin/templates/departments/json")
+async def get_departments_json_template(request: Request):
+    verify_admin_token(request)
+    cursor.execute("SELECT name FROM departments ORDER BY name")
+    depts = [row[0] for row in cursor.fetchall() if row[0].strip().lower() != "administration"]
+    template_data = [
+        {
+            "username": "",
+            "name": "",
+            "dept": "",
+            "role": "",
+            "password": "",
+            "available_roles": ["hod", "staff"],
+            "available_departments": depts
+        }
+    ]
+    import json
+    from fastapi import Response
+    return Response(
+        content=json.dumps(template_data, indent=4),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=departments_template.json"}
+    )
+
+
 @app.post("/admin/users/bulk-upload")
 async def admin_bulk_upload_users(request: Request, file: UploadFile = File(...)):
     """
@@ -7250,6 +8142,9 @@ async def admin_bulk_upload_users(request: Request, file: UploadFile = File(...)
                 dept = str(row[idx_dept]).strip() if idx_dept < len(row) and row[idx_dept] is not None else None
                 role = str(row[idx_role]).strip().lower() if idx_role < len(row) and row[idx_role] is not None else "staff"
                 password = str(row[idx_password]).strip() if idx_password != -1 and idx_password < len(row) and row[idx_password] is not None else "password123"
+
+                if not username and not name and not dept:
+                    continue
 
                 users_data.append({
                     "username": username,
@@ -7476,6 +8371,9 @@ async def admin_bulk_upload_other_staff(request: Request, file: UploadFile = Fil
                 role = str(row[idx_role]).strip().lower() if idx_role < len(row) and row[idx_role] is not None else "office_staff"
                 password = str(row[idx_password]).strip() if idx_password != -1 and idx_password < len(row) and row[idx_password] is not None else "password123"
                 dob = str(row[idx_dob]).strip() if idx_dob != -1 and idx_dob < len(row) and row[idx_dob] is not None else None
+
+                if not username and not name and not dept:
+                    continue
 
                 staff_data.append({
                     "username": username,
@@ -11756,6 +12654,10 @@ async def user_change_password(request: Request):
             raise HTTPException(
                 status_code=400, detail="All password fields are required"
             )
+        if len(new_password) < 6:
+            raise HTTPException(
+                status_code=400, detail="New password must be at least 6 characters long"
+            )
         if new_password != confirm_password:
             raise HTTPException(status_code=400, detail="New passwords do not match")
         if current_password == new_password:
@@ -11933,6 +12835,40 @@ async def submit_leave_request(request: Request):
                     status_code=400,
                     detail=f"Insufficient CL balance. You have {total_cl} CL available but requested {day_count} working days. "
                     f"(Current month: {cl_available}, Accumulated: {accumulated})",
+                )
+
+        # For Earned Leave: validate CCL balance before allowing submission
+        elif internal_type == "earned":
+            cursor.execute("SELECT balance FROM earned_leave WHERE reg_no = %s", (user["reg_no"],))
+            record = cursor.fetchone()
+            if not record:
+                # Initialize balance
+                cursor.execute("""
+                    INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+                    VALUES (%s, %s, %s, %s, 0.0)
+                """, (user["reg_no"], user["name"], user["dept"], user["role"]))
+                conn.commit()
+                total_el = 0.0
+            else:
+                total_el = float(record[0])
+
+            # Count working days in the date range (exclude weekends)
+            day_count = 0
+            current = start
+            while current <= end:
+                if current.weekday() < 5:  # Mon-Fri
+                    day_count += 1
+                current += timedelta(days=1)
+
+            if day_count <= 0:
+                raise HTTPException(
+                    status_code=400, detail="No working days in the selected date range"
+                )
+
+            if day_count > total_el:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient Earned Leave balance. You have {total_el} EL/CCL available but requested {day_count} working days.",
                 )
 
         cursor.execute(
@@ -12625,7 +13561,31 @@ async def admin_approve_leave_request(request: Request, request_id: int):
                     f"New balance: current_month={new_cl_available}, accumulated={new_accumulated}, used={new_used}"
                 )
 
+    # For Earned Leave: deduct EL balance
+    elif internal_type == "earned":
+        cursor.execute("SELECT balance FROM earned_leave WHERE reg_no = %s", (user_reg_no,))
+        el_record = cursor.fetchone()
+        if el_record:
+            current_el = float(el_record[0])
+            # Count working days (exclude weekends)
+            day_count = 0
+            d = start
+            while d <= end:
+                if d.weekday() < 5:
+                    day_count += 1
+                d += timedelta(days=1)
+
+            if day_count > 0:
+                new_el = max(0.0, current_el - day_count)
+                cursor.execute("""
+                    UPDATE earned_leave
+                    SET balance = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE reg_no = %s
+                """, (new_el, user_reg_no))
+                print(f"EL deducted: {user_reg_no} used {day_count} days. New EL balance: {new_el}")
+
     # Update request status
+
     cursor.execute(
         """
         UPDATE leave_requests 
@@ -14115,6 +15075,11 @@ async def other_staff_mark_attendance(request: Request):
                 break
 
         if not allowed:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                allowed = True
+                
+        if not allowed:
             slots_info = ", ".join(
                 [f"Slot {row[0]}: {row[1]} ({row[2]} min)" for row in duration_rows]
             )
@@ -14122,6 +15087,19 @@ async def other_staff_mark_attendance(request: Request):
                 status_code=403,
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
+    else:
+        cursor.execute("SELECT key, value FROM ccl_settings")
+        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
+        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        
+        if early_enabled or late_enabled:
+            ccl_slot_type = get_active_ccl_slot_type()
+            if not ccl_slot_type:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attendance marking is not allowed at this time. (Outside CCL window)",
+                )
 
     # Parse request body for extra fields (lat/lng/location)
     if form_data is not None:

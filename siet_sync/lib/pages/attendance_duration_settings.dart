@@ -93,13 +93,26 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
           );
         }
       } else {
+        String errorMsg = 'Failed to save settings';
+        try {
+          final errorData = jsonDecode(response.body);
+          if (errorData is Map && errorData.containsKey('detail')) {
+            errorMsg = errorData['detail'].toString();
+          } else if (errorData is Map && errorData.containsKey('message')) {
+            errorMsg = errorData['message'].toString();
+          }
+        } catch (_) {}
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to save settings'),
+            SnackBar(
+              content: Text(errorMsg),
               backgroundColor: Colors.red,
             ),
           );
+          if (response.statusCode == 400) {
+            _showConflictDialog(errorMsg);
+          }
         }
       }
     } catch (e) {
@@ -117,6 +130,39 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
         _isSaving = false;
       });
     }
+  }
+
+  void _showConflictDialog(String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 28),
+              const SizedBox(width: 8),
+              const Text('Timing Conflict Detected', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: Text(
+            message,
+            style: const TextStyle(fontSize: 14, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Understand',
+                style: TextStyle(color: isDark ? Colors.white70 : Colors.deepPurple, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _selectTime(int index) async {

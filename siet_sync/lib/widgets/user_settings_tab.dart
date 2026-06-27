@@ -97,6 +97,12 @@ class _UserSettingsTabState extends State<UserSettingsTab> {
                             });
                             return;
                           }
+                          if (newPass.length < 6) {
+                            setDialogState(() {
+                              errorText = 'New password must be at least 6 characters.';
+                            });
+                            return;
+                          }
                           if (newPass != confirm) {
                             setDialogState(() {
                               errorText = 'New passwords do not match.';

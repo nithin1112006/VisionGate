@@ -19,6 +19,8 @@ import '../widgets/face_registration_widget.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
+import '../services/leave_balance_notifier.dart';
+
 
 // Quick select chip widget
 class _QuickSelectChip extends StatelessWidget {
@@ -454,6 +456,9 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     setState(() {
       _selectedIndex = index;
     });
+    if (index == 3) {
+      LeaveBalanceNotifier.instance.notifyBalanceChanged();
+    }
   }
 
   @override
@@ -547,7 +552,12 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     final scaffold = AdaptiveScaffold(
       title: _titles[_selectedIndex],
       selectedIndex: _selectedIndex,
-      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+      onDestinationSelected: (index) {
+        setState(() => _selectedIndex = index);
+        if (index == 3) {
+          LeaveBalanceNotifier.instance.notifyBalanceChanged();
+        }
+      },
       destinations: _navDestinations,
       accentColor: hodAccent,
       drawer: _buildDrawer(context),
@@ -4038,7 +4048,6 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
   Map<String, dynamic>? statsData;
   String? startDate;
   String? endDate;
-
   Future<void> _generateAndDownloadPdf() async {
     if (statsData == null) return;
     setState(() => isGeneratingPdf = true);
@@ -4058,128 +4067,144 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
 
       final pdf = pw.Document();
 
+      // Theme Colors
+      final primaryColor = PdfColor.fromInt(0xFF4F46E5);      // Modern Indigo
+      final darkColor = PdfColor.fromInt(0xFF0F172A);         // Slate 900
+      final lightColor = PdfColor.fromInt(0xFFF8FAFC);        // Slate 50
+      final greyColor = PdfColor.fromInt(0xFF64748B);         // Slate 500
+      final borderColor = PdfColor.fromInt(0xFFE2E8F0);       // Slate 200
+      final highlightColor = PdfColor.fromInt(0xFFEEF2FF);   // Light Indigo tint
+
+      final cardBuilder = (String title, String value, PdfColor color, bool highlight) {
+        return pw.Expanded(
+          child: pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            decoration: pw.BoxDecoration(
+              color: highlight ? highlightColor : PdfColors.white,
+              border: pw.Border.all(color: highlight ? color : borderColor, width: highlight ? 1.5 : 1.0),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
+            ),
+            child: pw.Column(
+              children: [
+                pw.Text(
+                  title,
+                  style: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: pw.FontWeight.bold,
+                    color: highlight ? color : greyColor,
+                  ),
+                ),
+                pw.SizedBox(height: 5),
+                pw.Text(
+                  value,
+                  style: pw.TextStyle(
+                    fontSize: 16,
+                    fontWeight: pw.FontWeight.bold,
+                    color: highlight ? color : darkColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      };
+
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
           margin: const pw.EdgeInsets.all(32),
           build: (context) => [
-            pw.Header(
-              level: 0,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
+            // Header Banner
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              decoration: pw.BoxDecoration(
+                color: primaryColor,
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10)),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Text(
-                    'DEPARTMENT ATTENDANCE REPORT',
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'ATTENDANCE ANALYTICS REPORT',
+                        style: pw.TextStyle(
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        'Department: ${widget.dept.toUpperCase()}',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Department: ${widget.dept.toUpperCase()}',
-                    style: pw.TextStyle(
-                      fontSize: 14,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.teal,
-                    ),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Period: $startDateStr to $endDateStr',
-                    style: const pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.grey700,
-                    ),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Generated: ${DateTime.now().toString()}',
-                    style: const pw.TextStyle(
-                      fontSize: 10,
-                      color: PdfColors.grey500,
-                    ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text(
+                        'Period: $startDateStr to $endDateStr',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        'Generated: ${DateTime.now().toLocal().toString().split('.').first}',
+                        style: pw.TextStyle(
+                          fontSize: 8,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
             pw.SizedBox(height: 20),
             
-            // Summary Cards
+            // Summary KPI Cards
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.teal, width: 1.5),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Overall Attendance', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text('${overallPct.toStringAsFixed(1)}%', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
-                      ],
-                    ),
-                  ),
-                ),
-                pw.SizedBox(width: 8),
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.grey300),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Total Staff', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text(totalStaff.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
-                pw.SizedBox(width: 8),
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.grey300),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Working Days', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text(workingDays.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
+                cardBuilder('Overall Attendance', '${overallPct.toStringAsFixed(1)}%', primaryColor, true),
+                pw.SizedBox(width: 12),
+                cardBuilder('Total Staff', totalStaff.toString(), darkColor, false),
+                pw.SizedBox(width: 12),
+                cardBuilder('Working Days', workingDays.toString(), darkColor, false),
               ],
             ),
             pw.SizedBox(height: 24),
             
-            // Stats Breakdown
+            // Stats Breakdown Table
             pw.Text(
               'Detailed Summary Metrics',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: darkColor),
             ),
             pw.SizedBox(height: 8),
             pw.TableHelper.fromTextArray(
               context: context,
-              headers: ['Metric', 'Count / Value'],
+              headers: ['Metric Description', 'Count / Value'],
               data: [
-                ['Total Present Days (Scan)', summary['total_present'].toString()],
-                ['Total Absent Days', summary['total_absent'].toString()],
-                ['Total Approved Leaves', summary['total_leave'].toString()],
-                ['Total On Duty (OD) Days', summary['total_od'].toString()],
+                ['Total Present Days (Scan)', summary['total_present']?.toString() ?? '0'],
+                ['Total Absent Days', summary['total_absent']?.toString() ?? '0'],
+                ['Total Approved Leaves', summary['total_leave']?.toString() ?? '0'],
+                ['Total On Duty (OD) Days', summary['total_od']?.toString() ?? '0'],
               ],
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              border: pw.TableBorder.all(color: borderColor, width: 0.5),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 10),
+              headerDecoration: pw.BoxDecoration(color: darkColor),
+              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
+              oddRowDecoration: pw.BoxDecoration(color: lightColor),
+              cellStyle: const pw.TextStyle(fontSize: 10),
               cellAlignment: pw.Alignment.centerLeft,
             ),
             pw.SizedBox(height: 24),
@@ -4187,7 +4212,7 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
             // Staff Table
             pw.Text(
               'Staff Performance & Attendance Breakdown',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: darkColor),
             ),
             pw.SizedBox(height: 8),
             pw.TableHelper.fromTextArray(
@@ -4204,8 +4229,12 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
                   '${(s['attendance_pct'] ?? 0).toStringAsFixed(1)}%',
                 ];
               }).toList(),
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              border: pw.TableBorder.all(color: borderColor, width: 0.5),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 9),
+              headerDecoration: pw.BoxDecoration(color: primaryColor),
+              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
+              oddRowDecoration: pw.BoxDecoration(color: lightColor),
+              cellStyle: const pw.TextStyle(fontSize: 9),
               cellAlignment: pw.Alignment.centerLeft,
             ),
           ],
@@ -4235,7 +4264,6 @@ class _DeptStatsInnerState extends State<_DeptStatsInner> {
       setState(() => isGeneratingPdf = false);
     }
   }
-
   @override
   void initState() {
     super.initState();
@@ -6149,128 +6177,144 @@ class _HODDeptStatsTabState extends State<HODDeptStatsTab> {
 
       final pdf = pw.Document();
 
+      // Theme Colors
+      final primaryColor = PdfColor.fromInt(0xFF4F46E5);      // Modern Indigo
+      final darkColor = PdfColor.fromInt(0xFF0F172A);         // Slate 900
+      final lightColor = PdfColor.fromInt(0xFFF8FAFC);        // Slate 50
+      final greyColor = PdfColor.fromInt(0xFF64748B);         // Slate 500
+      final borderColor = PdfColor.fromInt(0xFFE2E8F0);       // Slate 200
+      final highlightColor = PdfColor.fromInt(0xFFEEF2FF);   // Light Indigo tint
+
+      final cardBuilder = (String title, String value, PdfColor color, bool highlight) {
+        return pw.Expanded(
+          child: pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            decoration: pw.BoxDecoration(
+              color: highlight ? highlightColor : PdfColors.white,
+              border: pw.Border.all(color: highlight ? color : borderColor, width: highlight ? 1.5 : 1.0),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
+            ),
+            child: pw.Column(
+              children: [
+                pw.Text(
+                  title,
+                  style: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: pw.FontWeight.bold,
+                    color: highlight ? color : greyColor,
+                  ),
+                ),
+                pw.SizedBox(height: 5),
+                pw.Text(
+                  value,
+                  style: pw.TextStyle(
+                    fontSize: 16,
+                    fontWeight: pw.FontWeight.bold,
+                    color: highlight ? color : darkColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      };
+
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
           margin: const pw.EdgeInsets.all(32),
           build: (context) => [
-            pw.Header(
-              level: 0,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
+            // Header Banner
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              decoration: pw.BoxDecoration(
+                color: primaryColor,
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10)),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Text(
-                    'DEPARTMENT ATTENDANCE REPORT',
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'ATTENDANCE ANALYTICS REPORT',
+                        style: pw.TextStyle(
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        'Department: ${widget.dept.toUpperCase()}',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Department: ${widget.dept.toUpperCase()}',
-                    style: pw.TextStyle(
-                      fontSize: 14,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.teal,
-                    ),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Period: $startDateStr to $endDateStr',
-                    style: const pw.TextStyle(
-                      fontSize: 12,
-                      color: PdfColors.grey700,
-                    ),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Generated: ${DateTime.now().toString()}',
-                    style: const pw.TextStyle(
-                      fontSize: 10,
-                      color: PdfColors.grey500,
-                    ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text(
+                        'Period: $startDateStr to $endDateStr',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        'Generated: ${DateTime.now().toLocal().toString().split('.').first}',
+                        style: pw.TextStyle(
+                          fontSize: 8,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
             pw.SizedBox(height: 20),
             
-            // Summary Cards
+            // Summary KPI Cards
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.teal, width: 1.5),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Overall Attendance', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text('${overallPct.toStringAsFixed(1)}%', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.teal)),
-                      ],
-                    ),
-                  ),
-                ),
-                pw.SizedBox(width: 8),
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.grey300),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Total Staff', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text(totalStaff.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
-                pw.SizedBox(width: 8),
-                pw.Expanded(
-                  child: pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.grey300),
-                      borderRadius: pw.BorderRadius.circular(8),
-                    ),
-                    child: pw.Column(
-                      children: [
-                        pw.Text('Working Days', style: pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-                        pw.SizedBox(height: 4),
-                        pw.Text(workingDays.toString(), style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
+                cardBuilder('Overall Attendance', '${overallPct.toStringAsFixed(1)}%', primaryColor, true),
+                pw.SizedBox(width: 12),
+                cardBuilder('Total Staff', totalStaff.toString(), darkColor, false),
+                pw.SizedBox(width: 12),
+                cardBuilder('Working Days', workingDays.toString(), darkColor, false),
               ],
             ),
             pw.SizedBox(height: 24),
             
-            // Stats Breakdown
+            // Stats Breakdown Table
             pw.Text(
               'Detailed Summary Metrics',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: darkColor),
             ),
             pw.SizedBox(height: 8),
             pw.TableHelper.fromTextArray(
               context: context,
-              headers: ['Metric', 'Count / Value'],
+              headers: ['Metric Description', 'Count / Value'],
               data: [
-                ['Total Present Days (Scan)', summary['total_present'].toString()],
-                ['Total Absent Days', summary['total_absent'].toString()],
-                ['Total Approved Leaves', summary['total_leave'].toString()],
-                ['Total On Duty (OD) Days', summary['total_od'].toString()],
+                ['Total Present Days (Scan)', summary['total_present']?.toString() ?? '0'],
+                ['Total Absent Days', summary['total_absent']?.toString() ?? '0'],
+                ['Total Approved Leaves', summary['total_leave']?.toString() ?? '0'],
+                ['Total On Duty (OD) Days', summary['total_od']?.toString() ?? '0'],
               ],
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              border: pw.TableBorder.all(color: borderColor, width: 0.5),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 10),
+              headerDecoration: pw.BoxDecoration(color: darkColor),
+              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
+              oddRowDecoration: pw.BoxDecoration(color: lightColor),
+              cellStyle: const pw.TextStyle(fontSize: 10),
               cellAlignment: pw.Alignment.centerLeft,
             ),
             pw.SizedBox(height: 24),
@@ -6278,7 +6322,7 @@ class _HODDeptStatsTabState extends State<HODDeptStatsTab> {
             // Staff Table
             pw.Text(
               'Staff Performance & Attendance Breakdown',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: darkColor),
             ),
             pw.SizedBox(height: 8),
             pw.TableHelper.fromTextArray(
@@ -6295,8 +6339,12 @@ class _HODDeptStatsTabState extends State<HODDeptStatsTab> {
                   '${(s['attendance_pct'] ?? 0).toStringAsFixed(1)}%',
                 ];
               }).toList(),
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal),
+              border: pw.TableBorder.all(color: borderColor, width: 0.5),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 9),
+              headerDecoration: pw.BoxDecoration(color: primaryColor),
+              rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
+              oddRowDecoration: pw.BoxDecoration(color: lightColor),
+              cellStyle: const pw.TextStyle(fontSize: 9),
               cellAlignment: pw.Alignment.centerLeft,
             ),
           ],

@@ -27,5 +27,23 @@ ws_users.append(["alice_smith", "Alice Smith", "Computer Science & Engineering",
 ws_users.append(["bob_jones", "Bob Jones", "Information Technology", "staff", "staffPass321"])
 ws_users.append(["charlie_brown", "Charlie Brown", "Computer Science & Engineering", "staff", "charliePass!"])
 
+ws_users["G1"] = "Available Roles:"
+roles = ["hod", "staff"]
+for i, r in enumerate(roles, start=2):
+    ws_users.cell(row=i, column=7, value=r)
+ws_users.column_dimensions['G'].width = 25
+
+ws_users["H1"] = "Available Departments:"
+mock_depts = [
+    "Computer Science & Engineering",
+    "Information Technology",
+    "Artificial Intelligence & Machine Learning",
+    "Mechanical Engineering",
+    "Electronics & Communication"
+]
+for i, d in enumerate(mock_depts, start=2):
+    ws_users.cell(row=i, column=8, value=d)
+ws_users.column_dimensions['H'].width = 35
+
 wb_users.save(os.path.join(templates_dir, "users_template.xlsx"))
 print("Created users_template.xlsx")
