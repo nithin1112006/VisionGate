@@ -43,12 +43,7 @@ try:
 except ImportError:
     torch_available = False
     print("PyTorch is not available - running in CPU-only mode")
-try:
-    from insightface.app import FaceAnalysis  # type: ignore
-    insightface_available = True
-except Exception as e:
-    insightface_available = False
-    print(f"Warning: InsightFace import failed: {e}. Falling back to OpenCV face detection.")
+from insightface.app import FaceAnalysis  # type: ignore
 from datetime import datetime, timedelta
 import hashlib
 import secrets
@@ -5769,8 +5764,6 @@ def verify_face_identity(
 _face_app_lock = threading.Lock()
 
 try:
-    if not insightface_available:
-        raise Exception("InsightFace library failed to import.")
     print("Trying InsightFace buffalo_s...")
     if torch_available:
         gpu_available = torch.cuda.is_available()
