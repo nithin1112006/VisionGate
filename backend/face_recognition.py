@@ -38,6 +38,7 @@ MIN_COSINE_SIMILARITY = 0.50
 MAX_EUCLIDEAN_DISTANCE = 1.2
 INSIGHTFACE_BASE_THRESHOLD = 0.68
 FALLBACK_BASE_THRESHOLD = 0.95
+INSIGHTFACE_NEAR_MATCH_MARGIN = 0.060
 MAX_PROFILE_SAMPLES = 24
 PROFILE_SAMPLE_MIN_CONFIDENCE = 0.78
 
@@ -330,6 +331,10 @@ def verify_face_identity(reg_no: str, query_embedding: np.ndarray) -> Tuple[bool
 
     if best_similarity >= threshold:
         return True, best_similarity, "Face verified successfully"
+
+    if not use_fallback and best_similarity >= (threshold - INSIGHTFACE_NEAR_MATCH_MARGIN):
+        print(f"  Near-match accepted: {best_similarity:.4f} within margin {INSIGHTFACE_NEAR_MATCH_MARGIN:.4f}")
+        return True, best_similarity, "Face verified successfully (near-match)"
 
     reason = "Face does not match - Please try again"
     return False, 0.0, reason

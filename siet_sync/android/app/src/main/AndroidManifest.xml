@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <application
         android:label="FacultySphere"
@@ -50,22 +52,19 @@
             android:name="flutterEmbedding"
             android:value="2"/>
 
-        <!-- Flutter Background Service -->
+        <!-- Native Foreground Service for Location Attendance -->
         <service
-            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:name=".AttendanceForegroundService"
             android:foregroundServiceType="location"
-            android:exported="true"
-            tools:replace="android:exported" />
+            android:process=":attendance_service"
+            android:exported="false" />
 
+        <!-- Geofence Broadcast Receiver -->
         <receiver
-            android:name="id.flutter.flutter_background_service.BackgroundServiceReceiver"
+            android:name=".GeofenceBroadcastReceiver"
+            android:process=":attendance_service"
             android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
+            android:enabled="true" />
 
     </application>
 

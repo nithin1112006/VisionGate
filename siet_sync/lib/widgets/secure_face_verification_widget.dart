@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:math' as math;
 import '../services/face_verification_service.dart';
+import '../services/leave_balance_notifier.dart';
 import '../utils/face_recognition_helper.dart';
 
 /// Secure face verification widget with real-time feedback
@@ -200,6 +201,7 @@ class _SecureFaceVerificationWidgetState
   void _handleVerificationSuccess(Map<String, dynamic> result) {
     _failedAttempts = 0;
     widget.onVerificationSuccess();
+    LeaveBalanceNotifier.instance.notifyBalanceChanged();
     _updateStatus("✓ Verification successful!", isError: false);
 
     ScaffoldMessenger.of(context).showSnackBar(

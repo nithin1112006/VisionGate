@@ -41,13 +41,15 @@ dependencies:
   # 💾 Persistent session storage
   shared_preferences: ^2.2.2
 
-  # 📄 PDF generation and printing
+  # � Background service for location tracking
+  flutter_background_service: ^5.0.10
+
+  # �📄 PDF generation and printing
   pdf: ^3.10.8
   printing: ^5.12.0
 
   cupertino_icons: ^1.0.8
   flutter_map_dragmarker: ^7.0.0
-  flutter_background_service: ^5.1.0
 
 dev_dependencies:
   flutter_test:

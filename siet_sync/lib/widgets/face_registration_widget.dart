@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import '../config/college_ip_config.dart';
 import '../utils/wifi_check.dart';
 import '../utils/geofence_check.dart';
+import '../utils/vpn_check.dart';
 import '../services/pre_verification_service.dart';
 
 String get API_URL => CollegeIPConfig.defaultURL;
@@ -139,10 +140,26 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
       _isRegistrationSuccess = false;
       _isRegistrationError = false;
       _registrationErrorMessage = '';
-      _statusMessage = "Registering face...";
+      _statusMessage = "Checking VPN status...";
     });
 
     try {
+      // Check VPN connection only for face registration
+      final isVpn = await VpnChecker.isVpnActive();
+      if (isVpn) {
+        setState(() {
+          _isRegistering = false;
+          _isRegistrationError = true;
+          _registrationErrorMessage = "VPN/Proxy detected. Please disconnect VPN to register your face.";
+          _statusMessage = "❌ $_registrationErrorMessage";
+        });
+        return;
+      }
+
+      setState(() {
+        _statusMessage = "Registering face...";
+      });
+
       var request = http.MultipartRequest(
         "POST",
         Uri.parse("${API_URL}${widget.registerEndpoint}"),

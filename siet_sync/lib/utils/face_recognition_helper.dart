@@ -5,7 +5,6 @@ import 'package:image/image.dart' as img;
 /// Enhanced face recognition helper with improved image preprocessing
 /// Web-compatible: uses XFile and Uint8List instead of dart:io File
 class FaceRecognitionHelper {
-  static const Duration _frameInterval = Duration(milliseconds: 200);
   static const double _maxBlurThreshold = 80.0;
   static const double _minBrightness = 20.0;
   static const double _maxBrightness = 220.0;
@@ -15,79 +14,18 @@ class FaceRecognitionHelper {
 
   static const List<num> _laplacianKernel = [0, -1, 0, -1, 4, -1, 0, -1, 0];
 
-  /// Capture multiple frames and return the best quality one as XFile (web-compatible)
+  /// Capture the frame directly to avoid slow client-side CPU processing (web-compatible)
   static Future<XFile?> captureBestFrame(
     CameraController controller, {
     int maxFrames = 3,
   }) async {
     try {
-      final frames = <XFile>[];
-      final frameBytesList = <Uint8List>[];
-
-      for (int i = 0; i < maxFrames; i++) {
-        final image = await controller.takePicture();
-        final bytes = await image.readAsBytes();
-
-        if (await _quickQualityCheckBytes(bytes)) {
-          frames.add(image);
-          frameBytesList.add(bytes);
-        }
-
-        if (i < maxFrames - 1) {
-          await Future.delayed(_frameInterval);
-        }
-      }
-
-      if (frames.isEmpty) return null;
-
-      XFile? bestFrame;
-      double bestScore = -1;
-
-      for (int i = 0; i < frames.length; i++) {
-        final score = await _scoreFrameBytes(frameBytesList[i]);
-        if (score > bestScore) {
-          bestScore = score;
-          bestFrame = frames[i];
-        }
-      }
-
-      return bestFrame;
+      return await controller.takePicture();
     } catch (e) {
       return null;
     }
   }
 
-  /// Quick quality check using bytes (no File operations)
-  static Future<bool> _quickQualityCheckBytes(Uint8List bytes) async {
-    try {
-      final image = img.decodeImage(bytes);
-      if (image == null) return false;
-
-      final grayscale = image.numChannels == 3 ? img.grayscale(image) : image;
-      final sampleSize = (grayscale.width * grayscale.height * 0.1).round();
-
-      int totalBrightness = 0;
-      int count = 0;
-      final step = (grayscale.width * grayscale.height / sampleSize).round();
-
-      for (int y = 0; y < grayscale.height && count < sampleSize; y += step) {
-        for (int x = 0; x < grayscale.width && count < sampleSize; x += step) {
-          totalBrightness += grayscale.getPixel(x, y).r.toInt();
-          count++;
-        }
-      }
-
-      final avgBrightness = totalBrightness / count;
-      return avgBrightness >= _minBrightness && avgBrightness <= _maxBrightness;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /// Score frame from bytes (no File operations)
-  static Future<double> _scoreFrameBytes(Uint8List bytes) async {
-    return await calculateImageQualityScoreFromBytes(bytes);
-  }
 
   /// Calculate image quality score from bytes (web-compatible)
   static Future<double> calculateImageQualityScoreFromBytes(

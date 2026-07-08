@@ -28,6 +28,7 @@ import 'academics_settings_page.dart';
 import 'attendance_duration_settings.dart';
 import 'cl_management_page.dart';
 import 'ccl_management_page.dart';
+import 'attendance_log_page.dart';
 import 'package:file_picker/file_picker.dart';
 import '../utils/file_saver.dart';
 
@@ -327,6 +328,10 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   int _selectedLimitRangeBoundary = 0;
   bool _useSatelliteView = false;
   bool _isMapExpanded = false;
+  final MapController _editorMapController = MapController();
+  bool _outerPointsExpanded = false;
+  bool _innerPointsExpanded = false;
+  bool _limitPointsExpanded = false;
 
   @override
   void initState() {
@@ -791,159 +796,242 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     Color labelColor,
     Color textColor,
   ) {
+    final themeColor = type == 'outer'
+        ? Colors.deepPurple
+        : (type == 'inner' ? Colors.teal : Colors.orange);
+
     return Container(
       key: ValueKey('${type}_$index'),
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: (isDark
-                        ? Colors.deepPurple.shade700
-                        : Colors.deepPurple.shade50),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${index + 1}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      color: isDark ? Colors.white : Colors.deepPurple,
-                    ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 5,
+                color: themeColor,
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: themeColor.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'POINT ${index + 1}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                                color: themeColor,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          if (canDelete)
+                            IconButton(
+                              onPressed: () => _removePoint(index, type),
+                              icon: const Icon(
+                                Icons.delete_rounded,
+                                color: Colors.redAccent,
+                                size: 18,
+                              ),
+                              tooltip: 'Delete point',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              initialValue: point[0].toStringAsFixed(6),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: textColor,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'Latitude',
+                                labelStyle: TextStyle(fontSize: 11, color: labelColor),
+                                filled: true,
+                                fillColor: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.grey.shade50,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none,
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                isDense: true,
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true,
+                                signed: true,
+                              ),
+                              onChanged: (value) {
+                                final lat = double.tryParse(value) ?? point[0];
+                                _updatePoint(index, lat, point[1], type);
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextFormField(
+                              initialValue: point[1].toStringAsFixed(6),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: textColor,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'Longitude',
+                                labelStyle: TextStyle(fontSize: 11, color: labelColor),
+                                filled: true,
+                                fillColor: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.grey.shade50,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none,
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                isDense: true,
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true,
+                                signed: true,
+                              ),
+                              onChanged: (value) {
+                                final lng = double.tryParse(value) ?? point[1];
+                                _updatePoint(index, point[0], lng, type);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPillTab(
+    String mode,
+    String label,
+    IconData icon,
+    bool isDark,
+    Color activeColor,
+    bool isSmall,
+  ) {
+    final isSelected = _editMode == mode;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _editMode = mode;
+            _tapTarget = mode == 'none' ? 'none' : mode;
+          });
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected 
+                ? activeColor 
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: activeColor.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    )
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: isSelected 
+                    ? Colors.white 
+                    : (isDark ? Colors.white60 : Colors.black54),
+              ),
+              if (!isSmall) ...[
+                const SizedBox(width: 6),
                 Text(
-                  'Point ${index + 1}',
+                  label,
                   style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    color: textColor,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: canDelete ? () => _removePoint(index, type) : null,
-                  icon: Icon(
-                    Icons.delete_outline,
-                    color: canDelete
-                        ? Colors.red
-                        : Colors.grey.withValues(alpha: 0.4),
-                    size: 20,
-                  ),
-                  tooltip: canDelete
-                      ? 'Remove point'
-                      : 'Need at least 3 points',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Flexible(
-                  child: SizedBox(
-                    height: 52,
-                    child: TextField(
-                      controller: TextEditingController(
-                        text: point[0].toStringAsFixed(6),
-                      ),
-                      style: TextStyle(fontSize: 13, color: textColor),
-                      decoration: InputDecoration(
-                        labelText: 'Latitude',
-                        labelStyle: TextStyle(fontSize: 12, color: labelColor),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: borderColor),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(
-                            color: Colors.deepPurple,
-                            width: 1.5,
-                          ),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        isDense: true,
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                        signed: true,
-                      ),
-                      onChanged: (value) {
-                        final lat = double.tryParse(value) ?? point[0];
-                        _updatePoint(index, lat, point[1], type);
-                      },
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: SizedBox(
-                    height: 52,
-                    child: TextField(
-                      controller: TextEditingController(
-                        text: point[1].toStringAsFixed(6),
-                      ),
-                      style: TextStyle(fontSize: 13, color: textColor),
-                      decoration: InputDecoration(
-                        labelText: 'Longitude',
-                        labelStyle: TextStyle(fontSize: 12, color: labelColor),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide(color: borderColor),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: const BorderSide(
-                            color: Colors.deepPurple,
-                            width: 1.5,
-                          ),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        isDense: true,
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                        signed: true,
-                      ),
-                      onChanged: (value) {
-                        final lng = double.tryParse(value) ?? point[1];
-                        _updatePoint(index, point[0], lng, type);
-                      },
-                    ),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected 
+                        ? Colors.white 
+                        : (isDark ? Colors.white70 : Colors.black87),
                   ),
                 ),
               ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapFloatingButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required bool isDark,
+    bool active = false,
+  }) {
+    final isEnabled = onPressed != null;
+    return ClipOval(
+      child: Material(
+        color: active 
+            ? Colors.deepPurple 
+            : (isDark ? const Color(0xFF1E1E24) : Colors.white).withValues(alpha: 0.9),
+        child: InkWell(
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(
+              icon,
+              size: 20,
+              color: !isEnabled 
+                  ? Colors.grey.withValues(alpha: 0.4) 
+                  : (active ? Colors.white : (isDark ? Colors.white70 : Colors.black87)),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -1091,69 +1179,27 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                           ],
                         ),
                         const SizedBox(height: 10),
-                         Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              ChoiceChip(
-                                label: const Text('View'),
-                                selected: _editMode == 'none',
-                                onSelected: (_) {
-                                  setState(() {
-                                    _editMode = 'none';
-                                    _tapTarget = 'none';
-                                  });
-                                },
-                              ),
-                              ChoiceChip(
-                                label: const Text('Outer'),
-                                selected: _editMode == 'outer',
-                                onSelected: (_) {
-                                  setState(() {
-                                    _editMode = 'outer';
-                                    _tapTarget = 'outer';
-                                  });
-                                },
-                              ),
-                              ChoiceChip(
-                                label: const Text('Inner'),
-                                selected: _editMode == 'inner',
-                                onSelected: (_) {
-                                  setState(() {
-                                    _editMode = 'inner';
-                                    _tapTarget = 'inner';
-                                  });
-                                },
-                              ),
-                              ChoiceChip(
-                                label: const Text('Limit'),
-                                selected: _editMode == 'limit_range',
-                                onSelected: (_) {
-                                  setState(() {
-                                    _editMode = 'limit_range';
-                                    _tapTarget = 'limit_range';
-                                  });
-                                },
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: _history.isNotEmpty ? _undoLastChange : null,
-                                icon: const Icon(Icons.undo, size: 16),
-                                label: const Text('Undo Last'),
-                              ),
-                              ChoiceChip(
-                                label: const Text('Satellite'),
-                                avatar: Icon(_useSatelliteView 
-                                  ? Icons.satellite_alt 
-                                  : Icons.map, 
-                                  size: 16
-                                ),
-                                selected: _useSatelliteView,
-                                onSelected: (value) {
-                                  setState(() => _useSatelliteView = value);
-                                },
-                              ),
-                            ],
+                        Container(
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(16),
                           ),
+                          padding: const EdgeInsets.all(4),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final isSmall = constraints.maxWidth < 400;
+                              final primaryColor = Theme.of(context).colorScheme.primary;
+                              return Row(
+                                children: [
+                                  _buildPillTab('none', 'View', Icons.visibility_rounded, isDark, primaryColor, isSmall),
+                                  _buildPillTab('outer', 'Outer', Icons.crop_free_rounded, isDark, Colors.deepPurple, isSmall),
+                                  _buildPillTab('inner', 'Inner', Icons.wifi_off_rounded, isDark, Colors.teal, isSmall),
+                                  _buildPillTab('limit_range', 'Limit', Icons.space_bar_rounded, isDark, Colors.orange, isSmall),
+                                ],
+                              );
+                            }
+                          ),
+                        ),
                         const SizedBox(height: 10),
                         Container(
                           height: isMobile
@@ -1165,6 +1211,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                           ),
                           clipBehavior: Clip.antiAlias,
                            child: FlutterMap(
+                             mapController: _editorMapController,
                              options: MapOptions(
                                initialCenter: _editorCenter(),
                                initialZoom: 18,
@@ -1399,22 +1446,48 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                Positioned(
                                  top: 10,
                                  right: 10,
-                                 child: ClipRRect(
-                                   borderRadius: BorderRadius.circular(10),
-                                   child: Container(
-                                     color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.8),
-                                     child: IconButton(
-                                       tooltip: _isMapExpanded ? 'Normal Size' : 'Full Size',
-                                       icon: Icon(
-                                         _isMapExpanded ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                         color: Colors.deepPurple,
-                                         size: 24,
-                                       ),
+                                 child: Column(
+                                   mainAxisSize: MainAxisSize.min,
+                                   children: [
+                                     _buildMapFloatingButton(
+                                       icon: Icons.my_location_rounded,
+                                       tooltip: 'Recenter Map',
                                        onPressed: () {
-                                         setState(() => _isMapExpanded = !_isMapExpanded);
+                                         _editorMapController.move(_editorCenter(), 18.0);
                                        },
+                                       isDark: isDark,
                                      ),
-                                   ),
+                                     const SizedBox(height: 8),
+                                     _buildMapFloatingButton(
+                                       icon: _useSatelliteView ? Icons.satellite_alt_rounded : Icons.map_rounded,
+                                       tooltip: 'Toggle Satellite View',
+                                       onPressed: () {
+                                         setState(() {
+                                           _useSatelliteView = !_useSatelliteView;
+                                         });
+                                       },
+                                       isDark: isDark,
+                                       active: _useSatelliteView,
+                                     ),
+                                     const SizedBox(height: 8),
+                                     _buildMapFloatingButton(
+                                       icon: Icons.undo_rounded,
+                                       tooltip: 'Undo Last Change',
+                                       onPressed: _history.isNotEmpty ? _undoLastChange : null,
+                                       isDark: isDark,
+                                     ),
+                                     const SizedBox(height: 8),
+                                     _buildMapFloatingButton(
+                                       icon: _isMapExpanded ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                                       tooltip: _isMapExpanded ? 'Normal Size' : 'Full Size',
+                                       onPressed: () {
+                                         setState(() {
+                                           _isMapExpanded = !_isMapExpanded;
+                                         });
+                                       },
+                                       isDark: isDark,
+                                     ),
+                                   ],
                                  ),
                                ),
                                Positioned(
@@ -1520,63 +1593,121 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                         ),
                       ),
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 12),
                         child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
+                          spacing: 10,
+                          runSpacing: 10,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            DropdownButton<int>(
-                              value: _selectedOuterBoundary,
-                              items: List.generate(
-                                _outerPolygonsStore.isEmpty
-                                    ? 1
-                                    : _outerPolygonsStore.length,
-                                (i) => DropdownMenuItem(
-                                  value: i,
-                                  child: Text('O-${i + 1}'),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: borderColor),
+                                color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.grey.shade50,
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int>(
+                                  value: _selectedOuterBoundary,
+                                  icon: const Icon(Icons.arrow_drop_down, size: 20, color: Colors.deepPurple),
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                  dropdownColor: cardBg,
+                                  items: List.generate(
+                                    _outerPolygonsStore.isEmpty ? 1 : _outerPolygonsStore.length,
+                                    (i) => DropdownMenuItem(
+                                      value: i,
+                                      child: Text('Outer ${i + 1}'),
+                                    ),
+                                  ),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _selectOuterBoundary(value);
+                                    }
+                                  },
                                 ),
                               ),
-                              onChanged: (value) {
-                                if (value != null) {
-                                  _selectOuterBoundary(value);
-                                }
-                              },
                             ),
                             OutlinedButton.icon(
                               onPressed: _addOuterBoundary,
                               icon: const Icon(Icons.add_rounded, size: 16),
                               label: const Text('New Outer'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.deepPurple,
+                                side: const BorderSide(color: Colors.deepPurple, width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
                             ),
                             OutlinedButton.icon(
                               onPressed: _deleteCurrentOuterBoundary,
-                              icon: const Icon(Icons.delete_outline, size: 16),
+                              icon: const Icon(Icons.delete_outline_rounded, size: 16),
                               label: const Text('Delete'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.redAccent,
+                                side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5), width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
                             ),
                           ],
                         ),
                       ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (int i = 0; i < _outerPolygon.length; i++)
-                              _buildPointRow(
-                                i,
-                                _outerPolygon[i],
-                                'outer',
-                                _outerPolygon.length > 3,
-                                isDark,
-                                cardBg,
-                                borderColor,
-                                labelColor,
-                                textColor,
+                       const Divider(height: 1),
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _outerPointsExpanded = !_outerPointsExpanded;
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Outer Boundary Points',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: textColor.withValues(alpha: 0.8),
+                                ),
                               ),
-                          ],
+                              Icon(
+                                _outerPointsExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                size: 20,
+                                color: subtitleColor,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                      if (_outerPointsExpanded) ...[
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (int i = 0; i < _outerPolygon.length; i++)
+                                _buildPointRow(
+                                  i,
+                                  _outerPolygon[i],
+                                  'outer',
+                                  _outerPolygon.length > 3,
+                                  isDark,
+                                  cardBg,
+                                  borderColor,
+                                  labelColor,
+                                  textColor,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1646,63 +1777,121 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                         ),
                       ),
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 12),
                         child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
+                          spacing: 10,
+                          runSpacing: 10,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            DropdownButton<int>(
-                              value: _selectedInnerBoundary,
-                              items: List.generate(
-                                _innerPolygonsStore.isEmpty
-                                    ? 1
-                                    : _innerPolygonsStore.length,
-                                (i) => DropdownMenuItem(
-                                  value: i,
-                                  child: Text('I-${i + 1}'),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: borderColor),
+                                color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.grey.shade50,
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int>(
+                                  value: _selectedInnerBoundary,
+                                  icon: const Icon(Icons.arrow_drop_down, size: 20, color: Colors.teal),
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                  dropdownColor: cardBg,
+                                  items: List.generate(
+                                    _innerPolygonsStore.isEmpty ? 1 : _innerPolygonsStore.length,
+                                    (i) => DropdownMenuItem(
+                                      value: i,
+                                      child: Text('Inner ${i + 1}'),
+                                    ),
+                                  ),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _selectInnerBoundary(value);
+                                    }
+                                  },
                                 ),
                               ),
-                              onChanged: (value) {
-                                if (value != null) {
-                                  _selectInnerBoundary(value);
-                                }
-                              },
                             ),
                             OutlinedButton.icon(
                               onPressed: _addInnerBoundary,
                               icon: const Icon(Icons.add_rounded, size: 16),
                               label: const Text('New Inner'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.teal,
+                                side: const BorderSide(color: Colors.teal, width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
                             ),
                             OutlinedButton.icon(
                               onPressed: _deleteCurrentInnerBoundary,
-                              icon: const Icon(Icons.delete_outline, size: 16),
+                              icon: const Icon(Icons.delete_outline_rounded, size: 16),
                               label: const Text('Delete'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.redAccent,
+                                side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5), width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
                             ),
                           ],
                         ),
                       ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (int i = 0; i < _innerPolygon.length; i++)
-                              _buildPointRow(
-                                i,
-                                _innerPolygon[i],
-                                'inner',
-                                _innerPolygon.length > 3,
-                                isDark,
-                                cardBg,
-                                borderColor,
-                                labelColor,
-                                textColor,
+                       const Divider(height: 1),
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _innerPointsExpanded = !_innerPointsExpanded;
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Inner Boundary Points',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: textColor.withValues(alpha: 0.8),
+                                ),
                               ),
-                          ],
+                              Icon(
+                                _innerPointsExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                size: 20,
+                                color: subtitleColor,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                      if (_innerPointsExpanded) ...[
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (int i = 0; i < _innerPolygon.length; i++)
+                                _buildPointRow(
+                                  i,
+                                  _innerPolygon[i],
+                                  'inner',
+                                  _innerPolygon.length > 3,
+                                  isDark,
+                                  cardBg,
+                                  borderColor,
+                                  labelColor,
+                                  textColor,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1723,57 +1912,45 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
+                        padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                              'Movement Limit (${_limitRangePolygonsStore.length} Boundaries)',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: textColor,
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(
+                                Icons.space_bar_rounded,
+                                color: Colors.orange,
+                                size: 20,
                               ),
                             ),
-                            if (_limitRangePolygonsStore.length > 1)
-                              DropdownButton<int>(
-                                value: _selectedLimitRangeBoundary,
-                                items: List.generate(
-                                  _limitRangePolygonsStore.length,
-                                  (idx) => DropdownMenuItem(
-                                    value: idx,
-                                    child: Text(
-                                      'L-${idx + 1}',
-                                      style: TextStyle(
-                                        color: textColor,
-                                        fontSize: 14,
-                                      ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Movement Limit',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                      color: textColor,
                                     ),
                                   ),
-                                ),
-                                onChanged: (val) {
-                                  if (val != null) {
-                                    _selectLimitRangeBoundary(val);
-                                  }
-                                },
-                                underline: const SizedBox(),
+                                  Text(
+                                    'Allowed boundary limits  •  ${_limitRangePolygon.length} points',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: subtitleColor,
+                                    ),
+                                  ),
+                                ],
                               ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        child: Wrap(
-                          spacing: 8,
-                          children: [
-                            OutlinedButton.icon(
+                            ),
+                            TextButton.icon(
                               onPressed: () {
                                 setState(() {
                                   _limitRangePolygon = [
@@ -1782,43 +1959,132 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                   ];
                                 });
                               },
-                              icon: const Icon(Icons.add_location_alt_outlined, size: 16),
-                              label: const Text('Add Point'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: _addLimitRangeBoundary,
-                              icon: const Icon(Icons.add_rounded, size: 16),
-                              label: const Text('New Limit'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: _deleteCurrentLimitRangeBoundary,
-                              icon: const Icon(Icons.delete_outline, size: 16),
-                              label: const Text('Delete'),
+                              icon: const Icon(Icons.add, size: 16),
+                              label: const Text('Add'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.orange,
+                              ),
                             ),
                           ],
                         ),
                       ),
                       const Divider(height: 1),
                       Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                        padding: const EdgeInsets.fromLTRB(16, 0, 12, 12),
+                        child: Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            for (int i = 0; i < _limitRangePolygon.length; i++)
-                              _buildPointRow(
-                                i,
-                                _limitRangePolygon[i],
-                                'limit_range',
-                                _limitRangePolygon.length > 3,
-                                isDark,
-                                cardBg,
-                                borderColor,
-                                labelColor,
-                                textColor,
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: borderColor),
+                                color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.grey.shade50,
                               ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<int>(
+                                  value: _selectedLimitRangeBoundary,
+                                  icon: const Icon(Icons.arrow_drop_down, size: 20, color: Colors.orange),
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                  dropdownColor: cardBg,
+                                  items: List.generate(
+                                    _limitRangePolygonsStore.isEmpty ? 1 : _limitRangePolygonsStore.length,
+                                    (i) => DropdownMenuItem(
+                                      value: i,
+                                      child: Text('Limit ${i + 1}'),
+                                    ),
+                                  ),
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      _selectLimitRangeBoundary(value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _addLimitRangeBoundary,
+                              icon: const Icon(Icons.add_rounded, size: 16),
+                              label: const Text('New Limit'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.orange,
+                                side: const BorderSide(color: Colors.orange, width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _deleteCurrentLimitRangeBoundary,
+                              icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                              label: const Text('Delete'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.redAccent,
+                                side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5), width: 1),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                            ),
                           ],
                         ),
                       ),
+                       const Divider(height: 1),
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _limitPointsExpanded = !_limitPointsExpanded;
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Limit Range Points',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: textColor.withValues(alpha: 0.8),
+                                ),
+                              ),
+                              Icon(
+                                _limitPointsExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                size: 20,
+                                color: subtitleColor,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (_limitPointsExpanded) ...[
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (int i = 0; i < _limitRangePolygon.length; i++)
+                                _buildPointRow(
+                                  i,
+                                  _limitRangePolygon[i],
+                                  'limit_range',
+                                  _limitRangePolygon.length > 3,
+                                  isDark,
+                                  cardBg,
+                                  borderColor,
+                                  labelColor,
+                                  textColor,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -2895,6 +3161,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     'CCL Management',
     'Live Locations',
     'Academics',
+    'Attendance Log',
     'Settings',
   ];
 
@@ -2912,6 +3179,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       CCLManagementPage(token: widget.token),
       LiveLocationsTab(token: widget.token),
       AcademicsSettingsPage(token: widget.token),
+      AttendanceLogTab(token: widget.token, user: widget.user),
       SettingsTab(token: widget.token),
     ]);
   }
@@ -3026,6 +3294,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                   CCLManagementPage(token: widget.token),
                   LiveLocationsTab(token: widget.token),
                   AcademicsSettingsPage(token: widget.token),
+                  AttendanceLogTab(token: widget.token, user: widget.user),
                   SettingsTab(token: widget.token),
                 ]);
               }
@@ -3156,6 +3425,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       NavigationRailDestination(
                         icon: Icon(Icons.school),
                         label: Text('Academics'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.history_edu),
+                        label: Text('Attendance Log'),
                       ),
                       NavigationRailDestination(
                         icon: Icon(Icons.settings),
@@ -3296,7 +3569,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               Icons.school_outlined,
             ),
             _buildDrawerItem(
-              9,
+              10,
+              Icons.history_edu_rounded,
+              'Attendance Log',
+              Icons.history_edu_outlined,
+            ),
+            _buildDrawerItem(
+              11,
               Icons.settings_rounded,
               'Settings',
               Icons.settings_outlined,
@@ -6377,6 +6656,7 @@ class _DashboardTabState extends State<DashboardTab> {
                           final titleSize = isSmallScreen ? 13.0 : 14.0;
                           final subtitleSize = isSmallScreen ? 11.0 : 12.0;
                           final trailingSize = isSmallScreen ? 10.0 : 12.0;
+                          final isAbsent = record['status'] == 'Absent';
                           return ListTile(
                             contentPadding: EdgeInsets.symmetric(
                               horizontal: isSmallScreen ? 8.0 : 12.0,
@@ -6384,24 +6664,45 @@ class _DashboardTabState extends State<DashboardTab> {
                             ),
                             leading: CircleAvatar(
                               radius: avatarRadius,
-                              backgroundColor: adminAccent.withValues(
-                                alpha: 0.1,
-                              ),
+                              backgroundColor: isAbsent 
+                                  ? Colors.red.withValues(alpha: 0.1)
+                                  : adminAccent.withValues(alpha: 0.1),
                               child: Icon(
-                                Icons.person,
+                                isAbsent ? Icons.cancel : Icons.person,
                                 size: avatarIconSize,
-                                color: adminAccent,
+                                color: isAbsent ? Colors.red : adminAccent,
                               ),
                             ),
-                            title: Text(
-                              record['name'] ?? 'Unknown',
-                              style: TextStyle(fontSize: titleSize),
-                              overflow: TextOverflow.ellipsis,
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    record['name'] ?? 'Unknown',
+                                    style: TextStyle(fontSize: titleSize),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (isAbsent)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      'Absent',
+                                      style: TextStyle(color: Colors.red, fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                              ],
                             ),
                             subtitle: Text(
-                              '${record['reg_no']} • ${record['dept']}',
+                              isAbsent
+                                  ? '${record['reg_no']} • ${record['dept']}\nReason: ${record['absent_reason'] ?? 'System marked absent'}'
+                                  : '${record['reg_no']} • ${record['dept']}',
                               style: TextStyle(fontSize: subtitleSize),
                               overflow: TextOverflow.ellipsis,
+                              maxLines: isAbsent ? 2 : 1,
                             ),
                             trailing: Text(
                               when,
@@ -16718,17 +17019,19 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
   List<LatLng> _trailPoints = [];
   bool _isTrailLoading = false;
   bool _outPermissionEnabledForSelected = false;
+  bool _isTrackingInstant = false;
 
   // New Filters
   String _selectedDepartment = 'All Departments';
   bool _onlyBreaches = false;
+  DateTime _selectedDate = DateTime.now();
 
   @override
   void initState() {
     super.initState();
     _filteredLocations = [];
     _fetchLocations();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+    _refreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
       _fetchLocations(silent: true);
     });
   }
@@ -16841,9 +17144,19 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
       _isTrailLoading = true;
     });
 
+    await _fetchUserHistory(regNo);
+  }
+
+  Future<void> _fetchUserHistory(String regNo) async {
+    setState(() {
+      _isTrailLoading = true;
+      _trailPoints = [];
+    });
+
+    final dateStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}";
     try {
       final response = await apiClient.get(
-        '$API_URL/admin/locations/history?reg_no=$regNo&limit=1000',
+        '$API_URL/admin/locations/history?reg_no=$regNo&date=$dateStr&limit=1000',
         token: widget.token,
       );
       if (response.statusCode == 200) {
@@ -16897,6 +17210,67 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
         );
       }
     } catch (_) {}
+  }
+
+  Future<void> _trackUserInstant(String regNo) async {
+    if (_isTrackingInstant) return;
+    setState(() {
+      _isTrackingInstant = true;
+    });
+
+    try {
+      final response = await apiClient.post(
+        '$API_URL/admin/locations/force-update/$regNo',
+        token: widget.token,
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Instant location update requested! Contacting device...'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 4),
+          ),
+        );
+
+        // Poll for updates every 3 seconds for 15 seconds
+        int attempts = 0;
+        Timer.periodic(const Duration(seconds: 3), (timer) async {
+          attempts++;
+          if (attempts >= 5 || !mounted) {
+            timer.cancel();
+            if (mounted) {
+              setState(() {
+                _isTrackingInstant = false;
+              });
+            }
+            return;
+          }
+          await _fetchLocations(silent: true);
+        });
+      } else {
+        setState(() {
+          _isTrackingInstant = false;
+        });
+        final bodyData = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to request update: ${bodyData['detail'] ?? response.body}'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isTrackingInstant = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   LatLng _mapCenter() {
@@ -17112,6 +17486,36 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                 onSelected: (val) {
                   setState(() => _onlyBreaches = val);
                   _filterLocations();
+                },
+              ),
+              const SizedBox(width: 8),
+              FilterChip(
+                label: Text(
+                  "${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}",
+                  style: const TextStyle(fontSize: 12),
+                ),
+                selected: _selectedDate.day != DateTime.now().day ||
+                    _selectedDate.month != DateTime.now().month ||
+                    _selectedDate.year != DateTime.now().year,
+                selectedColor: primaryColor.withValues(alpha: 0.25),
+                checkmarkColor: primaryColor,
+                avatar: Icon(Icons.calendar_month_rounded, size: 16, color: primaryColor),
+                labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+                onSelected: (val) async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime.now().subtract(const Duration(days: 90)),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _selectedDate = picked;
+                    });
+                    if (_selectedUserRegNo != null) {
+                      _fetchUserHistory(_selectedUserRegNo!);
+                    }
+                  }
                 },
               )
             ],
@@ -17510,6 +17914,24 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: [
+                                _isTrackingInstant
+                                    ? const Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: 12),
+                                        child: SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.deepPurpleAccent),
+                                        ),
+                                      )
+                                    : TextButton.icon(
+                                        onPressed: () => _trackUserInstant(regNo),
+                                        icon: const Icon(Icons.gps_fixed, size: 16, color: Colors.teal),
+                                        label: const Text(
+                                          'Track Instant',
+                                          style: TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                const SizedBox(width: 8),
                                 TextButton.icon(
                                   onPressed: () async {
                                     final dynamic result = await Navigator.push(
@@ -17893,11 +18315,10 @@ class _UserTrackingDetailPageState extends State<UserTrackingDetailPage> {
                       final log = (_playbackIndex >= 0 && _playbackIndex < _chronologicalHistory.length) 
                           ? _chronologicalHistory[_playbackIndex] 
                           : null;
-                      final dt = log != null && log['captured_at'] != null 
-                          ? DateTime.tryParse(log['captured_at'].toString()) 
-                          : null;
-                      final timeStr = dt != null 
-                          ? '${dt.toLocal().hour.toString().padLeft(2, '0')}:${dt.toLocal().minute.toString().padLeft(2, '0')}' 
+                      final dt = log != null ? DateTime.tryParse(log['captured_at']?.toString() ?? '') : null;
+                      final istDt = dt?.toUtc().add(const Duration(hours: 5, minutes: 30));
+                      final timeStr = istDt != null
+                          ? '${istDt.hour.toString().padLeft(2, '0')}:${istDt.minute.toString().padLeft(2, '0')}'
                           : 'n/a';
                       final speedVal = log != null 
                           ? (double.tryParse(log['speed_mps']?.toString() ?? '') ?? 0.0) 
@@ -18192,11 +18613,10 @@ class _UserTrackingDetailPageState extends State<UserTrackingDetailPage> {
                             const Center(child: Text('No historical tracking coordinates today.'))
                           else
                             ..._history.map((log) {
-                              final dt = log['captured_at'] != null 
-                                  ? DateTime.tryParse(log['captured_at'].toString()) 
-                                  : null;
-                              final time = dt != null 
-                                  ? '${dt.toLocal().hour.toString().padLeft(2, '0')}:${dt.toLocal().minute.toString().padLeft(2, '0')}' 
+                              final dt = DateTime.tryParse(log['captured_at']?.toString() ?? '');
+                              final istDt = dt?.toUtc().add(const Duration(hours: 5, minutes: 30));
+                              final time = istDt != null
+                                  ? '${istDt.hour.toString().padLeft(2, '0')}:${istDt.minute.toString().padLeft(2, '0')}'
                                   : 'n/a';
                               final accuracy = log['accuracy_meters']?.toString() ?? 'n/a';
                               final speedVal = double.tryParse(log['speed_mps']?.toString() ?? '') ?? 0.0;
@@ -18770,7 +19190,6 @@ class _SettingsTabState extends State<SettingsTab> {
       context: context,
       builder: (context) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
-        const accent = Color(0xFF007AFF);
         String? errorText;
 
         return StatefulBuilder(

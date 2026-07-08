@@ -87,14 +87,14 @@ TEXTURE_THRESHOLD = 0.03
 MIN_MOVEMENT = 0.002
 MAX_MOVEMENT = 0.8
 # Anti-spoofing enabled by default
-ANTISPOOFING_ENABLED = True
+ANTISPOOFING_ENABLED = False
 # If True, blocks suspected photos. If False, only logs warnings
 ANTISPOOF_STRICT_MODE = False
 # Face profile adaptation/training configuration
 INSIGHTFACE_BASE_THRESHOLD = 0.68
 # Accept near-boundary live matches to reduce false rejects from minor
 # capture variance (motion blur/lighting) while keeping a strict main threshold.
-INSIGHTFACE_NEAR_MATCH_MARGIN = 0.012
+INSIGHTFACE_NEAR_MATCH_MARGIN = 0.060
 FALLBACK_BASE_THRESHOLD = 0.95
 MAX_PROFILE_SAMPLES = 24
 PROFILE_SAMPLE_MIN_CONFIDENCE = 0.78
@@ -1846,51 +1846,57 @@ async def save_attendance_duration_settings(request: Request):
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid time format: {time_str}")
 
-    # Validate against active CCL settings
-    cursor.execute("SELECT key, value FROM ccl_settings")
-    ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-    early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-    late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+    # Validate against custom CCL settings
+    cursor.execute("""
+        SELECT ccl_date, early_enabled, early_start, early_end, late_enabled, late_start, late_end 
+        FROM ccl_custom_dates
+    """)
+    custom_dates = cursor.fetchall()
 
-    if early_enabled or late_enabled:
-        early_start_str = ccl_settings.get("early_check_in_start", "07:00")
-        early_end_str = ccl_settings.get("early_check_in_end", "08:00")
-        late_start_str = ccl_settings.get("late_check_out_start", "17:00")
-        late_end_str = ccl_settings.get("late_check_out_end", "18:00")
+    for setting in settings:
+        slot_number = setting.get("slot_number")
+        start_time = setting.get("start_time")
+        duration_minutes = int(setting.get("duration_minutes", 30))
+        slot_type = setting.get("slot_type", "check_in")
+        is_enabled_val = setting.get("is_enabled", True)
+        is_enabled = (
+            is_enabled_val is True
+            or is_enabled_val == 1
+            or is_enabled_val == "true"
+        )
 
-        ccl_early_start = to_minutes(early_start_str)
-        ccl_early_end = to_minutes(early_end_str)
-        ccl_late_start = to_minutes(late_start_str)
-        ccl_late_end = to_minutes(late_end_str)
+        if not slot_number or not start_time or not is_enabled:
+            continue
 
-        for setting in settings:
-            slot_number = setting.get("slot_number")
-            start_time = setting.get("start_time")
-            duration_minutes = int(setting.get("duration_minutes", 30))
-            slot_type = setting.get("slot_type", "check_in")
-            is_enabled_val = setting.get("is_enabled", True)
-            is_enabled = (
-                is_enabled_val is True
-                or is_enabled_val == 1
-                or is_enabled_val == "true"
-            )
+        slot_start_min = to_minutes(start_time)
+        slot_end_min = slot_start_min + duration_minutes
 
-            if not slot_number or not start_time or not is_enabled:
-                continue
+        for c_date in custom_dates:
+            c_date_str = c_date[0]
+            if not isinstance(c_date_str, str):
+                c_date_str = c_date_str.strftime("%Y-%m-%d")
+            c_early_enabled = bool(c_date[1])
+            c_early_start = c_date[2] or "07:00"
+            c_early_end = c_date[3] or "08:00"
+            c_late_enabled = bool(c_date[4])
+            c_late_start = c_date[5] or "17:00"
+            c_late_end = c_date[6] or "18:00"
 
-            slot_start_min = to_minutes(start_time)
-            slot_end_min = slot_start_min + duration_minutes
+            ccl_early_start = to_minutes(c_early_start)
+            ccl_early_end = to_minutes(c_early_end)
+            ccl_late_start = to_minutes(c_late_start)
+            ccl_late_end = to_minutes(c_late_end)
 
-            if slot_type == "check_in" and early_enabled:
+            if slot_type == "check_in" and c_early_enabled:
                 if max(ccl_early_start, slot_start_min) < min(ccl_early_end, slot_end_min):
                     err_msg = (f"The Check-In Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
-                               f"the active Early Check-In CCL window ({early_start_str} - {early_end_str}). "
+                               f"the Early Check-In CCL window ({c_early_start} - {c_early_end}) configured for {c_date_str}. "
                                f"Please set the slot timing outside the CCL window.")
                     raise HTTPException(status_code=400, detail=err_msg)
-            elif slot_type == "check_out" and late_enabled:
+            elif slot_type == "check_out" and c_late_enabled:
                 if max(ccl_late_start, slot_start_min) < min(ccl_late_end, slot_end_min):
                     err_msg = (f"The Check-Out Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
-                               f"the active Late Check-Out CCL window ({late_start_str} - {late_end_str}). "
+                               f"the Late Check-Out CCL window ({c_late_start} - {c_late_end}) configured for {c_date_str}. "
                                f"Please set the slot timing outside the CCL window.")
                     raise HTTPException(status_code=400, detail=err_msg)
 
@@ -1966,15 +1972,13 @@ async def check_attendance_window():
     if not rows:
         ccl_slot_type = get_active_ccl_slot_type()
         if ccl_slot_type:
-            cursor.execute("SELECT key, value FROM ccl_settings")
-            ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-            
+            settings = get_ccl_settings_for_date()
             if ccl_slot_type == "check_in":
-                start_time = ccl_settings.get("early_check_in_start", "07:00")
-                end_time = ccl_settings.get("early_check_in_end", "08:00")
+                start_time = settings.get("early_check_in_start", "07:00")
+                end_time = settings.get("early_check_in_end", "08:00")
             else:
-                start_time = ccl_settings.get("late_check_out_start", "17:00")
-                end_time = ccl_settings.get("late_check_out_end", "18:00")
+                start_time = settings.get("late_check_out_start", "17:00")
+                end_time = settings.get("late_check_out_end", "18:00")
                 
             def time_to_min(t_str):
                 p = t_str.split(":")
@@ -1994,10 +1998,9 @@ async def check_attendance_window():
                 "remaining_minutes": remaining,
             }
             
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if early_enabled or late_enabled:
             return {
@@ -2048,15 +2051,13 @@ async def check_attendance_window():
     # If not in normal slot, check active CCL slot
     ccl_slot_type = get_active_ccl_slot_type()
     if ccl_slot_type:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        
+        settings = get_ccl_settings_for_date()
         if ccl_slot_type == "check_in":
-            start_time = ccl_settings.get("early_check_in_start", "07:00")
-            end_time = ccl_settings.get("early_check_in_end", "08:00")
+            start_time = settings.get("early_check_in_start", "07:00")
+            end_time = settings.get("early_check_in_end", "08:00")
         else:
-            start_time = ccl_settings.get("late_check_out_start", "17:00")
-            end_time = ccl_settings.get("late_check_out_end", "18:00")
+            start_time = settings.get("late_check_out_start", "17:00")
+            end_time = settings.get("late_check_out_end", "18:00")
             
         def time_to_min(t_str):
             p = t_str.split(":")
@@ -2121,6 +2122,144 @@ async def get_ccl_settings(request: Request):
             "late_check_out_end": settings.get("late_check_out_end", "18:00")
         }
     }
+
+
+@app.get("/admin/ccl/custom-dates")
+async def get_ccl_custom_dates(request: Request):
+    """Get all custom CCL dates - Admin only"""
+    verify_admin_token(request)
+    try:
+        cursor.execute("""
+            SELECT id, ccl_date, early_enabled, early_start, early_end, early_duration, late_enabled, late_start, late_end, late_duration 
+            FROM ccl_custom_dates 
+            ORDER BY ccl_date ASC
+        """)
+        rows = cursor.fetchall()
+        
+        custom_dates = []
+        for r in rows:
+            date_val = r[1]
+            if not isinstance(date_val, str):
+                date_val = date_val.strftime("%Y-%m-%d")
+            custom_dates.append({
+                "id": r[0],
+                "date": date_val,
+                "early_enabled": bool(r[2]),
+                "early_start": r[3] or "07:00",
+                "early_end": r[4] or "08:00",
+                "early_duration": r[5] or 60,
+                "late_enabled": bool(r[6]),
+                "late_start": r[7] or "17:00",
+                "late_end": r[8] or "18:00",
+                "late_duration": r[9] or 60
+            })
+        return {"success": True, "data": custom_dates}
+    except Exception as e:
+        print(f"[CCL CUSTOM DATES GET ERROR] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch custom dates: {e}")
+
+
+@app.post("/admin/ccl/custom-dates")
+async def save_ccl_custom_dates(request: Request):
+    """Save or update custom CCL dates (handles batch) - Admin only"""
+    verify_admin_token(request)
+    try:
+        body = await request.json()
+        print(f"[CCL CUSTOM DATES POST] Received body: {body}")
+        
+        dates = body.get("dates", [])
+        early_enabled = body.get("early_enabled", False)
+        early_start = body.get("early_start", "07:00")
+        early_end = body.get("early_end", "08:00")
+        early_duration = body.get("early_duration", 60)
+        late_enabled = body.get("late_enabled", False)
+        late_start = body.get("late_start", "17:00")
+        late_end = body.get("late_end", "18:00")
+        late_duration = body.get("late_duration", 60)
+        
+        def to_minutes(time_str):
+            try:
+                parts = time_str.split(":")
+                return int(parts[0]) * 60 + int(parts[1])
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Invalid time format: {time_str}")
+
+        if to_minutes(early_start) >= to_minutes(early_end):
+            raise HTTPException(status_code=400, detail="Early check-in start must be before end time")
+        if to_minutes(late_start) >= to_minutes(late_end):
+            raise HTTPException(status_code=400, detail="Late check-out start must be before end time")
+
+        # Validate against duration settings (normal timing)
+        if early_enabled or late_enabled:
+            cursor.execute("""
+                SELECT slot_number, start_time, duration_minutes, slot_type 
+                FROM attendance_duration_settings 
+                WHERE is_enabled = 1
+            """)
+            duration_slots = cursor.fetchall()
+            
+            ccl_early_start = to_minutes(early_start)
+            ccl_early_end = to_minutes(early_end)
+            ccl_late_start = to_minutes(late_start)
+            ccl_late_end = to_minutes(late_end)
+            
+            for slot in duration_slots:
+                slot_num = slot[0]
+                slot_start_time = slot[1]
+                slot_dur = slot[2]
+                slot_type = slot[3] or "check_in"
+                
+                slot_start_min = to_minutes(slot_start_time)
+                slot_end_min = slot_start_min + slot_dur
+                
+                # Check overlap logic
+                if slot_type == "check_in" and early_enabled:
+                    if max(ccl_early_start, slot_start_min) < min(ccl_early_end, slot_end_min):
+                        err_msg = (f"The proposed Early Check-In window ({early_start} - {early_end}) overlaps with "
+                                   f"normal Check-In Slot {slot_num} ({slot_start_time} - {slot_start_time} + {slot_dur}m). "
+                                   f"Please set the CCL early timing outside normal check-in timing.")
+                        raise HTTPException(status_code=400, detail=err_msg)
+                elif slot_type == "check_out" and late_enabled:
+                    if max(ccl_late_start, slot_start_min) < min(ccl_late_end, slot_end_min):
+                        err_msg = (f"The proposed Late Check-Out window ({late_start} - {late_end}) overlaps with "
+                                   f"normal Check-Out Slot {slot_num} ({slot_start_time} - {slot_start_time} + {slot_dur}m). "
+                                   f"Please set the CCL late timing outside normal check-out timing.")
+                        raise HTTPException(status_code=400, detail=err_msg)
+
+        for d_str in dates:
+            cursor.execute("""
+                INSERT INTO ccl_custom_dates 
+                (ccl_date, early_enabled, early_start, early_end, early_duration, late_enabled, late_start, late_end, late_duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (ccl_date) DO UPDATE SET
+                    early_enabled = EXCLUDED.early_enabled,
+                    early_start = EXCLUDED.early_start,
+                    early_end = EXCLUDED.early_end,
+                    early_duration = EXCLUDED.early_duration,
+                    late_enabled = EXCLUDED.late_enabled,
+                    late_start = EXCLUDED.late_start,
+                    late_end = EXCLUDED.late_end,
+                    late_duration = EXCLUDED.late_duration
+            """, (d_str, early_enabled, early_start, early_end, early_duration, late_enabled, late_start, late_end, late_duration))
+            
+        return {"success": True, "message": f"Successfully saved settings for {len(dates)} dates."}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"[CCL CUSTOM DATES POST ERROR] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save custom dates: {e}")
+
+
+@app.delete("/admin/ccl/custom-dates/{date_str}")
+async def delete_ccl_custom_date(date_str: str, request: Request):
+    """Delete custom CCL date settings - Admin only"""
+    verify_admin_token(request)
+    try:
+        cursor.execute("DELETE FROM ccl_custom_dates WHERE ccl_date = ?", (date_str,))
+        return {"success": True, "message": f"Successfully deleted custom settings for {date_str}."}
+    except Exception as e:
+        print(f"[CCL CUSTOM DATES DELETE ERROR] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete custom date: {e}")
 
 
 @app.post("/admin/ccl/settings")
@@ -2223,39 +2362,43 @@ async def get_ccl_balances(request: Request):
     """Get all staff members' Earned Leave (CCL) balances - Admin only"""
     verify_admin_token(request)
     
-    # Ensure everyone in users and other_staff is in earned_leave
-    cursor.execute("""
-        SELECT reg_no, name, dept, role FROM users WHERE role IN ('hod', 'staff')
-        UNION ALL
-        SELECT reg_no, name, dept, role FROM other_staff
-    """)
-    all_users = cursor.fetchall()
-    
-    # Initialize missing balances
-    for row in all_users:
-        reg_no, name, dept, role = row
-        cursor.execute("SELECT 1 FROM earned_leave WHERE reg_no = ?", (reg_no,))
-        if not cursor.fetchone():
-            cursor.execute("""
-                INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
-                VALUES (?, ?, ?, ?, 0.0)
-            """, (reg_no, name, dept, role))
-            
-    cursor.execute("SELECT reg_no, user_name, dept, role, balance, updated_at FROM earned_leave ORDER BY dept, user_name")
-    rows = cursor.fetchall()
-    
-    balances = []
-    for row in rows:
-        balances.append({
-            "reg_no": row[0],
-            "name": row[1],
-            "dept": row[2],
-            "role": row[3],
-            "balance": float(row[4]),
-            "updated_at": row[5]
-        })
+    try:
+        # Ensure everyone in users and other_staff is in earned_leave
+        cursor.execute("""
+            SELECT reg_no, name, dept, role FROM users WHERE role IN ('hod', 'staff')
+            UNION ALL
+            SELECT reg_no, name, dept, role FROM other_staff
+        """)
+        all_users = cursor.fetchall()
         
-    return {"success": True, "data": balances}
+        # Initialize missing balances
+        for row in all_users:
+            reg_no, name, dept, role = row
+            cursor.execute("SELECT 1 FROM earned_leave WHERE reg_no = %s", (reg_no,))
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+                    VALUES (%s, %s, %s, %s, 0.0)
+                """, (reg_no, name, dept, role))
+                
+        cursor.execute("SELECT reg_no, user_name, dept, role, balance, updated_at FROM earned_leave ORDER BY dept, user_name")
+        rows = cursor.fetchall()
+        
+        balances = []
+        for row in rows:
+            balances.append({
+                "reg_no": row[0],
+                "name": row[1],
+                "dept": row[2],
+                "role": row[3],
+                "balance": float(row[4]) if row[4] is not None else 0.0,
+                "updated_at": str(row[5]) if row[5] else None
+            })
+            
+        return {"success": True, "data": balances}
+    except Exception as e:
+        print(f"ERROR in get_ccl_balances: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load balances: {str(e)}")
 
 
 @app.post("/admin/ccl/adjust")
@@ -2267,13 +2410,14 @@ async def adjust_ccl_balance(request: Request):
         body = await request.json()
         reg_no = body.get("reg_no")
         adjustment = float(body.get("adjustment", 0.0))
-        balance = body.get("balance")
+        balance = body.get("balance") if body.get("balance") is not None else body.get("new_balance")
     except:
         raise HTTPException(status_code=400, detail="Invalid request body")
         
     if not reg_no:
         raise HTTPException(status_code=400, detail="reg_no is required")
-        
+
+
     # Get user info
     cursor.execute("SELECT name, dept, role FROM users WHERE reg_no = ?", (reg_no,))
     user = cursor.fetchone()
@@ -2306,11 +2450,27 @@ async def adjust_ccl_balance(request: Request):
     if new_bal < 0:
         new_bal = 0.0
         
+    eff_adjustment = new_bal - current_bal
+    
     cursor.execute("""
         UPDATE earned_leave 
         SET balance = ?, updated_at = CURRENT_TIMESTAMP
         WHERE reg_no = ?
     """, (new_bal, reg_no))
+    
+    if eff_adjustment != 0.0:
+        cursor.execute("""
+            INSERT INTO ccl_earned_history (reg_no, name, dept, date, time, slot_type, earned_points)
+            VALUES (?, ?, ?, ?, ?, 'adjustment', ?)
+        """, (
+            reg_no, 
+            name, 
+            dept, 
+            datetime.now().strftime("%Y-%m-%d"), 
+            datetime.now().strftime("%H:%M:%S"), 
+            eff_adjustment
+        ))
+        
     conn.commit()
     
     return {
@@ -2321,6 +2481,78 @@ async def adjust_ccl_balance(request: Request):
             "balance": new_bal
         }
     }
+
+
+@app.delete("/admin/ccl/balances/{reg_no}")
+async def delete_ccl_balance(request: Request, reg_no: str):
+    """Delete (or reset) a user's Earned Leave (CCL) balance - Admin only"""
+    verify_admin_token(request)
+    
+    try:
+        cursor.execute("DELETE FROM earned_leave WHERE reg_no = ?", (reg_no,))
+        conn.commit()
+        return {"success": True, "message": f"CCL Balance record deleted for user {reg_no}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete record: {str(e)}")
+
+
+@app.post("/admin/ccl/sync")
+async def sync_ccl_balances(request: Request):
+    """Synchronize CCL balances and history, ensuring no discrepancies - Admin only"""
+    verify_admin_token(request)
+    
+    try:
+        # 1. Ensure all users exist in earned_leave
+        cursor.execute("""
+            SELECT reg_no, name, dept, role FROM users WHERE role IN ('hod', 'staff')
+            UNION ALL
+            SELECT reg_no, name, dept, role FROM other_staff
+        """)
+        all_users = cursor.fetchall()
+        
+        for row in all_users:
+            reg_no, name, dept, role = row
+            cursor.execute("SELECT 1 FROM earned_leave WHERE reg_no = ?", (reg_no,))
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO earned_leave (reg_no, user_name, dept, role, balance)
+                    VALUES (?, ?, ?, ?, 0.0)
+                """, (reg_no, name, dept, role))
+                
+        # 2. Get history sums
+        cursor.execute("""
+            SELECT reg_no, COALESCE(SUM(earned_points), 0.0) 
+            FROM ccl_earned_history 
+            GROUP BY reg_no
+        """)
+        history_sums = {r[0]: float(r[1]) for r in cursor.fetchall()}
+        
+        # 3. Get current balances
+        cursor.execute("SELECT reg_no, user_name, dept, balance FROM earned_leave")
+        balances = cursor.fetchall()
+        
+        sync_count = 0
+        now_date = datetime.now().strftime("%Y-%m-%d")
+        now_time = datetime.now().strftime("%H:%M:%S")
+        
+        for row in balances:
+            reg_no, name, dept, bal = row
+            bal = float(bal)
+            hist_sum = history_sums.get(reg_no, 0.0)
+            
+            if abs(bal - hist_sum) > 0.001:
+                # Update earned_leave balance to match history sum
+                cursor.execute("""
+                    UPDATE earned_leave
+                    SET balance = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE reg_no = ?
+                """, (hist_sum, reg_no))
+                sync_count += 1
+                
+        conn.commit()
+        return {"success": True, "message": f"Successfully synchronized {sync_count} user balances with history."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 
 @app.get("/admin/ccl/history")
@@ -2614,7 +2846,7 @@ def delete_user_data_by_reg_no(reg_no: str):
     cursor.execute("DELETE FROM daily_attendance_status WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM casual_leave WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM user_location_logs WHERE reg_no = ?", (reg_no,))
+    # cursor.execute("DELETE FROM user_location_logs WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM other_staff_attendance WHERE reg_no = ?", (reg_no,))
     cursor.execute("DELETE FROM leave_requests WHERE user_reg_no = ?", (reg_no,))
@@ -3341,7 +3573,8 @@ def _run_ddl():
             is_mocked BOOLEAN DEFAULT FALSE,
             device_id VARCHAR(120),
             captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            force_update_requested BOOLEAN DEFAULT FALSE
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_latest_locations_last_seen ON user_latest_locations (last_seen_at DESC)")
@@ -3400,6 +3633,7 @@ def _run_ddl():
         "ALTER TABLE user_latest_locations ADD COLUMN IF NOT EXISTS boundary_warning BOOLEAN DEFAULT FALSE",
         "ALTER TABLE user_latest_locations ADD COLUMN IF NOT EXISTS warning_message VARCHAR(255)",
         "ALTER TABLE user_latest_locations ADD COLUMN IF NOT EXISTS first_left_boundary_at TIMESTAMP",
+        "ALTER TABLE user_latest_locations ADD COLUMN IF NOT EXISTS force_update_requested BOOLEAN DEFAULT FALSE",
         "ALTER TABLE user_location_logs ADD COLUMN IF NOT EXISTS boundary_warning BOOLEAN DEFAULT FALSE",
         "ALTER TABLE user_location_logs ADD COLUMN IF NOT EXISTS warning_message VARCHAR(255)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
@@ -3409,6 +3643,7 @@ def _run_ddl():
         "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS slot_type VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE other_staff_attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
+        "ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS absent_reason VARCHAR(255)",
     ]:
         try:
             cursor.execute(col_sql)
@@ -3474,6 +3709,20 @@ def _run_ddl():
         CREATE TABLE IF NOT EXISTS ccl_settings (
             key VARCHAR(50) PRIMARY KEY,
             value VARCHAR(255)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ccl_custom_dates (
+            id SERIAL PRIMARY KEY,
+            ccl_date DATE UNIQUE NOT NULL,
+            early_enabled BOOLEAN DEFAULT FALSE,
+            early_start VARCHAR(5) DEFAULT '07:00',
+            early_end VARCHAR(5) DEFAULT '08:00',
+            early_duration INT DEFAULT 60,
+            late_enabled BOOLEAN DEFAULT FALSE,
+            late_start VARCHAR(5) DEFAULT '17:00',
+            late_end VARCHAR(5) DEFAULT '18:00',
+            late_duration INT DEFAULT 60
         )
     """)
     cursor.execute("""
@@ -4033,10 +4282,10 @@ async def update_user_location(request: Request):
                     cursor.execute(
                         """
                         UPDATE daily_attendance_status 
-                        SET status = 'Absent', marked_by = 'Geofence System', marked_at = CURRENT_TIMESTAMP
+                        SET status = 'Absent', marked_by = 'Geofence System', marked_at = CURRENT_TIMESTAMP, absent_reason = ?
                         WHERE reg_no = ? AND date = ?
                         """,
-                        (reg_no, current_date),
+                        ("Outside permitted movement boundary for more than 3 minutes.", reg_no, current_date),
                     )
                 else:
                     remaining = int(180 - elapsed)
@@ -4122,6 +4371,9 @@ async def update_user_location(request: Request):
             ),
         )
 
+        # Reset force update request
+        cursor.execute("UPDATE user_latest_locations SET force_update_requested = FALSE WHERE reg_no = ?", (reg_no,))
+
         return {
             "success": True,
             "message": "Location updated",
@@ -4134,6 +4386,281 @@ async def update_user_location(request: Request):
         raise HTTPException(status_code=500, detail="Failed to store location")
 
 
+@app.post("/location/sync_offline")
+async def sync_offline_locations(request: Request):
+    user = verify_user_token(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    logs = body.get("logs", [])
+    if not logs:
+        return {"success": True, "message": "No logs to sync", "rule_violation": False}
+
+    reg_no = user.get("reg_no")
+    client_device_id = body.get("device_id")
+
+    # Verify device session token
+    cursor.execute("SELECT current_device_id FROM users WHERE reg_no = ?", (reg_no,))
+    db_row = cursor.fetchone()
+    db_device_id = db_row[0] if db_row else None
+
+    if db_device_id is None:
+        cursor.execute("SELECT current_device_id FROM other_staff WHERE reg_no = ?", (reg_no,))
+        other_row = cursor.fetchone()
+        db_device_id = other_row[0] if other_row else None
+
+    if db_device_id is not None and client_device_id is not None:
+        if client_device_id != db_device_id:
+            raise HTTPException(status_code=403, detail="Device session mismatch. Tracking suspended on this device.")
+
+    # Sort logs by captured_at to process sequentially
+    def get_captured_at(log):
+        try:
+            return _parse_client_timestamp(log.get("captured_at"))
+        except Exception:
+            return datetime.min
+
+    try:
+        logs.sort(key=get_captured_at)
+    except Exception as e:
+        print(f"Sorting error: {e}")
+
+    # Check if user has marked attendance today
+    cursor.execute(
+        "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE",
+        (reg_no,)
+    )
+    has_attendance = cursor.fetchone()[0] > 0
+
+    # Query out permission settings
+    cursor.execute(
+        "SELECT out_permission_enabled, out_permission_expiry FROM users WHERE reg_no = ?",
+        (reg_no,)
+    )
+    user_row = cursor.fetchone()
+    out_permitted_base = False
+    out_permission_expiry = None
+    if user_row:
+        out_permitted_base = bool(user_row[0])
+        if user_row[1]:
+            try:
+                out_permission_expiry = datetime.fromisoformat(user_row[1])
+            except Exception:
+                pass
+
+    rule_violation = False
+    violation_reason = None
+
+    outside_start = None
+    gps_off_start = None
+
+    # Get existing first_left_boundary_at from DB to persist boundary timer state
+    cursor.execute("SELECT first_left_boundary_at FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
+    db_row = cursor.fetchone()
+    if db_row and db_row[0]:
+        if isinstance(db_row[0], datetime):
+            outside_start = db_row[0]
+        else:
+            try:
+                outside_start = datetime.fromisoformat(str(db_row[0]).replace("Z", "+00:00").split(".")[0])
+            except Exception:
+                outside_start = None
+
+    boundary_warning = False
+    warning_message = None
+
+    for log in logs:
+        try:
+            latitude = float(log.get("latitude", 0.0))
+            longitude = float(log.get("longitude", 0.0))
+        except (ValueError, TypeError):
+            continue
+
+        accuracy = log.get("accuracy_meters")
+        speed = log.get("speed_mps")
+        heading = log.get("heading_deg")
+        altitude = log.get("altitude_m")
+        source = (log.get("source") or "gps").strip()[:50]
+        app_state = (log.get("app_state") or "background").strip()[:20]
+        is_mocked = bool(log.get("is_mocked", False))
+        device_id = (log.get("device_id") or "").strip()[:120] or None
+        captured_at = _parse_client_timestamp(log.get("captured_at"))
+        gps_enabled = bool(log.get("gps_enabled", True))
+
+        # Determine out_permitted dynamically for the log timestamp
+        out_permitted = False
+        if out_permitted_base:
+            if out_permission_expiry:
+                try:
+                    expiry_check = out_permission_expiry
+                    captured_at_compare = captured_at
+                    if expiry_check.tzinfo is not None and captured_at_compare.tzinfo is None:
+                        expiry_check = expiry_check.replace(tzinfo=None)
+                    elif expiry_check.tzinfo is None and captured_at_compare.tzinfo is not None:
+                        captured_at_compare = captured_at_compare.replace(tzinfo=None)
+                    
+                    if captured_at_compare < expiry_check:
+                        out_permitted = True
+                except Exception:
+                    out_permitted = True
+            else:
+                out_permitted = True
+
+        # Check Rules:
+        # Rule 1: Mock Location
+        if is_mocked:
+            rule_violation = True
+            violation_reason = "Mock location usage detected."
+
+        # Rule 2: GPS/Location Disabled
+        if not gps_enabled:
+            if gps_off_start is None:
+                gps_off_start = captured_at
+            else:
+                elapsed_gps = (captured_at - gps_off_start).total_seconds()
+                if elapsed_gps >= 180:
+                    rule_violation = True
+                    violation_reason = "Location/GPS services were disabled for more than 3 minutes."
+        else:
+            gps_off_start = None
+
+        # Rule 3: Geofence limits
+        boundary_warning = False
+        warning_message = None
+        if has_attendance and not out_permitted and _geo_fence_limit_range_polygons and gps_enabled:
+            inside_limit = _point_in_any_polygon(latitude, longitude, _geo_fence_limit_range_polygons)
+            if inside_limit:
+                outside_start = None
+            else:
+                boundary_warning = True
+                if outside_start is None:
+                    outside_start = captured_at
+                    warning_message = "You are outside the permitted movement boundary."
+                else:
+                    # Strip tzinfo for datetime arithmetic if needed
+                    t_outside = outside_start.replace(tzinfo=None) if outside_start.tzinfo else outside_start
+                    t_captured = captured_at.replace(tzinfo=None) if captured_at.tzinfo else captured_at
+                    elapsed_boundary = (t_captured - t_outside).total_seconds()
+                    if elapsed_boundary >= 180:
+                        rule_violation = True
+                        violation_reason = "You were outside the permitted boundary for more than 3 minutes."
+                        warning_message = "You have been outside the boundary for more than 3 minutes."
+                    else:
+                        remaining = int(180 - elapsed_boundary)
+                        warning_message = f"You are outside the permitted movement boundary. Return in {remaining}s."
+
+        # Write to log tables
+        try:
+            cursor.execute(
+                """
+                INSERT INTO user_location_logs
+                (reg_no, username, name, dept, role, latitude, longitude, accuracy_meters, speed_mps, heading_deg, altitude_m,
+                 source, app_state, is_mocked, device_id, captured_at, server_received_at, boundary_warning, warning_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            """,
+                (
+                    user.get("reg_no"),
+                    user.get("username"),
+                    user.get("name"),
+                    user.get("dept"),
+                    user.get("role"),
+                    latitude,
+                    longitude,
+                    accuracy,
+                    speed,
+                    heading,
+                    altitude,
+                    source,
+                    app_state,
+                    is_mocked,
+                    device_id,
+                    captured_at.isoformat(),
+                    boundary_warning,
+                    warning_message,
+                ),
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO user_latest_locations
+                (reg_no, username, name, dept, role, latitude, longitude, accuracy_meters, speed_mps, heading_deg, altitude_m,
+                 source, app_state, is_mocked, device_id, captured_at, last_seen_at, boundary_warning, warning_message, first_left_boundary_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                ON CONFLICT (reg_no) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    name = EXCLUDED.name,
+                    dept = EXCLUDED.dept,
+                    role = EXCLUDED.role,
+                    latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude,
+                    accuracy_meters = EXCLUDED.accuracy_meters,
+                    speed_mps = EXCLUDED.speed_mps,
+                    heading_deg = EXCLUDED.heading_deg,
+                    altitude_m = EXCLUDED.altitude_m,
+                    source = EXCLUDED.source,
+                    app_state = EXCLUDED.app_state,
+                    is_mocked = EXCLUDED.is_mocked,
+                    device_id = EXCLUDED.device_id,
+                    captured_at = EXCLUDED.captured_at,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    boundary_warning = EXCLUDED.boundary_warning,
+                    warning_message = EXCLUDED.warning_message,
+                    first_left_boundary_at = EXCLUDED.first_left_boundary_at
+            """,
+                (
+                    user.get("reg_no"),
+                    user.get("username"),
+                    user.get("name"),
+                    user.get("dept"),
+                    user.get("role"),
+                    latitude,
+                    longitude,
+                    accuracy,
+                    speed,
+                    heading,
+                    altitude,
+                    source,
+                    app_state,
+                    is_mocked,
+                    device_id,
+                    captured_at.isoformat(),
+                    boundary_warning,
+                    warning_message,
+                    outside_start.isoformat() if outside_start else None,
+                ),
+            )
+        except Exception as log_err:
+            print(f"Failed to log offline point: {log_err}")
+
+    # Mark absent if user violated rules
+    if rule_violation:
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute(
+            """
+            UPDATE daily_attendance_status 
+            SET status = 'Absent', marked_by = 'Geofence System (Offline)', marked_at = CURRENT_TIMESTAMP, absent_reason = ?
+            WHERE reg_no = ? AND date = ?
+            """,
+            (violation_reason or "Offline tracking rule violation.", reg_no, current_date),
+        )
+
+    # Reset force update request
+    cursor.execute("UPDATE user_latest_locations SET force_update_requested = FALSE WHERE reg_no = ?", (reg_no,))
+
+    return {
+        "success": True,
+        "rule_violation": rule_violation,
+        "message": violation_reason or "Offline logs synchronized successfully.",
+        "boundary_warning": boundary_warning,
+        "warning": warning_message,
+    }
+
+
+
+
+
 @app.get("/staff/tracking-status")
 async def get_staff_tracking_status(request: Request):
     """Check if tracking should be active for the current user today.
@@ -4142,6 +4669,8 @@ async def get_staff_tracking_status(request: Request):
     This ensures location sharing runs from check-in to check-out only, and is OFF at all other times.
     """
     user = verify_user_token(request)
+    if user.get("role") == "admin":
+        return {"success": True, "tracking_active": False, "reason": "admin_exemption"}
     reg_no = user.get("reg_no")
     client_device_id = request.query_params.get("device_id")
 
@@ -4192,11 +4721,17 @@ async def get_staff_tracking_status(request: Request):
         # Tracking is active ONLY if checked in AND NOT checked out
         tracking_active = has_check_in and not has_check_out
 
+        # Check if force update is requested
+        cursor.execute("SELECT force_update_requested FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
+        row = cursor.fetchone()
+        force_update = bool(row[0]) if row else False
+
         return {
             "success": True,
             "tracking_active": tracking_active,
             "has_check_in": has_check_in,
             "has_check_out": has_check_out,
+            "force_update": force_update,
         }
 
     except Exception as e:
@@ -4236,6 +4771,27 @@ async def update_user_out_permission(request: Request):
     except Exception as e:
         print(f"Error updating out permission: {e}")
         return error_response("Failed to update out permission", "UPDATE_ERROR")
+
+
+@app.post("/admin/locations/force-update/{reg_no}")
+async def request_force_location_update(request: Request, reg_no: str):
+    """Request an instant location update for a specific user (Admin/HOD only)."""
+    verify_admin_token(request)
+    
+    # Verify the user exists in latest locations
+    cursor.execute("SELECT COUNT(*) FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
+    if cursor.fetchone()[0] == 0:
+        raise HTTPException(status_code=404, detail="User latest location record not found. User may not be checked in today.")
+        
+    try:
+        cursor.execute(
+            "UPDATE user_latest_locations SET force_update_requested = TRUE WHERE reg_no = ?",
+            (reg_no,)
+        )
+        return {"success": True, "message": f"Force location update requested for user {reg_no}."}
+    except Exception as e:
+        print(f"Error requesting force location update: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/admin/locations/live")
@@ -4350,14 +4906,22 @@ async def admin_get_live_locations(
 
 
 @app.get("/admin/locations/history")
-async def admin_get_location_history(request: Request, reg_no: str, limit: int = 500):
+async def admin_get_location_history(request: Request, reg_no: str, date: str = None, limit: int = 500):
     """Get recent location history for a user (Admin/HOD only)."""
     verify_admin_token(request)
     limit = max(1, min(limit, 5000))
 
-    # Filter to only show the path for that day alone (current local day)
-    now = datetime.now()
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if date:
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d")
+            day_start = parsed_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+    else:
+        # Filter to only show the path for that day alone (current local day)
+        now = datetime.now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
     next_day_start = day_start + timedelta(days=1)
 
     cursor.execute(
@@ -5409,16 +5973,19 @@ def analyze_image_comprehensive(img):
         # Liveness assessment
         liveness_warnings = []
 
-        if gradient_mean < 8:
-            liveness_warnings.append(f"Low gradient - possible flat photo (gradient: {gradient_mean:.2f})")
+        if ANTISPOOFING_ENABLED:
+            if gradient_mean < 4.0:
+                liveness_warnings.append(f"Low gradient - possible flat photo/screen (gradient: {gradient_mean:.2f})")
 
-        if edge_density < 0.02:
-            liveness_warnings.append(f"Very low edge density - possible smooth photo (edges: {edge_density:.4f})")
-        elif edge_density > 0.6:
-            liveness_warnings.append(f"Very high edge density - possible noisy image (edges: {edge_density:.4f})")
+            if edge_density < 0.005:
+                liveness_warnings.append(f"Very low edge density - possible smooth photo/screen (edges: {edge_density:.4f})")
+            elif edge_density > 0.85:
+                liveness_warnings.append(f"Very high edge density - possible digital screen noise (edges: {edge_density:.4f})")
 
-        if rg_diff < 3 and gb_diff < 3 and color_std < 5:
-            liveness_warnings.append("Unusual color distribution - possible digital photo")
+            if rg_diff < 1.5 and gb_diff < 1.5 and color_std < 2.0:
+                liveness_warnings.append("Unusual color distribution - possible digital screen/photo replay")
+
+            # FFT Moire, glare detection, and flat color gamut check are bypassed to permanently prevent close-range (<3 meter) false positives.
 
         is_live = len(liveness_warnings) == 0
         is_poor_quality = quality_score < 60
@@ -5610,13 +6177,9 @@ def extract_face(img, _recursion_depth=0):
 
     else:
         # Use InsightFace
-        rotations = [
-            None,
-            cv2.ROTATE_90_CLOCKWISE,
-            cv2.ROTATE_180,
-            cv2.ROTATE_90_COUNTERCLOCKWISE,
-        ]
-        rot_names = ["Original", "90 CW", "180", "90 CCW"]
+        # Only check Original (upright) rotation to ensure high performance and prevent long loading times
+        rotations = [None]
+        rot_names = ["Original"]
 
         for i, rot in enumerate(rotations):
             temp = img if rot is None else cv2.rotate(img, rot)
@@ -5643,18 +6206,8 @@ def extract_face(img, _recursion_depth=0):
                 print(f"Error in rotation {rot_names[i]}: {e}")
                 continue
 
-        print("InsightFace failed completely, attempting fallback...")
-        # Fall back to OpenCV - use the internal fallback logic
-        # Increment recursion depth to prevent infinite loop
-        extract_face_recursion_depth += 1
-        original_fallback = use_fallback
-        use_fallback = True
-        try:
-            result = extract_face(img, _recursion_depth=extract_face_recursion_depth)
-            return result
-        finally:
-            use_fallback = original_fallback
-            extract_face_recursion_depth = 0  # Reset counter after completion
+        print("InsightFace failed to detect any face.")
+        return None
 
 
 # -------------------------------------------------
@@ -5770,7 +6323,7 @@ def process_attendance_background(
 
 
 def _attendance_sync_work(
-    reg_no, user_role, form_data, active_slot_type, img_bytes
+    reg_no, user_role, form_data, active_slot_type, img_bytes, active_slot=None
 ):
     """Run the blocking attendance marking work in a thread pool.
     
@@ -5778,17 +6331,61 @@ def _attendance_sync_work(
     operations extracted from the async endpoint. It runs in a thread pool
     executor to avoid blocking the event loop.
     """
-    return _secure_verify_and_mark(reg_no, img_bytes, user_role, form_data, active_slot_type)
+    return _secure_verify_and_mark(reg_no, img_bytes, user_role, form_data, active_slot_type, active_slot)
 
 
-def get_active_ccl_slot_type() -> str:
-    """Returns 'check_in' or 'check_out' if current time falls in enabled CCL windows, else None."""
+def get_ccl_settings_for_date(date_str: str = None) -> dict:
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        cursor.execute("""
+            SELECT early_enabled, early_start, early_end, late_enabled, late_start, late_end, early_duration, late_duration
+            FROM ccl_custom_dates 
+            WHERE ccl_date = ?
+        """, (date_str,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "early_check_in_ccl_enabled": bool(row[0]) if row[0] is not None else False,
+                "early_check_in_start": row[1] or "07:00",
+                "early_check_in_end": row[2] or "08:00",
+                "early_duration": int(row[6]) if row[6] is not None else 60,
+                "late_check_out_ccl_enabled": bool(row[3]) if row[3] is not None else False,
+                "late_check_out_start": row[4] or "17:00",
+                "late_check_out_end": row[5] or "18:00",
+                "late_duration": int(row[7]) if row[7] is not None else 60
+            }
+    except Exception as e:
+        print(f"Error checking custom CCL dates: {e}")
+
     try:
         cursor.execute("SELECT key, value FROM ccl_settings")
         ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
+    except Exception as e:
+        print(f"Error fetching global ccl_settings: {e}")
+        ccl_settings = {}
         
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+    return {
+        "early_check_in_ccl_enabled": ccl_settings.get("early_check_in_ccl_enabled", "false") == "true",
+        "early_check_in_start": ccl_settings.get("early_check_in_start", "07:00"),
+        "early_check_in_end": ccl_settings.get("early_check_in_end", "08:00"),
+        "early_duration": 60,
+        "late_check_out_ccl_enabled": ccl_settings.get("late_check_out_ccl_enabled", "false") == "true",
+        "late_check_out_start": ccl_settings.get("late_check_out_start", "17:00"),
+        "late_check_out_end": ccl_settings.get("late_check_out_end", "18:00"),
+        "late_duration": 60
+    }
+
+
+def get_active_ccl_slot_type(date_str: str = None) -> str:
+    """Returns 'check_in' or 'check_out' if current time falls in enabled CCL windows, else None."""
+    try:
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        settings = get_ccl_settings_for_date(date_str)
+        
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if not (early_enabled or late_enabled):
             return None
@@ -5801,14 +6398,14 @@ def get_active_ccl_slot_type() -> str:
             return int(p[0]) * 60 + int(p[1])
             
         if early_enabled:
-            early_start = time_to_min(ccl_settings.get("early_check_in_start", "07:00"))
-            early_end = time_to_min(ccl_settings.get("early_check_in_end", "08:00"))
+            early_start = time_to_min(settings["early_check_in_start"])
+            early_end = time_to_min(settings["early_check_in_end"])
             if early_start <= curr_min < early_end:
                 return "check_in"
                 
         if late_enabled:
-            late_start = time_to_min(ccl_settings.get("late_check_out_start", "17:00"))
-            late_end = time_to_min(ccl_settings.get("late_check_out_end", "18:00"))
+            late_start = time_to_min(settings["late_check_out_start"])
+            late_end = time_to_min(settings["late_check_out_end"])
             if late_start <= curr_min < late_end:
                 return "check_out"
     except Exception as e:
@@ -5910,10 +6507,9 @@ async def mark_attendance_secure(
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
     else:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if early_enabled or late_enabled:
             ccl_slot_type = get_active_ccl_slot_type()
@@ -5950,6 +6546,23 @@ async def mark_attendance_secure(
             )
 
         if active_slot is not None:
+            # First, check if they are already marked Present in daily_attendance_status for today
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM daily_attendance_status
+                WHERE reg_no = ? AND date = ? AND status = 'Present'
+                """,
+                (reg_no, today_str)
+            )
+            is_present_today = cursor.fetchone()[0] > 0
+            
+            # If they are already present today, and this is a check_in attempt, block it
+            if is_present_today and active_slot_type == "check_in":
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are already marked present for today."
+                )
+
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM attendance 
@@ -6105,7 +6718,7 @@ async def mark_attendance_secure(
         result = await loop.run_in_executor(
             _cpu_executor,
             _attendance_sync_work,
-            reg_no, user_role, form_data, active_slot_type, img_bytes
+            reg_no, user_role, form_data, active_slot_type, img_bytes, active_slot
         )
         return result
 
@@ -6129,7 +6742,7 @@ def _date_str(val):
 
 
 def _secure_verify_and_mark(
-    reg_no: str, img_bytes: bytes, user_role: str = "staff", form_data=None, slot_type: str = "check_in"
+    reg_no: str, img_bytes: bytes, user_role: str = "staff", form_data=None, slot_type: str = "check_in", active_slot: int = None
 ):
     """Internal function for secure verification with identity binding"""
     # Check lockout status
@@ -6145,6 +6758,24 @@ def _secure_verify_and_mark(
 
     # SECURE DOUBLE CHECK: Enforce duplicate check for the active slot type
     chk_slot_type = slot_type or "check_in"
+    
+    # First, check if they are already marked Present in daily_attendance_status for today
+    today_date_str = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM daily_attendance_status
+        WHERE reg_no = ? AND date = ? AND status = 'Present'
+        """,
+        (reg_no, today_date_str)
+    )
+    is_present_today = cursor.fetchone()[0] > 0
+    
+    if is_present_today and chk_slot_type == "check_in":
+        raise HTTPException(
+            status_code=403,
+            detail="You are already marked present for today."
+        )
+
     cursor.execute(
         """
         SELECT COUNT(*) FROM attendance 
@@ -6343,151 +6974,149 @@ def _secure_verify_and_mark(
         )
 
     # Check if this scan falls in an active CCL window (which rewards Earned Leave only)
-    is_ccl_scan = False
+    is_ccl_scan = (active_slot == -1)
     is_early_check_in = False
     is_late_check_out = False
     
-    try:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+    if is_ccl_scan:
+        try:
+            settings = get_ccl_settings_for_date()
+            early_enabled = settings["early_check_in_ccl_enabled"]
+            late_enabled = settings["late_check_out_ccl_enabled"]
 
-        if early_enabled or late_enabled:
-            now_time = datetime.now()
-            curr_min = now_time.hour * 60 + now_time.minute
-            
-            def time_to_min(t_str):
-                p = t_str.split(":")
-                return int(p[0]) * 60 + int(p[1])
+            if early_enabled or late_enabled:
+                now_time = datetime.now()
+                curr_min = now_time.hour * 60 + now_time.minute
+                
+                def time_to_min(t_str):
+                    p = t_str.split(":")
+                    return int(p[0]) * 60 + int(p[1])
 
-            ins_slot_type = slot_type or "check_in"
-            if ins_slot_type == "check_in" and early_enabled:
-                early_start_str = ccl_settings.get("early_check_in_start", "07:00")
-                early_end_str = ccl_settings.get("early_check_in_end", "08:00")
-                if time_to_min(early_start_str) <= curr_min < time_to_min(early_end_str):
-                    is_early_check_in = True
-                    is_ccl_scan = True
-            elif ins_slot_type == "check_out" and late_enabled:
-                late_start_str = ccl_settings.get("late_check_out_start", "17:00")
-                late_end_str = ccl_settings.get("late_check_out_end", "18:00")
-                if time_to_min(late_start_str) <= curr_min < time_to_min(late_end_str):
-                    is_late_check_out = True
-                    is_ccl_scan = True
-    except Exception as e:
-        print(f"Error evaluating is_ccl_scan: {e}")
+                ins_slot_type = slot_type or "check_in"
+                if ins_slot_type == "check_in" and early_enabled:
+                    early_start_str = settings.get("early_check_in_start", "07:00")
+                    early_end_str = settings.get("early_check_in_end", "08:00")
+                    if time_to_min(early_start_str) <= curr_min < time_to_min(early_end_str):
+                        is_early_check_in = True
+                elif ins_slot_type == "check_out" and late_enabled:
+                    late_start_str = settings.get("late_check_out_start", "17:00")
+                    late_end_str = settings.get("late_check_out_end", "18:00")
+                    if time_to_min(late_start_str) <= curr_min < time_to_min(late_end_str):
+                        is_late_check_out = True
+        except Exception as e:
+            print(f"Error evaluating is_ccl_scan details: {e}")
 
     # Use the values we extracted
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     ins_slot_type = slot_type or "check_in"
-    if not is_ccl_scan:
-        # Insert attendance into the correct table based on user type
-        if is_other_staff:
-            # Insert into other_staff_attendance table
-            cursor.execute(
-                """
-                INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp", status)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (reg_no, name, dept, user_type, timestamp, ins_slot_type),
-            )
-        else:
-            # Insert into regular attendance table
-            cursor.execute(
-                """
-                INSERT INTO attendance (reg_no, name, dept, "timestamp", status)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (reg_no, name, dept, timestamp, ins_slot_type),
-            )
-        conn.commit()
+    # Insert attendance into the correct table based on user type
+    if is_other_staff:
+        # Insert into other_staff_attendance table
+        cursor.execute(
+            """
+            INSERT INTO other_staff_attendance (reg_no, name, dept, role, "timestamp", status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (reg_no, name, dept, user_type, timestamp, ins_slot_type),
+        )
+    else:
+        # Insert into regular attendance table
+        cursor.execute(
+            """
+            INSERT INTO attendance (reg_no, name, dept, "timestamp", status)
+            VALUES (?, ?, ?, ?, ?)
+        """,
+            (reg_no, name, dept, timestamp, ins_slot_type),
+        )
+    conn.commit()
 
-        # Sync with daily_attendance_status table (used by admin analysis tab)
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        time_now_str = datetime.now().strftime("%H:%M:%S")
-        sync_slot_type = slot_type or "check_in"
+    # Sync with daily_attendance_status table (used by admin analysis tab)
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    time_now_str = datetime.now().strftime("%H:%M:%S")
+    sync_slot_type = slot_type or "check_in"
 
-        try:
-            # Check if there's already a status record for this user on this date
-            cursor.execute(
-                """
-                SELECT id, status, leave_type, leave_request_id 
-                FROM daily_attendance_status 
-                WHERE reg_no = ? AND date = ?
-            """,
-                (reg_no, current_date),
-            )
-            existing_status = cursor.fetchone()
+    try:
+        # Check if there's already a status record for this user on this date
+        cursor.execute(
+            """
+            SELECT id, status, leave_type, leave_request_id 
+            FROM daily_attendance_status 
+            WHERE reg_no = ? AND date = ?
+        """,
+            (reg_no, current_date),
+        )
+        existing_status = cursor.fetchone()
 
-            if existing_status:
-                old_status = existing_status[1]
-                # On check-in: set status to Present, in_time, and clear leave tags.
-                # On check-out: set status to Present and out_time.
-                if sync_slot_type == "check_in":
-                    cursor.execute(
-                        """
-                        UPDATE daily_attendance_status 
-                        SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
-                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                        WHERE reg_no = ? AND date = ?
-                    """,
-                        (time_now_str, reg_no, current_date),
-                    )
-                else:
-                    # Check-out — complete the attendance
-                    cursor.execute(
-                        """
-                        UPDATE daily_attendance_status 
-                        SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
-                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                        WHERE reg_no = ? AND date = ?
-                    """,
-                        (time_now_str, reg_no, current_date),
-                    )
-                new_status = "Present"
-                log_audit_event(
-                    "ATTENDANCE_OVERRIDE",
-                    reg_no,
-                    True,
-                    f"User status updated to {new_status} via {sync_slot_type}.",
+        if existing_status:
+            old_status = existing_status[1]
+            # On check-in: set status to Present, in_time, and clear leave tags.
+            # On check-out: set status to Present and out_time.
+            if sync_slot_type == "check_in":
+                cursor.execute(
+                    """
+                    UPDATE daily_attendance_status 
+                    SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
+                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                    WHERE reg_no = ? AND date = ?
+                """,
+                    (time_now_str, reg_no, current_date),
                 )
             else:
-                # No record exists — insert with status 'Present'
-                if sync_slot_type == "check_in":
-                    cursor.execute(
-                        """
-                        INSERT INTO daily_attendance_status 
-                        (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
-                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                        ON CONFLICT (reg_no, date) DO UPDATE SET
-                            status = 'Present',
-                            in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
-                            marked_by = 'Attendance System',
-                            marked_at = CURRENT_TIMESTAMP
-                    """,
-                        (reg_no, name, dept, current_date, time_now_str),
-                    )
-                else:
-                    cursor.execute(
-                        """
-                        INSERT INTO daily_attendance_status 
-                        (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
-                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                        ON CONFLICT (reg_no, date) DO UPDATE SET
-                            status = 'Present',
-                            out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
-                            marked_by = 'Attendance System',
-                            marked_at = CURRENT_TIMESTAMP
-                    """,
-                        (reg_no, name, dept, current_date, time_now_str),
-                    )
-        except Exception as e:
-            print(f"Error syncing daily_attendance_status for {reg_no}: {e}")
+                # Check-out — complete the attendance
+                cursor.execute(
+                    """
+                    UPDATE daily_attendance_status 
+                    SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
+                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                    WHERE reg_no = ? AND date = ?
+                """,
+                    (time_now_str, reg_no, current_date),
+                )
+            new_status = "Present"
+            log_audit_event(
+                "ATTENDANCE_OVERRIDE",
+                reg_no,
+                True,
+                f"User status updated to {new_status} via {sync_slot_type}.",
+            )
+        else:
+            # No record exists — insert with status 'Present'
+            if sync_slot_type == "check_in":
+                cursor.execute(
+                    """
+                    INSERT INTO daily_attendance_status 
+                    (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
+                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                    ON CONFLICT (reg_no, date) DO UPDATE SET
+                        status = 'Present',
+                        in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                        marked_by = 'Attendance System',
+                        marked_at = CURRENT_TIMESTAMP
+                """,
+                    (reg_no, name, dept, current_date, time_now_str),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO daily_attendance_status 
+                    (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
+                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                    ON CONFLICT (reg_no, date) DO UPDATE SET
+                        status = 'Present',
+                        out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
+                        marked_by = 'Attendance System',
+                        marked_at = CURRENT_TIMESTAMP
+                """,
+                    (reg_no, name, dept, current_date, time_now_str),
+                )
+    except Exception as e:
+        print(f"Error syncing daily_attendance_status for {reg_no}: {e}")
 
-        log_audit_event("ATTENDANCE_MARKED", reg_no, True, f"Confidence: {confidence:.3f}")
-    else:
+    if is_ccl_scan:
         log_audit_event("CCL_EARNED_SCAN", reg_no, True, f"Confidence: {confidence:.3f}")
+    else:
+        log_audit_event("ATTENDANCE_MARKED", reg_no, True, f"Confidence: {confidence:.3f}")
 
     # Update user location when attendance is marked successfully
     if form_data is not None:
@@ -6558,14 +7187,11 @@ def _secure_verify_and_mark(
     earned_ccl = False
     try:
         # Check if CCL is enabled for the specific slot type
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings_rows = cursor.fetchall()
-        ccl_settings = {r[0]: r[1] for r in ccl_settings_rows}
-        
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
 
-        if early_enabled or late_enabled:
+        if (early_enabled or late_enabled) and is_ccl_scan:
             # Get current time
             now_time = datetime.now()
             now_time_str = now_time.strftime("%H:%M")
@@ -6581,10 +7207,10 @@ def _secure_verify_and_mark(
             is_early_check_in = False
             is_late_check_out = False
             
-            early_start_str = ccl_settings.get("early_check_in_start", "07:00")
-            early_end_str = ccl_settings.get("early_check_in_end", "08:00")
-            late_start_str = ccl_settings.get("late_check_out_start", "17:00")
-            late_end_str = ccl_settings.get("late_check_out_end", "18:00")
+            early_start_str = settings.get("early_check_in_start", "07:00")
+            early_end_str = settings.get("early_check_in_end", "08:00")
+            late_start_str = settings.get("late_check_out_start", "17:00")
+            late_end_str = settings.get("late_check_out_end", "18:00")
             
             if ins_slot_type == "check_in" and early_enabled:
                 # Check early check-in window
@@ -6598,10 +7224,10 @@ def _secure_verify_and_mark(
             if is_early_check_in or is_late_check_out:
                 ccl_slot = "early_check_in" if is_early_check_in else "late_check_out"
                 
-                # Verify that they have not already earned CCL for this slot type today
+                # Verify that they have not already earned ANY CCL today (enforce 1 point max limit per day)
                 cursor.execute(
-                    "SELECT 1 FROM ccl_earned_history WHERE reg_no = ? AND date = ? AND slot_type = ?",
-                    (reg_no, now_date_str, ccl_slot)
+                    "SELECT 1 FROM ccl_earned_history WHERE reg_no = ? AND date = ?",
+                    (reg_no, now_date_str)
                 )
                 already_earned = cursor.fetchone()
                 
@@ -6709,10 +7335,9 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
     else:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if early_enabled or late_enabled:
             ccl_slot_type = get_active_ccl_slot_type()
@@ -6827,10 +7452,9 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
     else:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if early_enabled or late_enabled:
             ccl_slot_type = get_active_ccl_slot_type()
@@ -7337,40 +7961,39 @@ async def admin_recent_attendance(request: Request):
     try:
         # Get face scan attendance
         cursor.execute("""
-            SELECT id, reg_no, name, dept, timestamp, 'face_scan' as source
+            SELECT id, reg_no, name, dept, timestamp, 'face_scan' as source,
+                   NULL as leave_type, NULL as processed_date, 'Present' as status, NULL as absent_reason
             FROM attendance
             ORDER BY timestamp DESC
             LIMIT 10
         """)
         face_scan_attendance = cursor.fetchall()
 
-        # Get OD/Leave records from daily_attendance_status (today's only)
+        # Get OD/Leave/Absent records from daily_attendance_status (today's only)
         cursor.execute("""
-            SELECT das.id, das.reg_no, das.name, das.dept, das.date as timestamp, 'od' as source, 
-                   das.leave_type, lr.processed_date
+            SELECT das.id, das.reg_no, das.name, das.dept, das.date as timestamp, 
+                   (CASE WHEN das.status = 'Absent' THEN 'absent_record' ELSE 'od' END) as source, 
+                   das.leave_type, lr.processed_date, das.status, das.absent_reason
             FROM daily_attendance_status das
             LEFT JOIN leave_requests lr ON das.leave_request_id = lr.id
-            WHERE das.date::date = CURRENT_DATE AND das.status = 'Present' 
-            AND das.leave_type IN ('od', 'earned', 'casual')
+            WHERE das.date::date = CURRENT_DATE 
+            AND (
+                (das.status = 'Present' AND das.leave_type IN ('od', 'earned', 'casual'))
+                OR (das.status = 'Absent')
+            )
             ORDER BY das.date DESC
-            LIMIT 5
+            LIMIT 10
         """)
-        od_records = cursor.fetchall()
+        status_records = cursor.fetchall()
 
         # Combine and sort
-        combined = list(face_scan_attendance) + list(od_records)
+        combined = list(face_scan_attendance) + list(status_records)
         combined.sort(key=lambda x: str(x[4]) if x[4] else "", reverse=True)
         recent_attendance = combined[:10]
 
     except Exception as e:
         print(f"Error getting combined attendance: {e}")
-        cursor.execute("""
-            SELECT id, reg_no, name, dept, timestamp, 'attendance' as source
-            FROM attendance 
-            ORDER BY id DESC 
-            LIMIT 10
-        """)
-        recent_attendance = od_records = []
+        recent_attendance = []
 
     # Get counts after the query block
     cursor.execute(
@@ -7393,33 +8016,20 @@ async def admin_recent_attendance(request: Request):
     # Build recent_attendance list based on the combined data
     recent_attendance_list = []
     for row in recent_attendance:
-        # Check if it's OD record (has 7+ elements) or face scan (has 6 elements)
-        if len(row) >= 7:
-            # OD record: id, reg_no, name, dept, timestamp, source, leave_type, processed_date
-            recent_attendance_list.append(
-                {
-                    "id": row[0],
-                    "reg_no": row[1],
-                    "name": row[2],
-                    "dept": row[3],
-                    "timestamp": str(row[4]) if row[4] else "",
-                    "source": row[5],
-                    "leave_type": row[6],
-                    "approval_date": _ts(row[7]) if len(row) > 7 and row[7] else None,
-                }
-            )
-        else:
-            # Face scan record: id, reg_no, name, dept, timestamp, source
-            recent_attendance_list.append(
-                {
-                    "id": row[0],
-                    "reg_no": row[1],
-                    "name": row[2],
-                    "dept": row[3],
-                    "timestamp": _ts(row[4]) if row[4] else str(row[4]),
-                    "source": row[5],
-                }
-            )
+        recent_attendance_list.append(
+            {
+                "id": row[0],
+                "reg_no": row[1],
+                "name": row[2],
+                "dept": row[3],
+                "timestamp": _ts(row[4]) if row[4] else str(row[4]),
+                "source": row[5],
+                "leave_type": row[6],
+                "approval_date": _ts(row[7]) if row[7] else None,
+                "status": row[8],
+                "absent_reason": row[9],
+            }
+        )
 
     return {
         "stats": {
@@ -13945,7 +14555,7 @@ async def admin_get_daily_attendance_status(
 
         # Get existing daily_attendance_status records for the date range
         status_query = """
-            SELECT reg_no, name, dept, date, status, leave_request_id, leave_type, marked_by, marked_at
+            SELECT reg_no, name, dept, date, status, leave_request_id, leave_type, marked_by, marked_at, absent_reason
             FROM daily_attendance_status
             WHERE date >= ? AND date <= ?
         """
@@ -13974,6 +14584,7 @@ async def admin_get_daily_attendance_status(
                 "leave_type": row[6],
                 "marked_by": row[7],
                 "marked_at": _ts(row[8]),
+                "absent_reason": row[9] if len(row) > 9 else None,
             }
 
         # Generate results: only return records that exist (no synthetic Absent)
@@ -14540,6 +15151,172 @@ async def staff_dashboard(request: Request):
     )
 
 
+def verify_any_user_token(request: Request) -> dict:
+    """Verify authorization header and return user info and role for any valid user (admin, HOD, staff, other_staff)"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid authorization header"
+        )
+    token = auth_header.replace("Bearer ", "")
+    try:
+        import base64
+        decoded = base64.b64decode(token).decode("utf-8")
+        parts = decoded.split(":")
+        if len(parts) >= 2:
+            username = parts[0]
+            password = parts[1]
+            # Check in regular users (admin, HOD, staff)
+            user = get_user_by_username(username)
+            if user and verify_password(password, user[2]):
+                if is_user_suspended(username, is_other_staff=False):
+                    raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
+                return {
+                    "id": user[0],
+                    "username": user[1],
+                    "reg_no": user[3],
+                    "name": user[4],
+                    "dept": user[5],
+                    "role": user[6],
+                    "source": "users"
+                }
+            # Check in other staff
+            cursor.execute("SELECT id, username, password_hash, reg_no, name, role, dept, suspended FROM other_staff WHERE username = ?", (username,))
+            os_row = cursor.fetchone()
+            if os_row and verify_password(password, os_row[2]):
+                if os_row[7]:
+                    raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
+                return {
+                    "id": os_row[0],
+                    "username": os_row[1],
+                    "reg_no": os_row[3],
+                    "name": os_row[4],
+                    "role": os_row[5],
+                    "dept": os_row[6],
+                    "source": "other_staff"
+                }
+    except Exception as e:
+        print(f"Token verification error: {e}")
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/api/attendance/personal")
+async def get_personal_attendance_log(
+    request: Request, start_date: str = None, end_date: str = None
+):
+    """Get personal attendance log with date range filter for any logged in user"""
+    user_info = verify_any_user_token(request)
+    reg_no = user_info["reg_no"]
+    is_other_staff = (user_info["source"] == "other_staff")
+
+    try:
+        now = datetime.now()
+        acad_start, acad_end = _get_academic_date_range()
+        if not start_date:
+            start_date = acad_start or now.strftime("%Y-%m-01")
+        if not end_date:
+            end_date = acad_end or now.strftime("%Y-%m-%d")
+        start_date, end_date = _clamp_to_academic_year(start_date, end_date)
+
+        table = "other_staff_attendance" if is_other_staff else "attendance"
+        
+        # 1) Get face scan logs
+        cursor.execute(
+            f"""
+            SELECT id, reg_no, name, dept, timestamp, status
+            FROM {table}
+            WHERE reg_no = ? AND timestamp::date >= ? AND timestamp::date <= ?
+            ORDER BY timestamp DESC
+            """,
+            (reg_no, start_date, end_date),
+        )
+        rows = cursor.fetchall()
+
+        # 2) Get daily_attendance_status (OD, Leave, Absent)
+        cursor.execute(
+            """
+            SELECT date, status, leave_type, absent_reason
+            FROM daily_attendance_status
+            WHERE reg_no = ? AND date::date >= ? AND date::date <= ?
+            """,
+            (reg_no, start_date, end_date),
+        )
+        status_rows = cursor.fetchall()
+        status_map = {}
+        for row in status_rows:
+            date_str = str(row[0])
+            status_map[date_str] = {
+                "status": row[1],
+                "leave_type": row[2],
+                "absent_reason": row[3],
+            }
+
+        scan_dates = set()
+        attendance_list = []
+        for row in rows:
+            ts = row[4]
+            date_str = None
+            if ts:
+                if hasattr(ts, "strftime"):
+                    date_str = ts.strftime("%Y-%m-%d")
+                else:
+                    ts_str = str(ts)
+                    date_str = ts_str.split("T")[0] if "T" in ts_str else ts_str.split(" ")[0]
+                if date_str:
+                    scan_dates.add(date_str)
+            
+            day_status = row[5] if row[5] else "check_in"
+            absent_reason = None
+            if date_str in status_map:
+                daily_info = status_map[date_str]
+                if daily_info["status"] == "Absent":
+                    day_status = "Absent"
+                    absent_reason = daily_info["absent_reason"]
+                elif daily_info["status"] == "Leave":
+                    day_status = "Leave"
+            
+            attendance_list.append({
+                "id": row[0],
+                "reg_no": row[1],
+                "name": row[2],
+                "dept": row[3],
+                "timestamp": _ts(ts),
+                "status": day_status,
+                "source": "face_scan",
+                "absent_reason": absent_reason,
+            })
+
+        # Add status-only records for dates without face scans
+        for date_str, daily_info in status_map.items():
+            if date_str not in scan_dates:
+                status = daily_info["status"]
+                leave_type = daily_info["leave_type"]
+                absent_reason = daily_info["absent_reason"]
+                if status in ("Leave", "Absent") or (status == "Present" and leave_type in ("od", "earned", "casual")):
+                    attendance_list.append({
+                        "id": None,
+                        "reg_no": reg_no,
+                        "name": user_info["name"],
+                        "dept": user_info["dept"],
+                        "timestamp": date_str + "T00:00:00",
+                        "status": status,
+                        "source": "leave" if status == "Leave" else ("absent" if status == "Absent" else "od"),
+                        "leave_type": leave_type,
+                        "absent_reason": absent_reason,
+                    })
+
+        attendance_list.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return {
+            "success": True,
+            "attendance": attendance_list,
+            "count": len(attendance_list)
+        }
+    except Exception as e:
+        print(f"Error fetching personal attendance log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch personal attendance log")
+
+
 @app.get("/staff/attendance")
 async def staff_get_attendance(
     request: Request, date: str = None, start_date: str = None, end_date: str = None
@@ -14604,7 +15381,7 @@ async def staff_get_attendance(
         if date:
             cursor.execute(
                 """
-                SELECT date, status, leave_type
+                SELECT date, status, leave_type, absent_reason
                 FROM daily_attendance_status
                 WHERE reg_no = %s AND date::date = %s
             """,
@@ -14613,7 +15390,7 @@ async def staff_get_attendance(
         else:
             cursor.execute(
                 """
-                SELECT date, status, leave_type
+                SELECT date, status, leave_type, absent_reason
                 FROM daily_attendance_status
                 WHERE reg_no = %s AND date::date >= %s AND date::date <= %s
             """,
@@ -14627,11 +15404,13 @@ async def staff_get_attendance(
         leave_dates = set()
         earned_dates = set()
         casual_dates = set()
+        absent_dates = {}
 
         for row in status_rows:
             date_str = str(row[0]) if row[0] else None
             status = row[1]
             leave_type = row[2]
+            absent_reason = row[3] if len(row) > 3 else None
 
             if (
                 date_str
@@ -14646,24 +15425,45 @@ async def staff_get_attendance(
                     casual_dates.add(date_str)
             elif date_str and status == "Leave":
                 leave_dates.add(date_str)
+            elif date_str and status == "Absent":
+                absent_dates[date_str] = absent_reason
 
         # Build attendance list including status records
-        attendance_list = [
-            {
-                "id": row[0],
-                "reg_no": row[1],
-                "name": row[2],
-                "dept": row[3],
-                "class_div": row[4] or "",
-                "timestamp": _ts(row[5]),
-                "status": row[6] if len(row) > 6 and row[6] else "check_in",
-                "source": "face_scan",
-            }
-            for row in rows
-        ]
+        attendance_list = []
+        for row in rows:
+            ts = row[5]
+            date_str = None
+            if ts:
+                if hasattr(ts, "strftime"):
+                    date_str = ts.strftime("%Y-%m-%d")
+                else:
+                    ts_str = str(ts)
+                    date_str = ts_str.split("T")[0] if "T" in ts_str else ts_str.split(" ")[0]
+            
+            day_status = row[6] if len(row) > 6 and row[6] else "check_in"
+            absent_reason = None
+            if date_str in absent_dates:
+                day_status = "Absent"
+                absent_reason = absent_dates[date_str]
+            elif date_str in leave_dates:
+                day_status = "Leave"
+
+            attendance_list.append(
+                {
+                    "id": row[0],
+                    "reg_no": row[1],
+                    "name": row[2],
+                    "dept": row[3],
+                    "class_div": row[4] or "",
+                    "timestamp": _ts(row[5]),
+                    "status": day_status,
+                    "source": "face_scan",
+                    "absent_reason": absent_reason,
+                }
+            )
 
         # Add status records for dates not in face scans
-        all_status_dates = od_dates | earned_dates | casual_dates | leave_dates
+        all_status_dates = od_dates | earned_dates | casual_dates | leave_dates | set(absent_dates.keys())
         for date_str in all_status_dates:
             if date_str not in scan_dates:
                 # Find the status for this date
@@ -14671,10 +15471,12 @@ async def staff_get_attendance(
                     if str(row[0]) == date_str:
                         status = row[1]
                         leave_type = row[2]
+                        absent_reason = row[3] if len(row) > 3 else None
                         break
                 else:
                     status = "Unknown"
                     leave_type = None
+                    absent_reason = None
 
                 attendance_list.append(
                     {
@@ -14684,9 +15486,10 @@ async def staff_get_attendance(
                         "dept": staff_user["dept"],
                         "class_div": "",
                         "timestamp": date_str,
-                        "source": "leave" if status == "Leave" else "od",
+                        "source": "leave" if status == "Leave" else ("absent" if status == "Absent" else "od"),
                         "status": status,
                         "leave_type": leave_type,
+                        "absent_reason": absent_reason,
                     }
                 )
 
@@ -15088,10 +15891,9 @@ async def other_staff_mark_attendance(request: Request):
                 detail=f"Attendance marking is not allowed at this time. Available slots: {slots_info}",
             )
     else:
-        cursor.execute("SELECT key, value FROM ccl_settings")
-        ccl_settings = {r[0]: r[1] for r in cursor.fetchall()}
-        early_enabled = ccl_settings.get("early_check_in_ccl_enabled", "false") == "true"
-        late_enabled = ccl_settings.get("late_check_out_ccl_enabled", "false") == "true"
+        settings = get_ccl_settings_for_date()
+        early_enabled = settings["early_check_in_ccl_enabled"]
+        late_enabled = settings["late_check_out_ccl_enabled"]
         
         if early_enabled or late_enabled:
             ccl_slot_type = get_active_ccl_slot_type()
@@ -15311,7 +16113,7 @@ async def other_staff_get_attendance(
         if date:
             cursor.execute(
                 """
-                SELECT date, status, leave_type
+                SELECT date, status, leave_type, absent_reason
                 FROM daily_attendance_status
                 WHERE reg_no = %s AND date::date = %s
             """,
@@ -15320,7 +16122,7 @@ async def other_staff_get_attendance(
         else:
             cursor.execute(
                 """
-                SELECT date, status, leave_type
+                SELECT date, status, leave_type, absent_reason
                 FROM daily_attendance_status
                 WHERE reg_no = %s AND date::date >= %s AND date::date <= %s
             """,
@@ -15334,11 +16136,13 @@ async def other_staff_get_attendance(
         leave_dates = set()
         earned_dates = set()
         casual_dates = set()
+        absent_dates = {}
 
         for row in status_rows:
             date_str = str(row[0]) if row[0] else None
             status = row[1]
             leave_type = row[2]
+            absent_reason = row[3] if len(row) > 3 else None
 
             if (
                 date_str
@@ -15353,6 +16157,8 @@ async def other_staff_get_attendance(
                     casual_dates.add(date_str)
             elif date_str and status == "Leave":
                 leave_dates.add(date_str)
+            elif date_str and status == "Absent":
+                absent_dates[date_str] = absent_reason
 
         # Build attendance list including status records
         attendance_list = [
@@ -15365,12 +16171,13 @@ async def other_staff_get_attendance(
                 "timestamp": _ts(row[5]),
                 "status": row[6] if len(row) > 6 and row[6] else "check_in",
                 "source": "face_scan",
+                "absent_reason": None,
             }
             for row in rows
         ]
 
         # Add status records for dates not in face scans
-        all_status_dates = od_dates | earned_dates | casual_dates | leave_dates
+        all_status_dates = od_dates | earned_dates | casual_dates | leave_dates | set(absent_dates.keys())
         for date_str in all_status_dates:
             if date_str not in scan_dates:
                 # Find the status for this date
@@ -15378,10 +16185,12 @@ async def other_staff_get_attendance(
                     if str(srow[0]) == date_str:
                         status = srow[1]
                         leave_type = srow[2]
+                        absent_reason = srow[3] if len(srow) > 3 else None
                         break
                 else:
                     status = "Unknown"
                     leave_type = None
+                    absent_reason = None
 
                 attendance_list.append(
                     {
@@ -15391,9 +16200,10 @@ async def other_staff_get_attendance(
                         "dept": staff_user["dept"],
                         "role": staff_user["role"],
                         "timestamp": date_str,
-                        "source": "leave" if status == "Leave" else "od",
+                        "source": "leave" if status == "Leave" else ("absent" if status == "Absent" else "od"),
                         "status": status,
                         "leave_type": leave_type,
+                        "absent_reason": absent_reason,
                     }
                 )
 

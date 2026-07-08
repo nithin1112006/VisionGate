@@ -228,12 +228,12 @@ class PreVerificationService {
   /// Call this from [_verifyFace] / [verifyAndMarkAttendance] instead of
   /// running VPN + WiFi + Geofence checks inline.
   Future<PreVerificationStatus> getOrRefresh() async {
-    if (_status.isWithinTTL(_ttl) && _status.timestamp != null) {
+    if (_status.isWithinTTL(_ttl)) {
       final age = DateTime.now().difference(_status.timestamp!).inSeconds;
-      debugPrint('[PreVerif] Using cached credentials (age=${age}s).');
+      debugPrint('[PreVerif] Using most recent cached credentials instantly (age=${age}s).');
       return _status;
     }
-    debugPrint('[PreVerif] Cache stale or empty — running fresh check before face-verify.');
+    debugPrint('[PreVerif] Cache empty or stale — running fresh check before face-verify.');
     return await forceRefresh();
   }
 

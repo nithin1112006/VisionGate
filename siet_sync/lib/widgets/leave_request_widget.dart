@@ -292,7 +292,7 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
 
             const SizedBox(height: 12),
             if (_loadingBalances)
-              const LinearProgressIndicator(color: Colors.deepPurple)
+              const LinearProgressIndicator(color: const Color(0xFF0067B8))
             else
               Row(
                 children: [
@@ -319,16 +319,16 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.deepPurple.withValues(alpha: 0.1),
+                        color: const Color(0xFF0067B8).withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.3)),
+                        border: Border.all(color: const Color(0xFF0067B8).withValues(alpha: 0.3)),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Earned Leaves Left', style: TextStyle(fontSize: 12, color: Colors.deepPurple, fontWeight: FontWeight.w500)),
+                          const Text('Earned Leaves Left', style: TextStyle(fontSize: 12, color: const Color(0xFF0067B8), fontWeight: FontWeight.w500)),
                           const SizedBox(height: 4),
-                          Text('${_availableCCL ?? 0.0} EL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+                          Text('${_availableCCL ?? 0.0} EL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF0067B8))),
                         ],
                       ),
                     ),
@@ -1754,7 +1754,7 @@ class _LeaveRequestDetailSheetState extends State<LeaveRequestDetailSheet> {
                     child: SizedBox(
                       height: 16,
                       width: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.deepPurple),
+                      child: CircularProgressIndicator(strokeWidth: 2, color: const Color(0xFF0067B8)),
                     ),
                   ),
                 )

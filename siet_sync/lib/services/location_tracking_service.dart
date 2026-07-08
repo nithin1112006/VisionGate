@@ -3,28 +3,42 @@ import 'dart:convert';
 
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'background_service_handler.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../config/college_ip_config.dart';
 import 'api_client.dart';
 import 'session_service.dart';
 
-class LocationTrackingService {
+class LocationTrackingService with WidgetsBindingObserver {
   LocationTrackingService._() {
     _initLocalNotifications();
+    WidgetsBinding.instance.addObserver(this);
+  }
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_running && _activeToken != null) {
+        _captureAndQueue(source: 'app_resume');
+        flushAllCachesInstantly();
+      }
+    }
   }
   static final LocationTrackingService instance = LocationTrackingService._();
 
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
   StreamSubscription<Position>? _positionSub;
   Timer? _heartbeatTimer;
+  Timer? _appLivePingTimer;
   bool _running = false;
   String? _activeToken;
   Map<String, dynamic>? _activeUser;
   final List<Map<String, dynamic>> _pending = [];
-  bool _flushing = false;
   
   // Tracking window status variables
   bool _trackingSuspended = false;
@@ -45,24 +59,39 @@ class LocationTrackingService {
   }
 
   Future<void> _showBreachNotification(String message) async {
-    const androidDetails = AndroidNotificationDetails(
+    final androidDetails = AndroidNotificationDetails(
       'geofence_breach_channel',
       'Geofence Alerts',
       channelDescription: 'Alerts when moving out of geofence boundaries',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 500]),
+      fullScreenIntent: true,
+      ongoing: false,
+      autoCancel: true,
+      styleInformation: BigTextStyleInformation(
+        message,
+        htmlFormatBigText: false,
+        contentTitle: '⚠ Boundary Breach Detected!',
+        htmlFormatContentTitle: false,
+        summaryText: 'Attenda Geofence Alert',
+      ),
+      color: const Color(0xFFFF3333),
+      largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentSound: true,
       presentBadge: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
     
     await _localNotifications.show(
       1001,
-      'Geofence Boundary Breach!',
+      '⚠ Boundary Breach Detected!',
       message,
       details,
     );
@@ -80,6 +109,14 @@ class LocationTrackingService {
     }
 
     await stopTracking();
+    
+    try {
+      final role = await sessionService.getUserRole();
+      if (role == 'admin') {
+        return false;
+      }
+    } catch (_) {}
+
     _activeToken = token;
     _activeUser = user;
 
@@ -95,33 +132,129 @@ class LocationTrackingService {
     }
 
     _running = true;
+    await updateLocalAttendanceStatus();
     _trackingSuspended = false;
 
     // Check if tracking should be active dynamically
     final active = await checkTrackingActive();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('last_tracking_active', active);
+    } catch (_) {}
+
     if (!active) {
       _trackingSuspended = true;
     } else {
-      await _captureAndQueue(source: 'startup');
-      _startStream();
+      _trackingSuspended = false;
     }
     _startHeartbeat();
-    try {
-      final service = FlutterBackgroundService();
-      final isRunning = await service.isRunning();
-      if (!isRunning) {
-        await service.startService();
+
+    // Start App Live Ping and Cache-Flush timer
+    _appLivePingTimer?.cancel();
+    _appLivePingTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!_running) {
+        _appLivePingTimer?.cancel();
+        return;
       }
-      service.invoke('startTracking');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('app_last_active_time', DateTime.now().toUtc().toIso8601String());
+        
+        // If there are logs cached while offline or buffered while online, flush them instantly when app is open
+        final offlineLogs = prefs.getStringList('offline_locations') ?? [];
+        final bufferedLogs = prefs.getStringList('online_buffered_locations') ?? [];
+        if (offlineLogs.isNotEmpty || bufferedLogs.isNotEmpty) {
+          await flushAllCachesInstantly();
+        }
+      } catch (_) {}
+    });
+
+    // Flush any pending data instantly on start tracking
+    flushAllCachesInstantly();
+
+    try {
+      double latSum = 0;
+      double lngSum = 0;
+      final poly = CollegeIPConfig.geoFencePolygon;
+      for (final pt in poly) {
+        latSum += pt[0];
+        lngSum += pt[1];
+      }
+      double centerLat = poly.isNotEmpty ? (latSum / poly.length) : 11.0396;
+      double centerLng = poly.isNotEmpty ? (lngSum / poly.length) : 77.0747;
+
+      final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
+      await BackgroundLocationService.start(
+        baseUrl: CollegeIPConfig.defaultURL,
+        geofenceLat: centerLat,
+        geofenceLng: centerLng,
+        geofenceRadius: 250.0,
+        token: _activeToken!,
+        regNo: regNo.toString(),
+        deviceSessionId: _deviceSessionId ?? '',
+      );
     } catch (_) {}
     return true;
   }
 
+  Future<void> flushAllCachesInstantly() async {
+    if (_activeToken == null || _activeUser == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
 
+      final List<String> cachedOffline = prefs.getStringList('offline_locations') ?? [];
+      final List<String> cachedBuffered = prefs.getStringList('online_buffered_locations') ?? [];
+
+      final List<Map<String, dynamic>> combinedLogs = [];
+      if (cachedOffline.isNotEmpty) {
+        combinedLogs.addAll(cachedOffline.map((s) => jsonDecode(s) as Map<String, dynamic>));
+      }
+      if (cachedBuffered.isNotEmpty) {
+        combinedLogs.addAll(cachedBuffered.map((s) => jsonDecode(s) as Map<String, dynamic>));
+      }
+
+      if (combinedLogs.isEmpty) return;
+
+      final regNo = _activeUser!.containsKey('regNo')
+          ? _activeUser!['regNo'].toString()
+          : (_activeUser!['reg_no']?.toString() ?? '');
+
+      final response = await apiClient.post(
+        '${CollegeIPConfig.defaultURL}/location/sync_offline',
+        token: _activeToken,
+        body: jsonEncode({
+          'device_id': _deviceSessionId ?? 'app_$regNo',
+          'logs': combinedLogs,
+        }),
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        await prefs.reload();
+        // Clear both lists safely
+        await prefs.setStringList('offline_locations', []);
+        await prefs.setStringList('online_buffered_locations', []);
+
+        // Process boundary warning alerts if returned in the batch sync response
+        final data = jsonDecode(response.body);
+        if (data['boundary_warning'] == true && data['warning'] != null) {
+          _warningController.add(data['warning'].toString());
+          _showBreachNotification(data['warning'].toString());
+        } else {
+          _localNotifications.cancel(1001);
+        }
+      }
+    } catch (_) {}
+  }
 
   Future<void> stopTracking() async {
     if (kIsWeb) return;
     _running = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('last_tracking_active', false);
+    } catch (_) {}
+
     try {
       await _positionSub?.cancel();
     } catch (_) {}
@@ -131,6 +264,11 @@ class LocationTrackingService {
       _heartbeatTimer?.cancel();
     } catch (_) {}
     _heartbeatTimer = null;
+
+    try {
+      _appLivePingTimer?.cancel();
+    } catch (_) {}
+    _appLivePingTimer = null;
     
     _activeToken = null;
     _activeUser = null;
@@ -139,11 +277,7 @@ class LocationTrackingService {
     _trackingSuspended = false;
     
     try {
-      final service = FlutterBackgroundService();
-      final isRunning = await service.isRunning();
-      if (isRunning) {
-        service.invoke('stopService');
-      }
+      await BackgroundLocationService.stop();
     } catch (_) {}
   }
 
@@ -152,22 +286,46 @@ class LocationTrackingService {
   /// This eliminates the delay for start/stop of tracking.
   Future<void> onAttendanceMarked() async {
     if (!_running || _activeToken == null) return;
+    await updateLocalAttendanceStatus();
     final active = await checkTrackingActive();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('last_tracking_active', active);
+    } catch (_) {}
+
     if (active) {
       if (_trackingSuspended) {
         _trackingSuspended = false;
-        _startStream();
-        await _captureAndQueue(source: 'attendance_mark');
-        await _flushPending();
       }
+      try {
+        double latSum = 0;
+        double lngSum = 0;
+        final poly = CollegeIPConfig.geoFencePolygon;
+        for (final pt in poly) {
+          latSum += pt[0];
+          lngSum += pt[1];
+        }
+        double centerLat = poly.isNotEmpty ? (latSum / poly.length) : 11.0396;
+        double centerLng = poly.isNotEmpty ? (lngSum / poly.length) : 77.0747;
+
+        final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
+        await BackgroundLocationService.start(
+          baseUrl: CollegeIPConfig.defaultURL,
+          geofenceLat: centerLat,
+          geofenceLng: centerLng,
+          geofenceRadius: 250.0,
+          token: _activeToken!,
+          regNo: regNo.toString(),
+          deviceSessionId: _deviceSessionId ?? '',
+        );
+      } catch (_) {}
     } else {
       if (!_trackingSuspended) {
         _trackingSuspended = true;
-        await _positionSub?.cancel();
-        _positionSub = null;
       }
-      // Flush any remaining pending positions before fully suspending
-      await _flushPending();
+      try {
+        await BackgroundLocationService.stop();
+      } catch (_) {}
     }
   }
 
@@ -186,7 +344,14 @@ class LocationTrackingService {
           await stopTracking();
           return false;
         }
-        return body['tracking_active'] == true;
+        
+        final active = body['tracking_active'] == true;
+        if (active && body['force_update'] == true) {
+          // Instantly capture and flush location
+          _captureAndQueue(source: 'force_update_instant').then((_) => _flushPending());
+        }
+        
+        return active;
       } else if (response.statusCode == 403) {
         await stopTracking();
         return false;
@@ -203,7 +368,7 @@ class LocationTrackingService {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
-        intervalDuration: const Duration(minutes: 1),
+        intervalDuration: const Duration(minutes: 2),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationText: "Running in the background to verify location attendance.",
           notificationTitle: "Attenda Location Sync",
@@ -235,24 +400,19 @@ class LocationTrackingService {
   }
 
   void _startHeartbeat() {
-    // Poll tracking status and flush positions every 1 minute for dynamic updates
-    _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
+    // Poll tracking status and flush positions every 2 minutes for dynamic updates
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 2), (timer) async {
       if (!_running) return;
       
+      await updateLocalAttendanceStatus();
       final active = await checkTrackingActive();
       if (active) {
         if (_trackingSuspended) {
           _trackingSuspended = false;
-          _startStream();
-          await _captureAndQueue(source: 'startup');
         }
-        await _captureAndQueue(source: 'heartbeat');
-        await _flushPending();
       } else {
         if (!_trackingSuspended) {
           _trackingSuspended = true;
-          await _positionSub?.cancel();
-          _positionSub = null;
         }
       }
     });
@@ -287,84 +447,73 @@ class LocationTrackingService {
   }
 
 
-  void _queuePosition(Position position, {required String source}) {
+  Future<void> _queuePosition(Position position, {required String source}) async {
     if (!_running || _trackingSuspended || _activeToken == null || _activeUser == null) return;
     
     // Ignore noisy location updates with error margin > 50 meters
     if (position.accuracy > 50.0) return;
 
-    final regNo = _activeUser!.containsKey('regNo')
-        ? _activeUser!['regNo'].toString()
-        : (_activeUser!['reg_no']?.toString() ?? '');
+
+
+    final ist = position.timestamp.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final iso = ist.toIso8601String();
+    final capturedAtIST = '${iso.endsWith('Z') ? iso.substring(0, iso.length - 1) : iso}+05:30';
 
     final payload = <String, dynamic>{
       'latitude': position.latitude,
       'longitude': position.longitude,
-      'accuracy_meters': position.accuracy,
-      'speed_mps': position.speed,
-      'heading_deg': position.heading,
-      'altitude_m': position.altitude,
-      'is_mocked': position.isMocked,
-      'source': source,
-      'app_state': 'active',
-      'captured_at': position.timestamp.toUtc().toIso8601String(),
-      'device_id': _deviceSessionId ?? 'app_$regNo',
+      'captured_at': capturedAtIST,
     };
 
-    _pending.add(payload);
-    if (_pending.length > 300) {
-      _pending.removeRange(0, _pending.length - 300);
-    }
-    _flushPending();
-  }
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOffline = connectivityResult == ConnectivityResult.none;
 
-  Future<void> _flushPending() async {
-    if (_flushing || _activeToken == null || _pending.isEmpty) return;
-    _flushing = true;
     try {
-      int retries = 0;
-      while (_pending.isNotEmpty && _activeToken != null && retries < 3) {
-        final current = _pending.first;
-        try {
-          final response = await apiClient.post(
-            '${CollegeIPConfig.defaultURL}/location/update',
-            token: _activeToken,
-            body: jsonEncode(current),
-          );
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            _pending.removeAt(0);
-            retries = 0; // reset retry count on success
-            
-            // Extract warning payloads if any
-            final data = jsonDecode(response.body);
-            if (data['boundary_warning'] == true && data['warning'] != null) {
-              _warningController.add(data['warning'].toString());
-              _showBreachNotification(data['warning'].toString());
-            }
-          } else if (response.statusCode == 403 || response.statusCode == 401) {
-            // Device mismatch or unauthorized - stop trying
-            break;
+      final prefs = await SharedPreferences.getInstance();
+      if (isOffline) {
+        List<String> offlineLogs = prefs.getStringList('offline_locations') ?? [];
+        offlineLogs.add(jsonEncode(payload));
+        if (offlineLogs.length > 500) {
+          offlineLogs.removeAt(0);
+        }
+        await prefs.setStringList('offline_locations', offlineLogs);
+      } else {
+        final regNo = _activeUser!.containsKey('regNo')
+            ? _activeUser!['regNo'].toString()
+            : (_activeUser!['reg_no']?.toString() ?? '');
+        final updatePayload = <String, dynamic>{
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'accuracy_meters': position.accuracy,
+          'speed_mps': position.speed,
+          'heading_deg': position.heading,
+          'altitude_m': position.altitude,
+          'is_mocked': position.isMocked,
+          'source': source,
+          'app_state': 'foreground',
+          'captured_at': capturedAtIST,
+          'device_id': _deviceSessionId ?? 'app_$regNo',
+        };
+        final response = await apiClient.post(
+          '${CollegeIPConfig.defaultURL}/location/update',
+          token: _activeToken,
+          body: jsonEncode(updatePayload),
+        );
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          final data = jsonDecode(response.body);
+          if (data['boundary_warning'] == true && data['warning'] != null) {
+            _warningController.add(data['warning'].toString());
+            _showBreachNotification(data['warning'].toString());
           } else {
-            // Server error - retry up to 3 times
-            retries++;
-            if (retries < 3) {
-              await Future.delayed(const Duration(seconds: 2));
-            } else {
-              break;
-            }
-          }
-        } catch (_) {
-          retries++;
-          if (retries < 3) {
-            await Future.delayed(const Duration(seconds: 2));
-          } else {
-            break;
+            _localNotifications.cancel(1001);
           }
         }
       }
-    } finally {
-      _flushing = false;
-    }
+    } catch (_) {}
+  }
+
+  Future<void> _flushPending() async {
+    flushAllCachesInstantly();
   }
 
   Future<bool> _ensureLocationPermission() async {
@@ -396,5 +545,40 @@ class LocationTrackingService {
     }
 
     return true;
+  }
+
+  Future<void> updateLocalAttendanceStatus() async {
+    if (_activeToken == null || _activeUser == null) return;
+    try {
+      final today = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30)).toString().split(' ')[0];
+      final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
+      
+      final response = await apiClient.get(
+        '${CollegeIPConfig.defaultURL}/staff/attendance?date=$today',
+        token: _activeToken,
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final attendance = data['attendance'] as List? ?? [];
+        final userRecords = attendance.where((record) => record['reg_no'].toString() == regNo.toString()).toList();
+        
+        final hasCheckIn = userRecords.any((record) => record['status'] == 'check_in');
+        final hasCheckOut = userRecords.any((record) => record['status'] == 'check_out');
+        
+        final prefs = await SharedPreferences.getInstance();
+        if (hasCheckIn) {
+          await prefs.setString('checked_in_date', today);
+        } else {
+          await prefs.remove('checked_in_date');
+        }
+        
+        if (hasCheckOut) {
+          await prefs.setString('checked_out_date', today);
+        } else {
+          await prefs.remove('checked_out_date');
+        }
+      }
+    } catch (_) {}
   }
 }

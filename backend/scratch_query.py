@@ -1,10 +1,16 @@
-import pg_adapter
+import base64
+import urllib.request
+import json
 
-cursor = pg_adapter.cursor
-cursor.execute("SELECT reg_no, user_name, balance FROM earned_leave WHERE reg_no = 'HOD_0001'")
-print("earned_leave record:")
-print(cursor.fetchall())
-
-cursor.execute("SELECT reg_no, name, earned_points, date, slot_type FROM ccl_earned_history WHERE reg_no = 'HOD_0001'")
-print("ccl_earned_history records:")
-print(cursor.fetchall())
+token = base64.b64encode(b"admin:admin123").decode("utf-8")
+req = urllib.request.Request(
+    "http://localhost:8001/admin/ccl/balances",
+    headers={"Authorization": f"Bearer {token}"}
+)
+try:
+    with urllib.request.urlopen(req) as response:
+        print("Status:", response.status)
+        data = json.loads(response.read().decode('utf-8'))
+        print("Body:", json.dumps(data, indent=2))
+except Exception as e:
+    print("Error:", e)

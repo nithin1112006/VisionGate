@@ -11,6 +11,7 @@ import '../config/college_ip_config.dart';
 import '../services/api_client.dart';
 import '../services/location_tracking_service.dart';
 import '../services/session_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/responsive.dart';
 import '../utils/api_response_utils.dart';
 import '../widgets/advanced_stat_card.dart';
@@ -19,7 +20,9 @@ import '../widgets/face_registration_widget.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
+import '../services/pre_verification_service.dart';
 import '../services/leave_balance_notifier.dart';
+import 'attendance_log_page.dart';
 
 
 // Quick select chip widget
@@ -440,6 +443,7 @@ class HODDashboardPage extends StatefulWidget {
 
 class _HODDashboardPageState extends State<HODDashboardPage> {
   int _selectedIndex = 0;
+  StreamSubscription<String>? _warningSub;
 
   final List<Widget> _pages = [];
   final List<String> _titles = [
@@ -449,6 +453,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     'Leave Requests',
     'Analytics',
     'My Face',
+    'Attendance Log',
     'Settings',
   ];
 
@@ -461,14 +466,58 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     }
   }
 
+  void _checkOfflineViolations() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    if (prefs.getBool('offline_rules_violated') == true) {
+      final msg = prefs.getString('offline_violation_message') ?? 'Rule violation detected during offline tracking. You have been marked absent.';
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: const [
+                Icon(Icons.warning_amber_rounded, color: Colors.red),
+                SizedBox(width: 10),
+                Text('Rule Violation Warning'),
+              ],
+            ),
+            content: Text(msg),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await prefs.remove('offline_rules_violated');
+                  await prefs.remove('offline_violation_message');
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _checkOfflineViolations();
     if (!kIsWeb) {
       LocationTrackingService.instance.startTracking(
         token: widget.token,
         user: widget.user,
       );
+      _warningSub = LocationTrackingService.instance.warningStream.listen((warning) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => _BoundaryBreachDialog(message: warning),
+          );
+        }
+      });
     }
     _pages.addAll([
       HODDashboardTab(
@@ -485,12 +534,14 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
         dept: widget.user['dept'],
       ),
       HODFaceRegisterTab(token: widget.token, user: widget.user),
+      AttendanceLogTab(token: widget.token, user: widget.user),
       UserSettingsTab(title: 'HOD Settings', token: widget.token),
     ]);
   }
 
   void _logout() async {
     if (!kIsWeb) {
+      await _warningSub?.cancel();
       await LocationTrackingService.instance.stopTracking();
     }
     await sessionService.clearSession();
@@ -581,6 +632,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
                 dept: widget.user['dept'],
               ),
               HODFaceRegisterTab(token: widget.token, user: widget.user),
+              AttendanceLogTab(token: widget.token, user: widget.user),
               UserSettingsTab(title: 'HOD Settings', token: widget.token),
             ]);
           });
@@ -720,6 +772,12 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
             ),
             _buildDrawerItem(
               6,
+              Icons.history_edu_rounded,
+              'Attendance Log',
+              Icons.history_edu_outlined,
+            ),
+            _buildDrawerItem(
+              7,
               Icons.settings_rounded,
               'Settings',
               Icons.settings_outlined,
@@ -3258,6 +3316,7 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
     super.initState();
     _checkFaceStatus();
     _checkTodayAttendance();
+    PreVerificationService.instance.forceRefresh();
   }
 
   Future<void> _checkFaceStatus() async {
@@ -7065,6 +7124,148 @@ class _InlineBadge extends StatelessWidget {
           fontSize: 10,
           fontWeight: FontWeight.w600,
           color: color,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Boundary Breach Alert Dialog ───────────────────────────────────────────
+class _BoundaryBreachDialog extends StatefulWidget {
+  final String message;
+  const _BoundaryBreachDialog({required this.message});
+
+  @override
+  State<_BoundaryBreachDialog> createState() => _BoundaryBreachDialogState();
+}
+
+class _BoundaryBreachDialogState extends State<_BoundaryBreachDialog>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: ScaleTransition(
+        scale: _pulseAnim,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF1A0000), Color(0xFF3D0000)],
+            ),
+            border: Border.all(color: const Color(0xFFFF3333), width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF3333).withValues(alpha: 0.45),
+                blurRadius: 32,
+                spreadRadius: 4,
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFFF3333).withValues(alpha: 0.15),
+                  border: Border.all(color: const Color(0xFFFF3333), width: 2),
+                ),
+                child: const Icon(
+                  Icons.location_off_rounded,
+                  color: Color(0xFFFF3333),
+                  size: 42,
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                '⚠ Boundary Breach Detected',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFFF6666),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF3333).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFFF3333).withValues(alpha: 0.4)),
+                ),
+                child: Text(
+                  widget.message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Your attendance may be affected. Please return to the designated area immediately.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFAAAAAA),
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+                  label: const Text(
+                    'I Understand',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF3333),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
