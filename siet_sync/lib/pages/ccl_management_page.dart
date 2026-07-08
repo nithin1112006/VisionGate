@@ -1343,14 +1343,18 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
         String msg;
         try { msg = json.decode(response.body)['detail'] ?? 'Sync failed'; }
         catch (_) { msg = 'Sync failed'; }
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.red),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(msg), backgroundColor: Colors.red),
+          );
+        }
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sync error: $e'), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync error: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -1383,7 +1387,7 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
           controller: ctrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           decoration: InputDecoration(
-            labelText: 'New EL Balance',
+            labelText: 'New CCL Balance',
             labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
             border: const OutlineInputBorder(),
           ),
@@ -1425,9 +1429,11 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
                   );
                 }
               } catch (e) {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+                  );
+                }
               }
             },
             style: ElevatedButton.styleFrom(
@@ -1448,7 +1454,7 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
         backgroundColor: isDark ? const Color(0xFF2D2D2D) : Colors.white,
         title: Text('Delete Record',
             style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Text('Are you sure you want to delete/reset the Earned Leave record for ${item['name']}? This will remove their current balance entry.',
+        content: Text('Are you sure you want to delete/reset the Compensatory Casual Leave record for ${item['name']}? This will remove their current balance entry.',
             style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -1599,18 +1605,22 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
                             onPressed: _syncing ? null : _sync,
                             icon: _syncing
                                 ? const SizedBox(
-                                    width: 16, height: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
                                   )
                                 : const Icon(Icons.sync, size: 18),
-                            label: const Text('Sync'),
+                            label: Text(_syncing ? 'Syncing...' : 'Sync Balances'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF0078D4),
                               foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              disabledBackgroundColor: Colors.grey,
                             ),
                           ),
+
                         ],
                       ),
                       const SizedBox(height: 16),

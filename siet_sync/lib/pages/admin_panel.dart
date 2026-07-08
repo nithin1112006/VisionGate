@@ -140,6 +140,53 @@ Future<void> downloadTemplateHelper(BuildContext context, String token, String t
   }
 }
 
+Future<void> downloadUsersHelper(BuildContext context, String token, String format) async {
+  final endpoint = '${CollegeIPConfig.defaultURL}/admin/users/export/$format';
+  final filename = 'all_users.${format == "excel" ? "xlsx" : "json"}';
+  try {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    final response = await http.get(
+      Uri.parse(endpoint),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    if (context.mounted) {
+      Navigator.pop(context);
+    }
+
+    if (response.statusCode == 200) {
+      await saveFile(response.bodyBytes, filename);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$filename downloaded successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } else {
+      throw Exception('Server returned status code ${response.statusCode}');
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error downloading users: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+}
+
+
 
 Future<void> performBulkUpload(BuildContext context, String token, String endpointUrl, VoidCallback onSuccess) async {
   try {
@@ -7571,7 +7618,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: PopupMenuButton<String>(
                               onSelected: (value) {
@@ -7633,6 +7680,56 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                                     Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
                                     SizedBox(width: 4),
                                     Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'excel') {
+                                  downloadUsersHelper(context, widget.token, 'excel');
+                                } else if (value == 'json') {
+                                  downloadUsersHelper(context, widget.token, 'json');
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(
+                                  value: 'excel',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.download, color: Colors.green),
+                                      SizedBox(width: 8),
+                                      Text('Download Users (Excel)'),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'json',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.download, color: Colors.amber),
+                                      SizedBox(width: 8),
+                                      Text('Download Users (JSON)'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.download_rounded, color: Colors.white, size: 18),
+                                    SizedBox(width: 4),
+                                    Text('Users', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
                                   ],
                                 ),
                               ),
@@ -7750,6 +7847,55 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                               Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
                               SizedBox(width: 4),
                               Text('Upload', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Download Users button
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          if (value == 'excel') {
+                            downloadUsersHelper(context, widget.token, 'excel');
+                          } else if (value == 'json') {
+                            downloadUsersHelper(context, widget.token, 'json');
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'excel',
+                            child: Row(
+                              children: [
+                                Icon(Icons.download, color: Colors.green),
+                                SizedBox(width: 8),
+                                Text('Download Users (Excel)'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'json',
+                            child: Row(
+                              children: [
+                                Icon(Icons.download, color: Colors.amber),
+                                SizedBox(width: 8),
+                                Text('Download Users (JSON)'),
+                              ],
+                            ),
+                          ),
+                        ],
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.download_rounded, color: Colors.white, size: 18),
+                              SizedBox(width: 4),
+                              Text('Download Users', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
                             ],
                           ),
                         ),

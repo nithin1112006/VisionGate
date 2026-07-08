@@ -8487,6 +8487,90 @@ async def admin_bulk_create_users(request: Request):
         print(f"Bulk create users error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create users: {str(e)}")
 
+@app.get("/admin/users/export/excel")
+async def admin_export_users_excel(request: Request):
+    verify_admin_token(request)
+    import openpyxl
+    import io
+    from fastapi.responses import StreamingResponse
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "All Users"
+    
+    headers = ["ID", "Username", "Register No", "Name", "Department", "Role", "Created At", "Face Registered", "Can Reregister", "Suspended"]
+    ws.append(headers)
+    
+    cursor.execute(
+        "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister, COALESCE(suspended, FALSE) FROM users"
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        face_registered = row[7] is not None
+        can_reregister = row[8] == 1
+        suspended = bool(row[9])
+        ws.append([
+            row[0], # ID
+            row[1], # Username
+            row[2], # Register No
+            row[3], # Name
+            row[4], # Department
+            row[5], # Role
+            row[6], # Created At
+            "Yes" if face_registered else "No",
+            "Yes" if can_reregister else "No",
+            "Yes" if suspended else "No"
+        ])
+        
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
+        
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=all_users.xlsx"}
+    )
+
+@app.get("/admin/users/export/json")
+async def admin_export_users_json(request: Request):
+    verify_admin_token(request)
+    import json
+    from fastapi import Response
+    
+    cursor.execute(
+        "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister, COALESCE(suspended, FALSE) FROM users"
+    )
+    rows = cursor.fetchall()
+    users_list = []
+    for row in rows:
+        face_registered = row[7] is not None
+        can_reregister = row[8] == 1
+        suspended = bool(row[9])
+        user = {
+            "id": row[0],
+            "username": row[1],
+            "reg_no": row[2],
+            "name": row[3],
+            "dept": row[4],
+            "role": row[5],
+            "created_at": row[6],
+            "face_registered": face_registered,
+            "can_reregister": can_reregister,
+            "suspended": suspended
+        }
+        users_list.append(user)
+        
+    return Response(
+        content=json.dumps(users_list, indent=4),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=all_users.json"}
+    )
+
 
 @app.get("/admin/templates/users/excel")
 async def get_users_excel_template(request: Request):
