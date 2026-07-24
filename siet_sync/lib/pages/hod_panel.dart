@@ -17,6 +17,7 @@ import '../utils/api_response_utils.dart';
 import '../widgets/advanced_stat_card.dart';
 import '../widgets/quick_access_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
+import '../widgets/attendance_pie_chart.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
@@ -588,6 +589,11 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       icon: Icons.face_outlined,
       selectedIcon: Icons.face_rounded,
       label: 'My Face',
+    ),
+    NavDestination(
+      icon: Icons.history_edu_outlined,
+      selectedIcon: Icons.history_edu_rounded,
+      label: 'Log',
     ),
     NavDestination(
       icon: Icons.settings_outlined,
@@ -1214,10 +1220,12 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
     }
 
     Widget deptAttendanceProgress() {
-      // Calculate Active Ratio
-      final double totalStaffNum = double.tryParse(stats['total_staff']?.toString() ?? '0') ?? 0;
-      final double todayActiveNum = double.tryParse(stats['today_attendance']?.toString() ?? '0') ?? 0;
-      final double deptRatio = totalStaffNum > 0 ? (todayActiveNum / totalStaffNum).clamp(0.0, 1.0) : 1.0;
+      // Pull pie-chart fields from the enriched dashboard response
+      final int fullDay  = (stats['today_full_day']  as num? ?? 0).toInt();
+      final int halfDay  = (stats['today_half_day']  as num? ?? 0).toInt();
+      final int absent   = (stats['today_absent']    as num? ?? 0).toInt();
+      final int onLeave  = (stats['today_leave']     as num? ?? 0).toInt();
+      final int total    = (stats['total_staff']     as num? ?? 0).toInt();
 
       return bentoCard(
         accentColor: Colors.green,
@@ -1225,64 +1233,33 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Active Deployment Today',
+              'Daily Attendance',
               style: TextStyle(
                 color: isDark ? Colors.white70 : Colors.black54,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const Spacer(),
-            Center(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: 100,
-                    height: 100,
-                    child: CircularProgressIndicator(
-                      value: deptRatio,
-                      strokeWidth: 10,
-                      backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
-                    ),
-                  ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${(deptRatio * 100).toInt()}%',
-                        style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        'Active',
-                        style: TextStyle(
-                          color: isDark ? Colors.white60 : Colors.black45,
-                          fontSize: 10,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+            const SizedBox(height: 8),
+            Expanded(
+              child: Center(
+                child: AttendancePieChart(
+                  fullDay: fullDay,
+                  halfDay: halfDay,
+                  absent: absent,
+                  onLeave: onLeave,
+                  centerLabel: 'Staff',
+                  centerSpaceRadius: 38,
+                ),
               ),
             ),
-            const Spacer(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Present Today: ${todayActiveNum.toInt()} staff',
-                  style: const TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  'Out of: ${totalStaffNum.toInt()}',
-                  style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
-                ),
-              ],
+            const SizedBox(height: 4),
+            Text(
+              'Total: ${fullDay + halfDay + absent + onLeave} / $total',
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.black45,
+                fontSize: 10,
+              ),
             ),
           ],
         ),
@@ -1415,7 +1392,7 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                 Expanded(
                   flex: 2,
                   child: SizedBox(
-                    height: 225,
+                    height: 270,
                     child: deptAttendanceProgress(),
                   ),
                 ),
@@ -1542,7 +1519,7 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
             welcomeCard(),
             const SizedBox(height: 16),
             SizedBox(
-              height: 220,
+              height: 270,
               child: deptAttendanceProgress(),
             ),
             const SizedBox(height: 16),

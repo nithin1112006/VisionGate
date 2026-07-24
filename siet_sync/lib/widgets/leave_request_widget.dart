@@ -34,6 +34,8 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
   String _selectedLeaveType = 'sick';
   DateTime? _startDate;
   DateTime? _endDate;
+  bool _isHalfDay = false;
+  String _whichHalf = 'first'; // 'first' or 'second'
   bool _isLoading = false;
   String? _errorMessage;
   
@@ -211,8 +213,10 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
       token: widget.token,
       leaveType: _selectedLeaveType,
       startDate: _formatDate(_startDate!),
-      endDate: _formatDate(_endDate!),
+      endDate: _formatDate(_isHalfDay ? _startDate! : _endDate!),
       reason: _reasonController.text.trim(),
+      isHalfDay: _isHalfDay,
+      whichHalf: _isHalfDay ? _whichHalf : null,
     );
 
     setState(() {
@@ -243,7 +247,7 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
       }
     } else {
       setState(() {
-        _errorMessage = result['message'] ?? 'Failed to submit leave request';
+        _errorMessage = result['message'] ?? 'Unable to send leave request';
       });
     }
   }
@@ -335,6 +339,78 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
                   ),
                 ],
               ),
+
+            const SizedBox(height: 16),
+
+            // Half Day Switch & Selector
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.grey[850] : Colors.deepPurple.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.2)),
+              ),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Apply for Half Day',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                    subtitle: const Text(
+                      'Request leave for only one half of a day (0.5 day deduction)',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    value: _isHalfDay,
+                    onChanged: (val) {
+                      setState(() {
+                        _isHalfDay = val;
+                        if (val && _startDate != null) {
+                          _endDate = _startDate;
+                        }
+                      });
+                    },
+                    activeColor: Colors.deepPurple,
+                  ),
+                  if (_isHalfDay) ...[
+                    const Divider(),
+                    Row(
+                      children: [
+                        const Text(
+                          'Session:',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(
+                                value: 'first',
+                                label: Text('First Half'),
+                                icon: Icon(Icons.wb_sunny_outlined, size: 16),
+                              ),
+                              ButtonSegment(
+                                value: 'second',
+                                label: Text('Second Half'),
+                                icon: Icon(Icons.nights_stay_outlined, size: 16),
+                              ),
+                            ],
+                            selected: {_whichHalf},
+                            onSelectionChanged: (Set<String> newSelection) {
+                              setState(() {
+                                _whichHalf = newSelection.first;
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ],
+              ),
+            ),
 
             const SizedBox(height: 20),
 

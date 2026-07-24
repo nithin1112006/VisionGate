@@ -27,20 +27,28 @@ class LeaveRequestService {
     required String startDate,
     required String endDate,
     required String reason,
+    bool isHalfDay = false,
+    String? whichHalf,
   }) async {
     try {
+      final bodyMap = <String, dynamic>{
+        'leave_type': leaveType,
+        'start_date': startDate,
+        'end_date': endDate,
+        'reason': reason,
+        'is_half_day': isHalfDay,
+      };
+      if (isHalfDay && whichHalf != null) {
+        bodyMap['which_half'] = whichHalf;
+      }
+
       final response = await http.post(
         Uri.parse('$API_URL/leave/submit'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({
-          'leave_type': leaveType,
-          'start_date': startDate,
-          'end_date': endDate,
-          'reason': reason,
-        }),
+        body: jsonEncode(bodyMap),
       );
       
       if (response.statusCode == 200) {
@@ -49,7 +57,7 @@ class LeaveRequestService {
         final error = jsonDecode(response.body);
         return {
           'success': false,
-          'message': error['detail'] ?? 'Failed to submit leave request',
+          'message': error['detail'] ?? 'Unable to send leave request',
         };
       }
     } catch (e) {

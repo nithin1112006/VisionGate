@@ -17,6 +17,12 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
   bool _isLoading = true;
   bool _isSaving = false;
 
+  // Master Session Boundaries
+  String _fhStart = '08:30';
+  String _fhEnd = '13:00';
+  String _shStart = '13:00';
+  String _shEnd = '17:30';
+
   @override
   void initState() {
     super.initState();
@@ -33,32 +39,40 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        if (data['session_boundaries'] != null) {
+          final sb = data['session_boundaries'];
+          _fhStart = sb['first_half_start'] ?? '08:30';
+          _fhEnd = sb['first_half_end'] ?? '13:00';
+          _shStart = sb['second_half_start'] ?? '13:00';
+          _shEnd = sb['second_half_end'] ?? '17:30';
+        }
         if (data['data'] != null && (data['data'] as List).isNotEmpty) {
           setState(() {
             _slots = (data['data'] as List).map((e) {
               final map = Map<String, dynamic>.from(e);
               map['slot_type'] = map['slot_type'] ?? 'check_in';
+              map['slot_half'] = map['slot_half'] ?? 'full_day';
               return map;
             }).toList();
           });
         } else {
           // Initialize with default slots
           _slots = [
-            {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in'},
-            {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out'},
+            {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in', 'slot_half': 'first_half'},
+            {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out', 'slot_half': 'second_half'},
           ];
         }
       } else {
         _slots = [
-          {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in'},
-          {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out'},
+          {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in', 'slot_half': 'first_half'},
+          {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out', 'slot_half': 'second_half'},
         ];
       }
     } catch (e) {
       print('Error loading duration settings: $e');
       _slots = [
-        {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in'},
-        {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out'},
+        {'slot_number': 1, 'start_time': '09:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_in', 'slot_half': 'first_half'},
+        {'slot_number': 2, 'start_time': '14:00', 'duration_minutes': 30, 'is_enabled': true, 'slot_type': 'check_out', 'slot_half': 'second_half'},
       ];
     } finally {
       setState(() {
@@ -80,7 +94,15 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
           'Authorization': 'Bearer ${widget.token}',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'settings': _slots}),
+        body: jsonEncode({
+          'settings': _slots,
+          'session_boundaries': {
+            'first_half_start': _fhStart,
+            'first_half_end': _fhEnd,
+            'second_half_start': _shStart,
+            'second_half_end': _shEnd,
+          },
+        }),
       );
 
       if (response.statusCode == 200) {
@@ -164,6 +186,42 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
       },
     );
   }
+
+  Widget _buildBoundaryTimePicker(String label, String timeStr, Function(String) onPicked) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        InkWell(
+          onTap: () async {
+            final parts = timeStr.split(':');
+            final initial = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+            final picked = await showTimePicker(context: context, initialTime: initial);
+            if (picked != null) {
+              onPicked('${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}');
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark ? Colors.grey[850] : Colors.white,
+              border: Border.all(color: Colors.grey[300]!),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(timeStr, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                const Icon(Icons.access_time, size: 16, color: Colors.grey),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
 
   Future<void> _selectTime(int index) async {
     final TimeOfDay? picked = await showTimePicker(
@@ -259,30 +317,104 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header
+                  // Master Session Boundaries Card
                   Card(
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.timer, color: Colors.teal[700], size: 32),
-                          const SizedBox(width: 16),
-                          Expanded(
+                          Row(
+                            children: [
+                              const Icon(Icons.schedule, color: Colors.deepPurple, size: 24),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Overall Half Session Boundaries',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Define master operating hours for First Half and Second Half. Check-in/out slots must stay strictly within their session boundary.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // First Half Boundary Controls
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                            ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  'Attendance Time Slots',
-                                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                const Row(
+                                  children: [
+                                    Icon(Icons.wb_sunny_outlined, color: Colors.amber, size: 18),
+                                    SizedBox(width: 8),
+                                    Text('First Half Session Boundary', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ],
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Configure when staff can mark attendance. Each slot defines a time window.',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Colors.grey[600],
-                                  ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildBoundaryTimePicker('Start Time', _fhStart, (newTime) {
+                                        setState(() => _fhStart = newTime);
+                                      }),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: _buildBoundaryTimePicker('End Time', _fhEnd, (newTime) {
+                                        setState(() => _fhEnd = newTime);
+                                      }),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Second Half Boundary Controls
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.indigo.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.indigo.withValues(alpha: 0.3)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.nights_stay_outlined, color: Colors.indigo, size: 18),
+                                    SizedBox(width: 8),
+                                    Text('Second Half Session Boundary', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildBoundaryTimePicker('Start Time', _shStart, (newTime) {
+                                        setState(() => _shStart = newTime);
+                                      }),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: _buildBoundaryTimePicker('End Time', _shEnd, (newTime) {
+                                        setState(() => _shEnd = newTime);
+                                      }),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -344,7 +476,7 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                               ),
                               const SizedBox(height: 16),
 
-                              // Slot Type Selector
+                              // Slot Type & Slot Half Selector
                               Row(
                                 children: [
                                   Expanded(
@@ -383,6 +515,55 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                                               if (value != null) {
                                                 setState(() {
                                                   _slots[index]['slot_type'] = value;
+                                                });
+                                              }
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Session / Half Split',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                                          decoration: BoxDecoration(
+                                            border: Border.all(color: Colors.grey[300]!),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: DropdownButton<String>(
+                                            value: _slots[index]['slot_half'] ?? 'full_day',
+                                            isExpanded: true,
+                                            underline: const SizedBox(),
+                                            items: const [
+                                              DropdownMenuItem(
+                                                value: 'full_day',
+                                                child: Text('Full Day / Standard'),
+                                              ),
+                                              DropdownMenuItem(
+                                                value: 'first_half',
+                                                child: Text('First Half Slot'),
+                                              ),
+                                              DropdownMenuItem(
+                                                value: 'second_half',
+                                                child: Text('Second Half Slot'),
+                                              ),
+                                            ],
+                                            onChanged: (value) {
+                                              if (value != null) {
+                                                setState(() {
+                                                  _slots[index]['slot_half'] = value;
                                                 });
                                               }
                                             },

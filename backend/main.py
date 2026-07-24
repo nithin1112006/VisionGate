@@ -697,6 +697,25 @@ async def lifespan(app: FastAPI):
     threat_update_task = asyncio.create_task(periodic_threat_updates())
     mv_refresh_task = asyncio.create_task(periodic_mv_refresh())
 
+    # Check and process leave expiry on startup
+    print("⏳ Checking CL/EL expiry dates...")
+    try:
+        _check_and_expire_leaves(triggered_by="startup")
+    except Exception as e:
+        print(f"⚠️ Startup leave expiry check failed: {e}")
+
+    # Start periodic leave expiry check background task (runs daily)
+    async def periodic_leave_expiry():
+        while True:
+            try:
+                await asyncio.sleep(86400)  # Check every 24 hours
+                _check_and_expire_leaves(triggered_by="periodic_job")
+            except Exception as e:
+                print(f"⚠️ Periodic leave expiry check failed: {e}")
+                await asyncio.sleep(3600)
+
+    leave_expiry_task = asyncio.create_task(periodic_leave_expiry())
+
     print("✅ Application startup complete")
 
     yield
@@ -704,9 +723,11 @@ async def lifespan(app: FastAPI):
     print("🛑 Shutting down application...")
     threat_update_task.cancel()
     mv_refresh_task.cancel()
+    leave_expiry_task.cancel()
     try:
         await threat_update_task
         await mv_refresh_task
+        await leave_expiry_task
     except asyncio.CancelledError:
         pass
 
@@ -1800,7 +1821,7 @@ async def get_attendance_duration_settings(request: Request):
     verify_admin_token(request)
 
     cursor.execute("""
-        SELECT id, slot_number, start_time, duration_minutes, is_enabled, created_at, updated_at, slot_type
+        SELECT id, slot_number, start_time, duration_minutes, is_enabled, created_at, updated_at, slot_type, slot_half
         FROM attendance_duration_settings
         ORDER BY slot_number ASC
     """)
@@ -1818,10 +1839,20 @@ async def get_attendance_duration_settings(request: Request):
                 "created_at": row[5],
                 "updated_at": row[6],
                 "slot_type": row[7] if len(row) > 7 and row[7] else "check_in",
+                "slot_half": row[8] if len(row) > 8 and row[8] else "full_day",
             }
         )
 
-    return {"success": True, "data": settings}
+    hd_settings = _get_half_day_settings()
+    session_boundaries = {
+        "first_half_start": hd_settings["first_half_start"],
+        "first_half_end": hd_settings["first_half_end"],
+        "second_half_start": hd_settings["second_half_start"],
+        "second_half_end": hd_settings["second_half_end"],
+    }
+
+    return {"success": True, "data": settings, "session_boundaries": session_boundaries}
+
 
 
 @app.post("/admin/attendance/duration")
@@ -1832,6 +1863,7 @@ async def save_attendance_duration_settings(request: Request):
     try:
         data = await request.json()
         settings = data.get("settings", [])
+        session_boundaries = data.get("session_boundaries")
     except:
         raise HTTPException(status_code=400, detail="Invalid request body")
 
@@ -1845,6 +1877,42 @@ async def save_attendance_duration_settings(request: Request):
             return int(parts[0]) * 60 + int(parts[1])
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid time format: {time_str}")
+
+    # Process and save master session boundaries if provided
+    current_boundaries = _get_half_day_settings()
+    fh_start_str = current_boundaries["first_half_start"]
+    fh_end_str = current_boundaries["first_half_end"]
+    sh_start_str = current_boundaries["second_half_start"]
+    sh_end_str = current_boundaries["second_half_end"]
+
+    if session_boundaries and isinstance(session_boundaries, dict):
+        fh_start_str = session_boundaries.get("first_half_start", fh_start_str)
+        fh_end_str = session_boundaries.get("first_half_end", fh_end_str)
+        sh_start_str = session_boundaries.get("second_half_start", sh_start_str)
+        sh_end_str = session_boundaries.get("second_half_end", sh_end_str)
+
+        fh_start_m = to_minutes(fh_start_str)
+        fh_end_m = to_minutes(fh_end_str)
+        sh_start_m = to_minutes(sh_start_str)
+        sh_end_m = to_minutes(sh_end_str)
+
+        if fh_start_m >= fh_end_m:
+            raise HTTPException(status_code=400, detail=f"First Half start time ({fh_start_str}) must be before end time ({fh_end_str}).")
+        if sh_start_m >= sh_end_m:
+            raise HTTPException(status_code=400, detail=f"Second Half start time ({sh_start_str}) must be before end time ({sh_end_str}).")
+        if max(fh_start_m, sh_start_m) < min(fh_end_m, sh_end_m):
+            raise HTTPException(status_code=400, detail=f"First Half boundary ({fh_start_str} - {fh_end_str}) overlaps with Second Half boundary ({sh_start_str} - {sh_end_str}).")
+
+        _save_leave_setting("first_half_start", fh_start_str, admin_user["name"])
+        _save_leave_setting("first_half_end", fh_end_str, admin_user["name"])
+        _save_leave_setting("second_half_start", sh_start_str, admin_user["name"])
+        _save_leave_setting("second_half_end", sh_end_str, admin_user["name"])
+
+    fh_boundary_start = to_minutes(fh_start_str)
+    fh_boundary_end = to_minutes(fh_end_str)
+    sh_boundary_start = to_minutes(sh_start_str)
+    sh_boundary_end = to_minutes(sh_end_str)
+
 
     # Validate against custom CCL settings
     cursor.execute("""
@@ -1870,6 +1938,25 @@ async def save_attendance_duration_settings(request: Request):
 
         slot_start_min = to_minutes(start_time)
         slot_end_min = slot_start_min + duration_minutes
+        slot_half = setting.get("slot_half", "full_day")
+
+        # Validate slot boundary against master session boundaries
+        if slot_half == "first_half":
+            if slot_start_min < fh_boundary_start or slot_end_min > fh_boundary_end:
+                err_msg = (
+                    f"Slot {slot_number} ({start_time} - {duration_minutes}m) assigned to First Half "
+                    f"exceeds the First Half session boundary ({fh_start_str} - {fh_end_str}). "
+                    f"Please adjust the start time or duration."
+                )
+                raise HTTPException(status_code=400, detail=err_msg)
+        elif slot_half == "second_half":
+            if slot_start_min < sh_boundary_start or slot_end_min > sh_boundary_end:
+                err_msg = (
+                    f"Slot {slot_number} ({start_time} - {duration_minutes}m) assigned to Second Half "
+                    f"exceeds the Second Half session boundary ({sh_start_str} - {sh_end_str}). "
+                    f"Please adjust the start time or duration."
+                )
+                raise HTTPException(status_code=400, detail=err_msg)
 
         for c_date in custom_dates:
             c_date_str = c_date[0]
@@ -1900,6 +1987,35 @@ async def save_attendance_duration_settings(request: Request):
                                f"Please set the slot timing outside the CCL window.")
                     raise HTTPException(status_code=400, detail=err_msg)
 
+    # Validate that First Half and Second Half slots do not overlap each other
+    fh_intervals = []
+    sh_intervals = []
+    for setting in settings:
+        s_num = setting.get("slot_number")
+        s_start = setting.get("start_time")
+        s_dur = int(setting.get("duration_minutes", 30))
+        s_half = setting.get("slot_half", "full_day")
+        s_en = setting.get("is_enabled", True)
+        is_en = (s_en is True or s_en == 1 or s_en == "true")
+        if not s_start or not is_en:
+            continue
+        start_m = to_minutes(s_start)
+        end_m = start_m + s_dur
+        if s_half == "first_half":
+            fh_intervals.append((start_m, end_m, s_num, s_start))
+        elif s_half == "second_half":
+            sh_intervals.append((start_m, end_m, s_num, s_start))
+
+    for fh_start, fh_end, fh_num, fh_t in fh_intervals:
+        for sh_start, sh_end, sh_num, sh_t in sh_intervals:
+            if max(fh_start, sh_start) < min(fh_end, sh_end):
+                err_msg = (
+                    f"First Half Slot {fh_num} ({fh_t}) overlaps with Second Half Slot {sh_num} ({sh_t}). "
+                    f"First Half and Second Half slots cannot cross over each other's duration."
+                )
+                raise HTTPException(status_code=400, detail=err_msg)
+
+
     try:
         # Delete existing settings and insert new ones
         cursor.execute("DELETE FROM attendance_duration_settings")
@@ -1923,11 +2039,13 @@ async def save_attendance_duration_settings(request: Request):
             if not slot_number or not start_time:
                 continue
 
+            slot_half = setting.get("slot_half", "full_day")
+
             cursor.execute(
                 """
                 INSERT INTO attendance_duration_settings 
-                (slot_number, start_time, duration_minutes, is_enabled, created_by, slot_type)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (slot_number, start_time, duration_minutes, is_enabled, created_by, slot_type, slot_half)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     slot_number,
@@ -1936,6 +2054,7 @@ async def save_attendance_duration_settings(request: Request):
                     is_enabled,
                     admin_user["name"],
                     slot_type,
+                    slot_half,
                 ),
             )
 
@@ -2357,7 +2476,167 @@ async def save_ccl_settings(request: Request):
     return {"success": True, "message": "CCL settings updated successfully"}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LEAVE SETTINGS — Half-day, CL Expiry, EL Expiry (Admin)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/admin/leave-settings")
+async def get_leave_settings_api(request: Request):
+    """Get all leave settings including half-day config, CL/EL expiry — Admin only."""
+    verify_admin_token(request)
+    _get_leave_settings(force=True)
+    hd_settings = _get_half_day_settings()
+    return {
+        "success": True,
+        "settings": {
+            "half_day_enabled": hd_settings["half_day_enabled"],
+            "first_half_label": hd_settings["first_half_label"],
+            "second_half_label": hd_settings["second_half_label"],
+            "cl_monthly_allocation": hd_settings["cl_monthly_allocation"],
+            "cl_expiry_date": hd_settings["cl_expiry_date"],
+            "el_expiry_date": hd_settings["el_expiry_date"],
+        },
+    }
+
+
+
+@app.post("/admin/leave-settings")
+async def save_leave_settings_api(request: Request):
+    """Save leave settings (half-day config, CL/EL expiry dates) — Admin only."""
+    admin = verify_admin_token(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    admin_name = admin.get("name", "admin") if admin else "admin"
+    saved = []
+
+    # Boolean/string settings
+    if "half_day_enabled" in body:
+        val = "true" if body["half_day_enabled"] else "false"
+        _save_leave_setting("half_day_enabled", val, admin_name)
+        saved.append("half_day_enabled")
+
+    if "first_half_label" in body:
+        _save_leave_setting("first_half_label", str(body["first_half_label"]), admin_name)
+        saved.append("first_half_label")
+
+    if "second_half_label" in body:
+        _save_leave_setting("second_half_label", str(body["second_half_label"]), admin_name)
+        saved.append("second_half_label")
+
+    if "cl_monthly_allocation" in body:
+        try:
+            alloc = int(body["cl_monthly_allocation"])
+            if alloc < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="cl_monthly_allocation must be a non-negative integer")
+        _save_leave_setting("cl_monthly_allocation", str(alloc), admin_name)
+        saved.append("cl_monthly_allocation")
+
+    if "cl_expiry_date" in body:
+        val = (body["cl_expiry_date"] or "").strip()
+        # Validate date format if provided
+        if val:
+            try:
+                datetime.strptime(val, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="cl_expiry_date must be YYYY-MM-DD or empty")
+        _save_leave_setting("cl_expiry_date", val, admin_name)
+        saved.append("cl_expiry_date")
+
+    if "el_expiry_date" in body:
+        val = (body["el_expiry_date"] or "").strip()
+        if val:
+            try:
+                datetime.strptime(val, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="el_expiry_date must be YYYY-MM-DD or empty")
+        _save_leave_setting("el_expiry_date", val, admin_name)
+        saved.append("el_expiry_date")
+
+    conn.commit()
+    _get_leave_settings(force=True)  # Refresh cache
+    log_audit_event("LEAVE_SETTINGS_UPDATED", admin_name, True, f"Keys updated: {saved}")
+
+    return {"success": True, "message": "Leave settings saved successfully", "updated_keys": saved}
+
+
+@app.post("/admin/cl/expire")
+async def expire_cl_now(request: Request):
+    """Immediately zero out all CL balances (admin-triggered expiry) — Admin only."""
+    admin = verify_admin_token(request)
+    admin_name = admin.get("name", "admin") if admin else "admin"
+    try:
+        cursor.execute(
+            """
+            UPDATE casual_leave
+            SET current_month_cl_available = 0,
+                accumulated_cl = 0,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE current_month_cl_available > 0 OR accumulated_cl > 0
+        """
+        )
+        count = cursor.rowcount or 0
+        conn.commit()
+        log_audit_event("CL_MANUALLY_EXPIRED", admin_name, True, f"CL zeroed for {count} records")
+        return {
+            "success": True,
+            "message": f"CL balances expired successfully for {count} staff record(s).",
+            "records_affected": count,
+        }
+    except Exception as e:
+        print(f"[CL Expiry] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"CL expiry failed: {e}")
+
+
+@app.post("/admin/el/expire")
+async def expire_el_now(request: Request):
+    """Immediately zero out all EL balances (admin-triggered expiry) — Admin only."""
+    admin = verify_admin_token(request)
+    admin_name = admin.get("name", "admin") if admin else "admin"
+    try:
+        cursor.execute(
+            """
+            UPDATE earned_leave
+            SET balance = 0.0,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE balance > 0
+        """
+        )
+        count = cursor.rowcount or 0
+        conn.commit()
+        log_audit_event("EL_MANUALLY_EXPIRED", admin_name, True, f"EL zeroed for {count} records")
+        return {
+            "success": True,
+            "message": f"Earned Leave balances expired successfully for {count} staff record(s).",
+            "records_affected": count,
+        }
+    except Exception as e:
+        print(f"[EL Expiry] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"EL expiry failed: {e}")
+
+
+@app.post("/admin/half-day/mark-absent")
+async def trigger_eod_marking(request: Request):
+    """Manually trigger the end-of-day half-day absent marking for a given date — Admin only."""
+    verify_admin_token(request)
+    try:
+        body = await request.json()
+        date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+        # Validate date
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except Exception:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    _mark_halves_absent_for_day(date_str)
+    return {"success": True, "message": f"End-of-day marking triggered for {date_str}"}
+
+
 @app.get("/admin/ccl/balances")
+
 async def get_ccl_balances(request: Request):
     """Get all staff members' Earned Leave (CCL) balances - Admin only"""
     verify_admin_token(request)
@@ -3402,6 +3681,19 @@ def _get_full_attendance_dates(
     reg_no: str, start_date: str, end_date: str, is_other_staff: bool = False
 ) -> set:
     """Return set of date strings where user is counted as present."""
+    hd = _get_half_day_settings()
+    if hd["half_day_enabled"]:
+        # In half-day mode, rely on daily_attendance_status records
+        cursor.execute(
+            """
+            SELECT date FROM daily_attendance_status
+            WHERE reg_no = %s AND status IN ('Present', 'Half Day')
+              AND date >= %s AND date <= %s
+        """,
+            (reg_no, start_date, end_date),
+        )
+        return {str(r[0])[:10] for r in cursor.fetchall()}
+
     table = "other_staff_attendance" if is_other_staff else "attendance"
     cursor.execute(
         f"""
@@ -3442,6 +3734,7 @@ def _get_full_attendance_dates(
     )
     absent_dates = {str(r[0])[:10] for r in cursor.fetchall()}
     return result - absent_dates
+
 
 
 def _academic_status_for_date(date_str: str) -> tuple[str, str | None, bool]:
@@ -3497,12 +3790,234 @@ _load_academic_settings_from_storage()
 # Load configuration values from database to overwrite/populate default _app_settings
 load_system_config()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HALF-DAY ATTENDANCE SPLIT — Helper functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+_leave_settings_cache = {}
+_leave_settings_last_refresh = 0
+_LEAVE_SETTINGS_REFRESH_SECONDS = 60
+
+
+def _get_leave_settings(force: bool = False) -> dict:
+    """Load all leave_settings rows into a dict (cached, refreshed every 60s)."""
+    global _leave_settings_cache, _leave_settings_last_refresh
+    now = time.time()
+    if not force and (now - _leave_settings_last_refresh) < _LEAVE_SETTINGS_REFRESH_SECONDS:
+        return _leave_settings_cache
+    try:
+        cursor.execute("SELECT key, value FROM leave_settings")
+        rows = cursor.fetchall()
+        _leave_settings_cache = {r[0]: r[1] for r in rows} if rows else {}
+        _leave_settings_last_refresh = now
+    except Exception as e:
+        print(f"[leave_settings] Error loading: {e}")
+    return _leave_settings_cache
+
+
+def _get_half_day_settings() -> dict:
+    """Return half-day config dict with typed values."""
+    s = _get_leave_settings()
+    default_3m = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+    return {
+        "half_day_enabled": str(s.get("half_day_enabled", "false")).lower() == "true",
+        "first_half_label": s.get("first_half_label", "First Half"),
+        "second_half_label": s.get("second_half_label", "Second Half"),
+        "cl_monthly_allocation": int(s.get("cl_monthly_allocation", "1") or "1"),
+        "cl_expiry_date": s.get("cl_expiry_date") or default_3m,
+        "el_expiry_date": s.get("el_expiry_date") or default_3m,
+        "first_half_start": s.get("first_half_start", "08:30"),
+        "first_half_end": s.get("first_half_end", "13:00"),
+        "second_half_start": s.get("second_half_start", "13:00"),
+        "second_half_end": s.get("second_half_end", "17:30"),
+    }
+
+
+
+def _save_leave_setting(key: str, value: str, updated_by: str = "system"):
+    """Upsert a single key in leave_settings and invalidate cache."""
+    global _leave_settings_last_refresh
+    cursor.execute("SELECT 1 FROM leave_settings WHERE key = %s", (key,))
+    if cursor.fetchone():
+        cursor.execute(
+            "UPDATE leave_settings SET value = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s WHERE key = %s",
+            (value, updated_by, key),
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO leave_settings (key, value, updated_by) VALUES (%s, %s, %s)",
+            (key, value, updated_by),
+        )
+    _leave_settings_last_refresh = 0  # invalidate cache
+
+
+def _compute_daily_status(first_half: str | None, second_half: str | None) -> str:
+    """Compute overall daily status from first and second half statuses.
+
+    Rules (Q4/Q6):
+    - Both Present                      → 'Present'
+    - One Present + one Absent          → 'Half Day'
+    - One Present + one Leave           → 'Present' (leave covers absent half)
+    - Both Leave                        → 'Leave'
+    - One Leave  + one Absent           → 'Half Day'
+    - Both Absent or NULL               → 'Absent'
+    - NULL is treated the same as Absent for completed days.
+    """
+    fh = (first_half or "Absent").strip()
+    sh = (second_half or "Absent").strip()
+
+    pair = (fh, sh)
+
+    if pair == ("Present", "Present"):
+        return "Present"
+    if pair in (("Present", "Absent"), ("Absent", "Present"), ("Present", "Leave"), ("Leave", "Present")):
+        return "Half Day"
+    if pair == ("Leave", "Leave"):
+        return "Leave"
+    if pair in (("Leave", "Absent"), ("Absent", "Leave")):
+        return "Half Day"
+    # Both Absent
+    return "Absent"
+
+
+def _compute_half_day_value(status: str) -> float:
+    """Return numeric day-equivalent for a daily status (for stats)."""
+    if status == "Present":
+        return 1.0
+    if status == "Half Day":
+        return 0.5
+    return 0.0
+
+
+def _mark_halves_absent_for_day(date_str: str):
+    """End-of-day job: for every user, set NULL halves to 'Absent' and recompute status.
+
+    Should be called after the second-half window closes for that date.
+    Only runs when half_day_enabled = True.
+    """
+    hd = _get_half_day_settings()
+    if not hd["half_day_enabled"]:
+        return
+
+    try:
+        # Find all users who have an attendance record that is still open (half status NULL)
+        cursor.execute(
+            """
+            SELECT reg_no, name, dept, first_half_status, second_half_status
+            FROM daily_attendance_status
+            WHERE date = %s
+              AND (first_half_status IS NULL OR second_half_status IS NULL)
+        """,
+            (date_str,),
+        )
+        rows = cursor.fetchall()
+        updated = 0
+        for row in rows:
+            reg_no, name, dept, fh, sh = row
+            new_fh = fh if fh else "Absent"
+            new_sh = sh if sh else "Absent"
+            new_status = _compute_daily_status(new_fh, new_sh)
+            cursor.execute(
+                """
+                UPDATE daily_attendance_status
+                SET first_half_status = %s,
+                    second_half_status = %s,
+                    status = %s,
+                    marked_at = CURRENT_TIMESTAMP
+                WHERE reg_no = %s AND date = %s
+            """,
+                (new_fh, new_sh, new_status, reg_no, date_str),
+            )
+            updated += 1
+
+        # Also mark users with NO record at all as Absent (insert rows)
+        cursor.execute(
+            """
+            SELECT u.reg_no, u.name, u.dept
+            FROM users u
+            WHERE NOT EXISTS (
+                SELECT 1 FROM daily_attendance_status das
+                WHERE das.reg_no = u.reg_no AND das.date = %s
+            )
+              AND u.role IN ('staff', 'hod')
+        """,
+            (date_str,),
+        )
+        missing = cursor.fetchall()
+        for reg_no, name, dept in missing:
+            cursor.execute(
+                """
+                INSERT INTO daily_attendance_status
+                  (reg_no, name, dept, date, status, first_half_status, second_half_status, marked_by, marked_at)
+                VALUES (%s, %s, %s, %s, 'Absent', 'Absent', 'Absent', 'System EOD', CURRENT_TIMESTAMP)
+                ON CONFLICT (reg_no, date) DO NOTHING
+            """,
+                (reg_no, name, dept, date_str),
+            )
+            updated += 1
+
+        conn.commit()
+        print(f"[EOD] Half-day absent marking done for {date_str}: {updated} records updated.")
+    except Exception as e:
+        print(f"[EOD] Error in _mark_halves_absent_for_day({date_str}): {e}")
+
+
+def _check_and_expire_leaves(triggered_by: str = "system"):
+    """Check CL/EL expiry dates; zero out balances if today >= expiry date."""
+    hd = _get_leave_settings(force=True)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    results = {"cl_expired": 0, "el_expired": 0}
+
+    # CL expiry
+    cl_expiry = hd.get("cl_expiry_date") or ""
+    if cl_expiry and today_str >= cl_expiry:
+        try:
+            cursor.execute(
+                """
+                UPDATE casual_leave
+                SET current_month_cl_available = 0,
+                    accumulated_cl = 0,
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE current_month_cl_available > 0 OR accumulated_cl > 0
+            """
+            )
+            results["cl_expired"] = cursor.rowcount or 0
+            conn.commit()
+            log_audit_event("CL_EXPIRED", triggered_by, True, f"CL expired on {today_str} (expiry: {cl_expiry})")
+            print(f"[Leave Expiry] CL expired for {results['cl_expired']} records.")
+        except Exception as e:
+            print(f"[Leave Expiry] CL expiry error: {e}")
+
+    # EL expiry
+    el_expiry = hd.get("el_expiry_date") or ""
+    if el_expiry and today_str >= el_expiry:
+        try:
+            cursor.execute(
+                """
+                UPDATE earned_leave
+                SET balance = 0.0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE balance > 0
+            """
+            )
+            results["el_expired"] = cursor.rowcount or 0
+            conn.commit()
+            log_audit_event("EL_EXPIRED", triggered_by, True, f"EL expired on {today_str} (expiry: {el_expiry})")
+            print(f"[Leave Expiry] EL expired for {results['el_expired']} records.")
+        except Exception as e:
+            print(f"[Leave Expiry] EL expiry error: {e}")
+
+    return results
+
+
 def _init_db_schema():
     """Initialize database schema with multi-worker safety.
-    
+
     Uses PostgreSQL advisory lock so only one worker runs DDL.
     Other workers skip since tables/indexes use IF NOT EXISTS.
     """
+
     lock_acquired = False
     try:
         cursor.execute("SELECT pg_try_advisory_lock(123456789)")
@@ -3761,6 +4276,54 @@ def _run_ddl():
         cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('early_check_in_end', '08:00')")
         cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('late_check_out_start', '17:00')")
         cursor.execute("INSERT INTO ccl_settings (key, value) VALUES ('late_check_out_end', '18:00')")
+
+    # ─────────────────────────────────────────────────────────────
+    # HALF-DAY ATTENDANCE SPLIT & LEAVE EXPIRY — Schema additions
+    # ─────────────────────────────────────────────────────────────
+
+    # 1. Half-day status columns on daily_attendance_status
+    for _col_sql in [
+        "ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS first_half_status VARCHAR(20) DEFAULT NULL",
+        "ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS second_half_status VARCHAR(20) DEFAULT NULL",
+        "ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS first_half_in_time TIME DEFAULT NULL",
+        "ALTER TABLE daily_attendance_status ADD COLUMN IF NOT EXISTS second_half_in_time TIME DEFAULT NULL",
+        # slot_half on attendance_duration_settings: 'first_half' | 'second_half' | 'full_day'
+        "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS slot_half VARCHAR(20) DEFAULT 'full_day'",
+        # Half-day fields on leave_requests
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS is_half_day BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS which_half VARCHAR(10) DEFAULT NULL",
+    ]:
+        try:
+            cursor.execute(_col_sql)
+        except Exception:
+            pass
+
+    # 2. leave_settings table — stores CL/EL expiry dates and half-day toggle
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leave_settings (
+            key VARCHAR(100) PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by VARCHAR(120)
+        )
+    """)
+
+    # Initialize default leave settings if not present
+    _leave_setting_defaults = {
+        "half_day_enabled": "false",
+        "first_half_label": "First Half",
+        "second_half_label": "Second Half",
+        "cl_monthly_allocation": "1",
+        "cl_expiry_date": "",   # empty = no expiry
+        "el_expiry_date": "",   # empty = no expiry
+    }
+    for _key, _val in _leave_setting_defaults.items():
+        cursor.execute("SELECT 1 FROM leave_settings WHERE key = %s", (_key,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO leave_settings (key, value) VALUES (%s, %s)",
+                (_key, _val),
+            )
 
     print("Database indexes and materialized views created successfully")
 
@@ -7036,11 +7599,28 @@ def _secure_verify_and_mark(
     time_now_str = datetime.now().strftime("%H:%M:%S")
     sync_slot_type = slot_type or "check_in"
 
+    # Determine slot_half for the active slot (if half-day mode is on)
+    _hd_settings = _get_half_day_settings()
+    _half_day_enabled = _hd_settings["half_day_enabled"]
+    _slot_half = None  # 'first_half' | 'second_half' | None
+
+    if _half_day_enabled and active_slot and active_slot != -1:
+        try:
+            cursor.execute(
+                "SELECT slot_half FROM attendance_duration_settings WHERE id = %s",
+                (active_slot,),
+            )
+            _slot_row = cursor.fetchone()
+            if _slot_row and _slot_row[0] in ("first_half", "second_half"):
+                _slot_half = _slot_row[0]
+        except Exception:
+            pass
+
     try:
         # Check if there's already a status record for this user on this date
         cursor.execute(
             """
-            SELECT id, status, leave_type, leave_request_id 
+            SELECT id, status, leave_type, leave_request_id, first_half_status, second_half_status
             FROM daily_attendance_status 
             WHERE reg_no = ? AND date = ?
         """,
@@ -7048,70 +7628,137 @@ def _secure_verify_and_mark(
         )
         existing_status = cursor.fetchone()
 
-        if existing_status:
-            old_status = existing_status[1]
-            # On check-in: set status to Present, in_time, and clear leave tags.
-            # On check-out: set status to Present and out_time.
-            if sync_slot_type == "check_in":
+        if _half_day_enabled and _slot_half:
+            # ── HALF-DAY MODE ──────────────────────────────────────────────────
+            if existing_status:
+                old_fh = existing_status[4]
+                old_sh = existing_status[5]
+                new_fh = old_fh
+                new_sh = old_sh
+
+                if _slot_half == "first_half":
+                    new_fh = "Present"
+                    update_time_col = "first_half_in_time"
+                else:
+                    new_sh = "Present"
+                    update_time_col = "second_half_in_time"
+
+                new_status = _compute_daily_status(new_fh, new_sh)
                 cursor.execute(
-                    """
-                    UPDATE daily_attendance_status 
-                    SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
-                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                    f"""
+                    UPDATE daily_attendance_status
+                    SET first_half_status = ?,
+                        second_half_status = ?,
+                        status = ?,
+                        {update_time_col} = ?,
+                        leave_type = NULL,
+                        leave_request_id = NULL,
+                        marked_by = 'Attendance System',
+                        marked_at = CURRENT_TIMESTAMP
                     WHERE reg_no = ? AND date = ?
                 """,
-                    (time_now_str, reg_no, current_date),
+                    (new_fh, new_sh, new_status, time_now_str, reg_no, current_date),
                 )
             else:
-                # Check-out — complete the attendance
+                # First scan of the day for this user in half-day mode
+                new_fh = "Present" if _slot_half == "first_half" else None
+                new_sh = "Present" if _slot_half == "second_half" else None
+                fh_time = time_now_str if _slot_half == "first_half" else None
+                sh_time = time_now_str if _slot_half == "second_half" else None
+                # If only one half is marked, overall status is 'Half Day' (0.5 present)
+                interim_status = "Half Day"
                 cursor.execute(
                     """
-                    UPDATE daily_attendance_status 
-                    SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
-                        marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
-                    WHERE reg_no = ? AND date = ?
+                    INSERT INTO daily_attendance_status
+                    (reg_no, name, dept, date, status,
+                     first_half_status, second_half_status,
+                     first_half_in_time, second_half_in_time,
+                     marked_by, marked_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Attendance System', CURRENT_TIMESTAMP)
+                    ON CONFLICT (reg_no, date) DO UPDATE SET
+                        first_half_status = COALESCE(EXCLUDED.first_half_status, daily_attendance_status.first_half_status),
+                        second_half_status = COALESCE(EXCLUDED.second_half_status, daily_attendance_status.second_half_status),
+                        first_half_in_time = COALESCE(EXCLUDED.first_half_in_time, daily_attendance_status.first_half_in_time),
+                        second_half_in_time = COALESCE(EXCLUDED.second_half_in_time, daily_attendance_status.second_half_in_time),
+                        status = CASE 
+                            WHEN COALESCE(EXCLUDED.first_half_status, daily_attendance_status.first_half_status) = 'Present' 
+                             AND COALESCE(EXCLUDED.second_half_status, daily_attendance_status.second_half_status) = 'Present' THEN 'Present'
+                            ELSE 'Half Day'
+                        END,
+                        marked_by = 'Attendance System',
+                        marked_at = CURRENT_TIMESTAMP
                 """,
-                    (time_now_str, reg_no, current_date),
+                    (reg_no, name, dept, current_date, interim_status,
+                     new_fh, new_sh, fh_time, sh_time),
                 )
-            new_status = "Present"
-            log_audit_event(
-                "ATTENDANCE_OVERRIDE",
-                reg_no,
-                True,
-                f"User status updated to {new_status} via {sync_slot_type}.",
-            )
         else:
-            # No record exists — insert with status 'Present'
-            if sync_slot_type == "check_in":
-                cursor.execute(
-                    """
-                    INSERT INTO daily_attendance_status 
-                    (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
-                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                    ON CONFLICT (reg_no, date) DO UPDATE SET
-                        status = 'Present',
-                        in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
-                        marked_by = 'Attendance System',
-                        marked_at = CURRENT_TIMESTAMP
-                """,
-                    (reg_no, name, dept, current_date, time_now_str),
+            # ── LEGACY CHECK_IN / CHECK_OUT MODE ───────────────────────────────
+            if existing_status:
+                old_status = existing_status[1]
+                # On check-in: set status to Present, in_time, and clear leave tags.
+                # On check-out: set status to Present and out_time.
+                if sync_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', in_time = ?, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = ? AND date = ?
+                    """,
+                        (time_now_str, reg_no, current_date),
+                    )
+                else:
+                    # Check-out — complete the attendance
+                    cursor.execute(
+                        """
+                        UPDATE daily_attendance_status 
+                        SET status = 'Present', out_time = ?, leave_type = NULL, leave_request_id = NULL,
+                            marked_by = 'Attendance System', marked_at = CURRENT_TIMESTAMP
+                        WHERE reg_no = ? AND date = ?
+                    """,
+                        (time_now_str, reg_no, current_date),
+                    )
+                new_status = "Present"
+                log_audit_event(
+                    "ATTENDANCE_OVERRIDE",
+                    reg_no,
+                    True,
+                    f"User status updated to {new_status} via {sync_slot_type}.",
                 )
             else:
-                cursor.execute(
-                    """
-                    INSERT INTO daily_attendance_status 
-                    (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
-                    VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
-                    ON CONFLICT (reg_no, date) DO UPDATE SET
-                        status = 'Present',
-                        out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
-                        marked_by = 'Attendance System',
-                        marked_at = CURRENT_TIMESTAMP
-                """,
-                    (reg_no, name, dept, current_date, time_now_str),
-                )
+                # No record exists — insert with status 'Present'
+                if sync_slot_type == "check_in":
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, in_time, marked_by, marked_at)
+                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (reg_no, name, dept, current_date, time_now_str),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_attendance_status 
+                        (reg_no, name, dept, date, status, out_time, marked_by, marked_at)
+                        VALUES (?, ?, ?, ?, 'Present', ?, 'Attendance System', CURRENT_TIMESTAMP)
+                        ON CONFLICT (reg_no, date) DO UPDATE SET
+                            status = 'Present',
+                            out_time = COALESCE(daily_attendance_status.out_time, EXCLUDED.out_time),
+                            marked_by = 'Attendance System',
+                            marked_at = CURRENT_TIMESTAMP
+                    """,
+                        (reg_no, name, dept, current_date, time_now_str),
+                    )
     except Exception as e:
         print(f"Error syncing daily_attendance_status for {reg_no}: {e}")
+
+
 
     if is_ccl_scan:
         log_audit_event("CCL_EARNED_SCAN", reg_no, True, f"Confidence: {confidence:.3f}")
@@ -7914,6 +8561,20 @@ async def admin_dashboard(request: Request):
         """)
         recent_attendance = cursor.fetchall()
 
+    # --- Pie chart: institution-wide breakdown from daily_attendance_status ---
+    cursor.execute("""
+        SELECT status, COUNT(*) as cnt
+        FROM daily_attendance_status
+        WHERE date::date = CURRENT_DATE
+        GROUP BY status
+    """)
+    admin_das_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+    admin_pie_full_day  = admin_das_breakdown.get("Present", 0)
+    admin_pie_half_day  = admin_das_breakdown.get("Half Day", 0)
+    admin_pie_absent    = admin_das_breakdown.get("Absent", 0)
+    admin_pie_leave     = admin_das_breakdown.get("Leave", 0)
+    admin_pie_holiday   = admin_das_breakdown.get("Holiday", 0)
+
     response_data = {
         "stats": {
             "total_users": total_users,
@@ -7925,6 +8586,12 @@ async def admin_dashboard(request: Request):
             "today_earned": earned_count,
             "today_casual": casual_count,
             "total_departments": total_departments,
+            # Pie chart breakdown fields
+            "today_full_day": admin_pie_full_day,
+            "today_half_day": admin_pie_half_day,
+            "today_absent_das": admin_pie_absent,
+            "today_leave": admin_pie_leave,
+            "today_holiday": admin_pie_holiday,
         },
         "recent_attendance": [
             {
@@ -11233,6 +11900,23 @@ async def hod_dashboard(request: Request):
     today_present_count = today_attendance + od_count
     today_absent_count = max(0, total_staff_in_dept - today_present_count)
 
+    # --- Pie chart: breakdown from daily_attendance_status for dept ---
+    cursor.execute(
+        """
+        SELECT status, COUNT(*) as cnt
+        FROM daily_attendance_status
+        WHERE dept = %s AND date::date = CURRENT_DATE
+        GROUP BY status
+    """,
+        (dept,),
+    )
+    das_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+    pie_full_day  = das_breakdown.get("Present", 0)
+    pie_half_day  = das_breakdown.get("Half Day", 0)
+    pie_absent    = das_breakdown.get("Absent", 0)
+    pie_leave     = das_breakdown.get("Leave", 0)
+    pie_holiday   = das_breakdown.get("Holiday", 0)
+
     return JSONResponse(
         content={
             "stats": {
@@ -11246,6 +11930,11 @@ async def hod_dashboard(request: Request):
                 "total_staff": dept_staff,
                 "today_present": today_present_count,
                 "today_absent": today_absent_count,
+                # Pie chart breakdown fields
+                "today_full_day": pie_full_day,
+                "today_half_day": pie_half_day,
+                "today_leave": pie_leave,
+                "today_holiday": pie_holiday,
             },
             "recent_attendance": recent_attendance_list,
             "hod_user": hod_user,
@@ -13405,6 +14094,20 @@ async def submit_leave_request(request: Request):
         start_date = data.get("start_date")
         end_date = data.get("end_date")
         reason = data.get("reason", "").strip()
+        # Half-day leave fields (optional — only when half_day_enabled in leave_settings)
+        is_half_day = bool(data.get("is_half_day", False))
+        which_half = (data.get("which_half") or "").strip().lower()  # 'first' | 'second'
+        if is_half_day and which_half not in ("first", "second"):
+            raise HTTPException(
+                status_code=400,
+                detail="which_half must be 'first' or 'second' when is_half_day is true",
+            )
+        # Half-day leave only valid for a single day
+        if is_half_day and start_date and start_date != end_date:
+            raise HTTPException(
+                status_code=400,
+                detail="Half-day leave can only be applied for a single day (start_date must equal end_date)",
+            )
 
         if not all([leave_type, start_date, end_date]):
             raise HTTPException(
@@ -13475,6 +14178,40 @@ async def submit_leave_request(request: Request):
                 status_code=400, detail="End date must be on or after start date"
             )
 
+        # Prevent requesting leave 1 day before/after or spanning across an Academic Calendar holiday (sandwich leave policy)
+        # 1. Check if any day within the selected date range is a holiday
+        curr = start
+        while curr <= end:
+            curr_str = curr.strftime("%Y-%m-%d")
+            status_curr, reason_curr, is_holiday_curr = _academic_status_for_date(curr_str)
+            if is_holiday_curr and status_curr == "holiday":
+                reason_str = f" ({reason_curr})" if reason_curr else ""
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot request leave: The selected date range includes an academic holiday on {curr_str}{reason_str}."
+                )
+            curr += timedelta(days=1)
+
+        # 2. Check if the day before start_date is a holiday
+        day_before = (start - timedelta(days=1)).strftime("%Y-%m-%d")
+        status_before, reason_before, is_holiday_before = _academic_status_for_date(day_before)
+        if is_holiday_before and status_before == "holiday":
+            reason_str = f" ({reason_before})" if reason_before else ""
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot request leave adjacent to an academic holiday. The day before your leave start date ({day_before}) is a holiday in the academic calendar{reason_str}."
+            )
+
+        # 3. Check if the day after end_date is a holiday
+        day_after = (end + timedelta(days=1)).strftime("%Y-%m-%d")
+        status_after, reason_after, is_holiday_after = _academic_status_for_date(day_after)
+        if is_holiday_after and status_after == "holiday":
+            reason_str = f" ({reason_after})" if reason_after else ""
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot request leave adjacent to an academic holiday. The day after your leave end date ({day_after}) is a holiday in the academic calendar{reason_str}."
+            )
+
         # For Casual Leave: validate CL balance before allowing submission
         if internal_type == "casual":
             current_month = datetime.now().strftime("%Y-%m")
@@ -13511,12 +14248,12 @@ async def submit_leave_request(request: Request):
             cl_available, accumulated = cl_record
             total_cl = cl_available + accumulated
 
-            # Count working days in the date range (exclude weekends)
-            day_count = 0
+            # Count working days in the date range (exclude weekends); half-day = 0.5
+            day_count = 0.0
             current = start
             while current <= end:
                 if current.weekday() < 5:  # Mon-Fri
-                    day_count += 1
+                    day_count += 0.5 if is_half_day else 1.0
                 current += timedelta(days=1)
 
             if day_count <= 0:
@@ -13527,7 +14264,7 @@ async def submit_leave_request(request: Request):
             if day_count > total_cl:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Insufficient CL balance. You have {total_cl} CL available but requested {day_count} working days. "
+                    detail=f"Insufficient CL balance. You have {total_cl} CL available but requested {day_count} working day(s). "
                     f"(Current month: {cl_available}, Accumulated: {accumulated})",
                 )
 
@@ -13546,12 +14283,12 @@ async def submit_leave_request(request: Request):
             else:
                 total_el = float(record[0])
 
-            # Count working days in the date range (exclude weekends)
-            day_count = 0
+            # Count working days in the date range (exclude weekends); half-day = 0.5
+            day_count = 0.0
             current = start
             while current <= end:
                 if current.weekday() < 5:  # Mon-Fri
-                    day_count += 1
+                    day_count += 0.5 if is_half_day else 1.0
                 current += timedelta(days=1)
 
             if day_count <= 0:
@@ -13562,14 +14299,14 @@ async def submit_leave_request(request: Request):
             if day_count > total_el:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Insufficient Earned Leave balance. You have {total_el} EL/CCL available but requested {day_count} working days.",
+                    detail=f"Insufficient Earned Leave balance. You have {total_el} EL/CCL available but requested {day_count} working day(s).",
                 )
 
         cursor.execute(
             """
             INSERT INTO leave_requests 
-            (user_reg_no, user_name, dept, leave_type, start_date, end_date, reason)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (user_reg_no, user_name, dept, leave_type, start_date, end_date, reason, is_half_day, which_half)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """,
             (
@@ -13580,6 +14317,8 @@ async def submit_leave_request(request: Request):
                 start_date,
                 end_date,
                 reason,
+                is_half_day,
+                which_half if is_half_day else None,
             ),
         )
         result = cursor.fetchone()
@@ -13626,7 +14365,7 @@ async def submit_leave_request(request: Request):
         raise
     except Exception as e:
         print(f"Error submitting leave request: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit leave request")
+        raise HTTPException(status_code=500, detail="Unable to send leave request")
 
 
 @app.get("/leave/my-requests")
@@ -14059,7 +14798,7 @@ async def admin_approve_leave_request(request: Request, request_id: int):
 
     # Check if request exists and get full details
     cursor.execute(
-        "SELECT status, leave_type, start_date, end_date, user_reg_no, user_name, dept FROM leave_requests WHERE id = %s",
+        "SELECT status, leave_type, start_date, end_date, user_reg_no, user_name, dept, is_half_day, which_half FROM leave_requests WHERE id = %s",
         (request_id,),
     )
     row = cursor.fetchone()
@@ -14067,7 +14806,9 @@ async def admin_approve_leave_request(request: Request, request_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Leave request not found")
 
-    current_status, leave_type, start_date, end_date, user_reg_no, user_name, dept = row
+    current_status, leave_type, start_date, end_date, user_reg_no, user_name, dept, is_half_day, which_half = row
+    is_half_day = bool(is_half_day) if is_half_day is not None else False
+    which_half = (which_half or "").strip().lower()  # 'first' | 'second' | ''
 
     if current_status != "pending":
         raise HTTPException(
@@ -14109,34 +14850,78 @@ async def admin_approve_leave_request(request: Request, request_id: int):
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
 
+    # Determine if half-day mode is active
+    _hd_settings = _get_half_day_settings()
+    _half_day_mode = _hd_settings["half_day_enabled"]
+
     synced_dates = []
     current = start
     while current <= end:
         date_str = current.strftime("%Y-%m-%d")
         try:
-            cursor.execute(
-                """
-                INSERT INTO daily_attendance_status 
-                (reg_no, name, dept, date, status, leave_request_id, leave_type, marked_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (reg_no, date) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    leave_request_id = EXCLUDED.leave_request_id,
-                    leave_type = EXCLUDED.leave_type,
-                    marked_by = EXCLUDED.marked_by
-            """,
-                (
-                    user_reg_no,
-                    user_name,
-                    dept,
-                    date_str,
-                    attendance_status,
-                    request_id,
-                    status_tag,
-                    admin_user["name"],
-                ),
-            )
+            if is_half_day and which_half and _half_day_mode:
+                # ── HALF-DAY LEAVE APPROVAL ────────────────────────────────────
+                # Fetch current half statuses
+                cursor.execute(
+                    "SELECT first_half_status, second_half_status FROM daily_attendance_status WHERE reg_no = %s AND date = %s",
+                    (user_reg_no, date_str),
+                )
+                existing = cursor.fetchone()
+                cur_fh = existing[0] if existing else None
+                cur_sh = existing[1] if existing else None
+
+                # Apply leave to the correct half
+                new_fh = "Leave" if which_half == "first" else cur_fh
+                new_sh = "Leave" if which_half == "second" else cur_sh
+                new_overall = _compute_daily_status(new_fh, new_sh)
+
+                cursor.execute(
+                    """
+                    INSERT INTO daily_attendance_status
+                    (reg_no, name, dept, date, status,
+                     first_half_status, second_half_status,
+                     leave_request_id, leave_type, marked_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (reg_no, date) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        first_half_status = EXCLUDED.first_half_status,
+                        second_half_status = EXCLUDED.second_half_status,
+                        leave_request_id = EXCLUDED.leave_request_id,
+                        leave_type = EXCLUDED.leave_type,
+                        marked_by = EXCLUDED.marked_by
+                """,
+                    (
+                        user_reg_no, user_name, dept, date_str,
+                        new_overall, new_fh, new_sh,
+                        request_id, status_tag, admin_user["name"],
+                    ),
+                )
+            else:
+                # ── FULL-DAY LEAVE APPROVAL ────────────────────────────────────
+                cursor.execute(
+                    """
+                    INSERT INTO daily_attendance_status 
+                    (reg_no, name, dept, date, status, leave_request_id, leave_type, marked_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (reg_no, date) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        leave_request_id = EXCLUDED.leave_request_id,
+                        leave_type = EXCLUDED.leave_type,
+                        marked_by = EXCLUDED.marked_by
+                """,
+                    (
+                        user_reg_no,
+                        user_name,
+                        dept,
+                        date_str,
+                        attendance_status,
+                        request_id,
+                        status_tag,
+                        admin_user["name"],
+                    ),
+                )
             synced_dates.append(date_str)
+
         except Exception as e:
             print(
                 f"ERROR inserting daily_attendance_status for {user_reg_no} on {date_str}: {e}"
@@ -14208,19 +14993,19 @@ async def admin_approve_leave_request(request: Request, request_id: int):
 
         if cl_record:
             cl_available, accumulated, used = cl_record
-            # Count working days (exclude weekends)
-            day_count = 0
+            # Count working days (exclude weekends); half-day = 0.5
+            day_count = 0.0
             d = start
             while d <= end:
                 if d.weekday() < 5:
-                    day_count += 1
+                    day_count += 0.5 if is_half_day else 1.0
                 d += timedelta(days=1)
 
             if day_count > 0:
                 # Deduct from accumulated first, then current month
                 remaining_to_deduct = day_count
-                new_accumulated = accumulated
-                new_cl_available = cl_available
+                new_accumulated = float(accumulated)
+                new_cl_available = float(cl_available)
 
                 if new_accumulated >= remaining_to_deduct:
                     new_accumulated -= remaining_to_deduct
@@ -14232,7 +15017,7 @@ async def admin_approve_leave_request(request: Request, request_id: int):
                         new_cl_available -= remaining_to_deduct
                         remaining_to_deduct = 0
 
-                new_used = used + day_count
+                new_used = float(used) + day_count
 
                 cursor.execute(
                     """
@@ -14261,12 +15046,12 @@ async def admin_approve_leave_request(request: Request, request_id: int):
         el_record = cursor.fetchone()
         if el_record:
             current_el = float(el_record[0])
-            # Count working days (exclude weekends)
-            day_count = 0
+            # Count working days (exclude weekends); half-day = 0.5
+            day_count = 0.0
             d = start
             while d <= end:
                 if d.weekday() < 5:
-                    day_count += 1
+                    day_count += 0.5 if is_half_day else 1.0
                 d += timedelta(days=1)
 
             if day_count > 0:
@@ -14277,6 +15062,7 @@ async def admin_approve_leave_request(request: Request, request_id: int):
                     WHERE reg_no = %s
                 """, (new_el, user_reg_no))
                 print(f"EL deducted: {user_reg_no} used {day_count} days. New EL balance: {new_el}")
+
 
     # Update request status
 
@@ -15208,6 +15994,37 @@ async def staff_dashboard(request: Request):
                 }
             )
 
+    # --- Pie chart: personal today status + half-split + historical breakdown ---
+    cursor.execute(
+        """
+        SELECT status, first_half_status, second_half_status
+        FROM daily_attendance_status
+        WHERE reg_no = %s AND date::date = CURRENT_DATE
+        LIMIT 1
+    """,
+        (reg_no,),
+    )
+    today_das_row = cursor.fetchone()
+    today_status_str    = today_das_row[0] if today_das_row else None
+    today_first_half    = today_das_row[1] if today_das_row else None
+    today_second_half   = today_das_row[2] if today_das_row else None
+
+    # Historical full-day vs half-day counts from daily_attendance_status
+    cursor.execute(
+        """
+        SELECT status, COUNT(*) as cnt
+        FROM daily_attendance_status
+        WHERE reg_no = %s
+        GROUP BY status
+    """,
+        (reg_no,),
+    )
+    hist_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+    hist_full_day_count = hist_breakdown.get("Present", 0)
+    hist_half_day_count = hist_breakdown.get("Half Day", 0)
+    hist_absent_count   = hist_breakdown.get("Absent", 0)
+    hist_leave_count    = hist_breakdown.get("Leave", 0)
+
     return JSONResponse(
         content={
             "stats": {
@@ -15223,6 +16040,14 @@ async def staff_dashboard(request: Request):
                 "today_holiday_reason": _academic_status_for_date(datetime.now().strftime("%Y-%m-%d"))[1],
                 # Absent = 0 if holiday or attendance present, else 1
                 "today_absent": 0 if (_academic_status_for_date(datetime.now().strftime("%Y-%m-%d"))[2] or (today_face_scan + od_count) > 0) else 1,
+                # Pie chart fields
+                "today_status": today_status_str,
+                "today_first_half": today_first_half,
+                "today_second_half": today_second_half,
+                "hist_full_day_count": hist_full_day_count,
+                "hist_half_day_count": hist_half_day_count,
+                "hist_absent_count": hist_absent_count,
+                "hist_leave_count": hist_leave_count,
             },
             "recent_attendance": recent_attendance_list,
             "staff_user": staff_user,
@@ -15706,9 +16531,27 @@ async def staff_get_attendance_by_regno(request: Request, reg_no: str):
             elif date_str and status == "Leave":
                 leave_dates.add(date_str)
 
-        # Calculate present days (require check-out for scan-based days)
-        full_att_dates = _get_full_attendance_dates(reg_no, start_date, end_date)
-        present_days = len(full_att_dates | od_dates | earned_dates | casual_dates)
+        # Calculate present days (Half Day counts as 0.5, Present/OD counts as 1.0)
+        hd = _get_half_day_settings()
+        present_days = 0.0
+        if hd["half_day_enabled"]:
+            # Query status values directly from daily_attendance_status
+            cursor.execute(
+                """
+                SELECT date, status FROM daily_attendance_status
+                WHERE reg_no = %s AND date >= %s AND date <= %s
+            """,
+                (reg_no, start_date, end_date),
+            )
+            for r in cursor.fetchall():
+                status_val = r[1]
+                if status_val == "Present":
+                    present_days += 1.0
+                elif status_val == "Half Day":
+                    present_days += 0.5
+        else:
+            full_att_dates = _get_full_attendance_dates(reg_no, start_date, end_date)
+            present_days = float(len(full_att_dates | od_dates | earned_dates | casual_dates))
 
         # Calculate absent days using calendar days in range (capped to today, exclude holidays)
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -15855,6 +16698,36 @@ async def other_staff_dashboard(request: Request):
                 }
             )
 
+    # --- Pie chart: personal today status + half-split + historical breakdown ---
+    cursor.execute(
+        """
+        SELECT status, first_half_status, second_half_status
+        FROM daily_attendance_status
+        WHERE reg_no = %s AND date::date = CURRENT_DATE
+        LIMIT 1
+    """,
+        (reg_no,),
+    )
+    os_today_das_row    = cursor.fetchone()
+    os_today_status     = os_today_das_row[0] if os_today_das_row else None
+    os_today_first_half = os_today_das_row[1] if os_today_das_row else None
+    os_today_second_half= os_today_das_row[2] if os_today_das_row else None
+
+    cursor.execute(
+        """
+        SELECT status, COUNT(*) as cnt
+        FROM daily_attendance_status
+        WHERE reg_no = %s
+        GROUP BY status
+    """,
+        (reg_no,),
+    )
+    os_hist_breakdown     = {row[0]: row[1] for row in cursor.fetchall()}
+    os_hist_full_day      = os_hist_breakdown.get("Present", 0)
+    os_hist_half_day      = os_hist_breakdown.get("Half Day", 0)
+    os_hist_absent        = os_hist_breakdown.get("Absent", 0)
+    os_hist_leave         = os_hist_breakdown.get("Leave", 0)
+
     return JSONResponse(
         content={
             "stats": {
@@ -15873,6 +16746,14 @@ async def other_staff_dashboard(request: Request):
                 "today_holiday_reason": _academic_status_for_date(datetime.now().strftime("%Y-%m-%d"))[1],
                 # Absent = 0 if holiday or attendance present, else 1
                 "today_absent": 0 if (_academic_status_for_date(datetime.now().strftime("%Y-%m-%d"))[2] or (today_face_scan + od_count) > 0) else 1,
+                # Pie chart fields
+                "today_status": os_today_status,
+                "today_first_half": os_today_first_half,
+                "today_second_half": os_today_second_half,
+                "hist_full_day_count": os_hist_full_day,
+                "hist_half_day_count": os_hist_half_day,
+                "hist_absent_count": os_hist_absent,
+                "hist_leave_count": os_hist_leave,
             },
             "recent_attendance": recent_attendance_list,
         },
@@ -16291,9 +17172,27 @@ async def other_staff_get_attendance(
                     }
                 )
 
-        # Calculate stats (require check-out for scan-based days)
-        full_att_dates = _get_full_attendance_dates(reg_no, start_date, end_date, is_other_staff=True)
-        present_days = len(full_att_dates | od_dates | earned_dates | casual_dates)
+        # Calculate stats (Half Day counts as 0.5, Present/OD counts as 1.0)
+        hd = _get_half_day_settings()
+        present_days = 0.0
+        if hd["half_day_enabled"]:
+            # Query status values directly from daily_attendance_status
+            cursor.execute(
+                """
+                SELECT date, status FROM daily_attendance_status
+                WHERE reg_no = %s AND date >= %s AND date <= %s
+            """,
+                (reg_no, start_date, end_date),
+            )
+            for r in cursor.fetchall():
+                status_val = r[1]
+                if status_val == "Present":
+                    present_days += 1.0
+                elif status_val == "Half Day":
+                    present_days += 0.5
+        else:
+            full_att_dates = _get_full_attendance_dates(reg_no, start_date, end_date, is_other_staff=True)
+            present_days = float(len(full_att_dates | od_dates | earned_dates | casual_dates))
 
         if date:
             today = datetime.now().strftime("%Y-%m-%d")

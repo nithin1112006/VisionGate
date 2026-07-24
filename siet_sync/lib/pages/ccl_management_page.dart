@@ -1253,6 +1253,66 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
   List<String> _departments = ['All'];
   bool _syncing = false;
   late VoidCallback _leaveListener;
+  String? _elExpiryDate;
+
+  Future<void> _fetchELSettings() async {
+    try {
+      final res = await http.get(
+        Uri.parse('${CollegeIPConfig.defaultURL}/admin/leave-settings'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data['success'] == true && data['settings'] != null) {
+          setState(() {
+            final fetched = data['settings']['el_expiry_date'];
+            if (fetched != null && fetched.toString().isNotEmpty) {
+              _elExpiryDate = fetched;
+            } else {
+              final default3m = DateTime.now().add(const Duration(days: 90));
+              _elExpiryDate = '${default3m.year}-${default3m.month.toString().padLeft(2, '0')}-${default3m.day.toString().padLeft(2, '0')}';
+            }
+          });
+        }
+      }
+    } catch (e) {
+      print('Error fetching EL settings: $e');
+    }
+  }
+
+  Future<void> _updateELExpiryDate(String? newDate) async {
+    try {
+      final res = await http.post(
+        Uri.parse('${CollegeIPConfig.defaultURL}/admin/leave-settings'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${widget.token}',
+        },
+        body: json.encode({'el_expiry_date': newDate ?? ''}),
+      );
+      if (res.statusCode == 200) {
+        setState(() {
+          _elExpiryDate = newDate;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(newDate != null && newDate.isNotEmpty
+                  ? 'EL Expiry Date set to $newDate'
+                  : 'EL Expiry Date cleared'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating EL expiry: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -1260,7 +1320,10 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
     _leaveListener = () { if (mounted) _load(); };
     LeaveBalanceNotifier.instance.addListener(_leaveListener);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _load();
+      if (mounted) {
+        _load();
+        _fetchELSettings();
+      }
     });
   }
 
@@ -1620,6 +1683,88 @@ class _CclLeaveBalancesTabState extends State<_CclLeaveBalancesTab> {
                               disabledBackgroundColor: Colors.grey,
                             ),
                           ),
+                          // Set EL Expiry Date button
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              final current = _elExpiryDate != null && _elExpiryDate!.isNotEmpty
+                                  ? DateTime.tryParse(_elExpiryDate!) ?? DateTime.now()
+                                  : DateTime.now();
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: current,
+                                firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                                lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
+                                helpText: 'SELECT EL EXPIRY DATE',
+                              );
+                              if (picked != null) {
+                                final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                                await _updateELExpiryDate(dateStr);
+                              }
+                            },
+                            icon: const Icon(Icons.event_rounded, size: 18, color: Color(0xFF0078D4)),
+                            label: Text(
+                              _elExpiryDate != null && _elExpiryDate!.isNotEmpty
+                                  ? 'Expires: $_elExpiryDate'
+                                  : 'Set Expiry Date',
+                              style: const TextStyle(color: Color(0xFF0078D4), fontWeight: FontWeight.bold),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Color(0xFF0078D4)),
+                            ),
+                          ),
+                          if (_elExpiryDate != null && _elExpiryDate!.isNotEmpty) ...[
+                            IconButton(
+                              icon: const Icon(Icons.clear, size: 18, color: Colors.grey),
+                              tooltip: 'Clear Expiry Date',
+                              onPressed: () => _updateELExpiryDate(''),
+                            ),
+                          ],
+                          // Expire EL button
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Expire All Earned Leave Balances?'),
+                                  content: const Text('This will set all Earned Leave (CCL) balances to 0.0 immediately.'),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                      child: const Text('Expire All EL', style: TextStyle(color: Colors.white)),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                try {
+                                  final res = await http.post(
+                                    Uri.parse('${CollegeIPConfig.defaultURL}/admin/el/expire'),
+                                    headers: {'Authorization': 'Bearer ${widget.token}'},
+                                  );
+                                  if (mounted && res.statusCode == 200) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('All Earned Leave balances expired successfully'), backgroundColor: Colors.red),
+                                    );
+                                    _load();
+                                  }
+                                } catch (e) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Error expiring EL: $e'), backgroundColor: Colors.red),
+                                    );
+                                  }
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.timer_off_rounded, size: 18, color: Colors.red),
+                            label: const Text('Expire EL Now', style: TextStyle(color: Colors.red)),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.red),
+                            ),
+                          ),
+
 
                         ],
                       ),

@@ -15,6 +15,7 @@ import '../utils/api_response_utils.dart';
 import '../widgets/advanced_stat_card.dart';
 import '../widgets/quick_access_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
+import '../widgets/attendance_pie_chart.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
@@ -555,6 +556,11 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
       label: 'Leave',
     ),
     NavDestination(
+      icon: Icons.history_edu_outlined,
+      selectedIcon: Icons.history_edu_rounded,
+      label: 'Log',
+    ),
+    NavDestination(
       icon: Icons.settings_outlined,
       selectedIcon: Icons.settings_rounded,
       label: 'Settings',
@@ -924,8 +930,8 @@ class StaffDashboardTab extends StatefulWidget {
 class _StaffDashboardTabState extends State<StaffDashboardTab> {
   Map<String, dynamic>? data;
   bool isLoading = true;
-  int presentDays = 0;
-  int absentDays = 0;
+  double presentDays = 0.0;
+  double absentDays = 0.0;
   List<dynamic> myAttendance = [];
   int? _quickAccessIndex;
   Timer? _refreshTimer;
@@ -1043,8 +1049,8 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
         final attendanceData = jsonDecode(response.body);
         final records = attendanceData['attendance'] ?? [];
 
-        int? newPresent = attendanceData['present_days'];
-        int? newAbsent = attendanceData['absent_days'];
+        double? newPresent = attendanceData['present_days'] != null ? (attendanceData['present_days'] as num).toDouble() : null;
+        double? newAbsent = attendanceData['absent_days'] != null ? (attendanceData['absent_days'] as num).toDouble() : null;
 
         if (newPresent == null || newAbsent == null) {
           // Fallback: count unique days present from records
@@ -1061,15 +1067,15 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
             }
           }
           final now = DateTime.now();
-          newPresent = uniqueDates.length;
-          newAbsent = (now.day - newPresent).clamp(0, 30);
+          newPresent = uniqueDates.length.toDouble();
+          newAbsent = (now.day - newPresent).clamp(0, 30).toDouble();
         }
 
         if (mounted) {
           setState(() {
             myAttendance = records;
-            presentDays = newPresent ?? 0;
-            absentDays = newAbsent ?? 0;
+            presentDays = newPresent ?? 0.0;
+            absentDays = newAbsent ?? 0.0;
           });
         }
       }
@@ -1098,6 +1104,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
       return Center(child: CircularProgressIndicator(color: iOSBlue));
     }
 
+    final stats = data?['stats'] ?? {};
     final recentAttendance = data?['recent_attendance'] ?? [];
     final pagePadding = Breakpoints.pagePadding(screenWidth);
     final isWide = screenWidth >= 900;
@@ -1270,9 +1277,26 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
     }
 
     Widget dynamicProgressBento() {
-      final double presentRatio = (presentDays + absentDays) > 0
-          ? presentDays / (presentDays + absentDays)
-          : 1.0;
+      // Use historical breakdown from daily_attendance_status for pie chart
+      final double fullDay = (stats['hist_full_day_count'] as num? ?? presentDays).toDouble();
+      final double halfDay = (stats['hist_half_day_count'] as num? ?? 0.0).toDouble();
+      final double absent  = (stats['hist_absent_count']   as num? ?? absentDays).toDouble();
+      final double onLeave = (stats['hist_leave_count']    as num? ?? 0.0).toDouble();
+
+      // Today's status from server
+      final String? todayStatus      = stats['today_status'] as String?;
+      final String? todayFirstHalf   = stats['today_first_half'] as String?;
+      final String? todaySecondHalf  = stats['today_second_half'] as String?;
+
+      Color _statusColor(String? s) {
+        switch (s) {
+          case 'Present': return const Color(0xFF10B981);
+          case 'Absent':  return const Color(0xFFEF4444);
+          case 'Leave':   return const Color(0xFF8B5CF6);
+          default:        return Colors.grey;
+        }
+      }
+
       return bentoCard(
         accentColor: Colors.teal,
         child: Column(
@@ -1286,58 +1310,73 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const Spacer(),
-            Center(
-              child: Stack(
-                alignment: Alignment.center,
+            // Today's half-day status pills
+            if (todayFirstHalf != null || todaySecondHalf != null) ...[  
+              const SizedBox(height: 6),
+              Row(
                 children: [
-                  SizedBox(
-                    width: 100,
-                    height: 100,
-                    child: CircularProgressIndicator(
-                      value: presentRatio,
-                      strokeWidth: 10,
-                      backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+                  if (todayFirstHalf != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        color: _statusColor(todayFirstHalf).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _statusColor(todayFirstHalf), width: 0.8),
+                      ),
+                      child: Text(
+                        '1st: $todayFirstHalf',
+                        style: TextStyle(
+                          color: _statusColor(todayFirstHalf),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                  ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${(presentRatio * 100).toInt()}%',
+                  if (todaySecondHalf != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _statusColor(todaySecondHalf).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _statusColor(todaySecondHalf), width: 0.8),
+                      ),
+                      child: Text(
+                        '2nd: $todaySecondHalf',
                         style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
+                          color: _statusColor(todaySecondHalf),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      Text(
-                        'Present',
-                        style: TextStyle(
-                          color: isDark ? Colors.white60 : Colors.black45,
-                          fontSize: 10,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
                 ],
               ),
-            ),
-            const Spacer(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Present: $presentDays d',
-                  style: const TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
+            ],
+            const SizedBox(height: 4),
+            Expanded(
+              child: Center(
+                child: AttendancePieChart(
+                  fullDay: fullDay.toInt(),
+                  halfDay: halfDay.toInt(),
+                  absent: absent.toInt(),
+                  onLeave: onLeave.toInt(),
+                  centerLabel: 'Days',
+                  centerSpaceRadius: 36,
                 ),
-                Text(
-                  'Absent: $absentDays d',
-                  style: const TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-              ],
+              ),
             ),
+            if (todayStatus != null) ...[  
+              const SizedBox(height: 4),
+              Text(
+                'Today: $todayStatus',
+                style: TextStyle(
+                  color: _statusColor(todayStatus),
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -1478,7 +1517,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                 Expanded(
                   flex: 2,
                   child: SizedBox(
-                    height: 220,
+                    height: 270,
                     child: dynamicProgressBento(),
                   ),
                 ),
@@ -1504,7 +1543,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                             style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 13),
                           ),
                           Text(
-                            presentDays.toString(),
+                            presentDays % 1 == 0 ? presentDays.toInt().toString() : presentDays.toString(),
                             style: TextStyle(
                               color: isDark ? Colors.white : Colors.black87,
                               fontSize: 32,
@@ -1533,7 +1572,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                             style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 13),
                           ),
                           Text(
-                            absentDays.toString(),
+                            absentDays % 1 == 0 ? absentDays.toInt().toString() : absentDays.toString(),
                             style: TextStyle(
                               color: isDark ? Colors.white : Colors.black87,
                               fontSize: 32,
@@ -1605,7 +1644,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
             welcomeCard(),
             const SizedBox(height: 16),
             SizedBox(
-              height: 220,
+              height: 270,
               child: dynamicProgressBento(),
             ),
             const SizedBox(height: 16),

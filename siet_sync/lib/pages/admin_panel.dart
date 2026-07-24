@@ -22,6 +22,7 @@ import '../utils/api_response_utils.dart';
 import '../utils/validators.dart';
 import '../widgets/advanced_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
+import '../widgets/attendance_pie_chart.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/three_option_toggle.dart';
 import 'academics_settings_page.dart';
@@ -6587,6 +6588,62 @@ class _DashboardTabState extends State<DashboardTab> {
                     ],
                   ),
                 ],
+              ),
+              const SizedBox(height: 16),
+              // Institution-wide daily attendance pie chart
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: adminAccent.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.pie_chart_rounded,
+                            color: adminAccent,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          "Today's Attendance Breakdown",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: isDark ? Colors.white : const Color(0xFF1A1A2E),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    AttendancePieChart(
+                      fullDay:  (stats['today_full_day']   as num? ?? 0).toInt(),
+                      halfDay:  (stats['today_half_day']   as num? ?? 0).toInt(),
+                      absent:   (stats['today_absent_das'] as num? ?? 0).toInt(),
+                      onLeave:  (stats['today_leave']      as num? ?? 0).toInt(),
+                      centerLabel: 'Staff',
+                      centerSpaceRadius: 44,
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 26),
               Row(
