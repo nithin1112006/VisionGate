@@ -18,6 +18,7 @@ import '../widgets/advanced_stat_card.dart';
 import '../widgets/quick_access_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
 import '../widgets/attendance_pie_chart.dart';
+import '../widgets/thirukkural_banner.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
@@ -1429,9 +1430,15 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
               children: [
                 Expanded(
                   flex: 3,
-                  child: SizedBox(
-                    height: 225,
-                    child: welcomeCard(),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        height: 225,
+                        child: welcomeCard(),
+                      ),
+                      const SizedBox(height: 16),
+                      const ThirukkuralBanner(),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 20),
@@ -1563,6 +1570,8 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
         return Column(
           children: [
             welcomeCard(),
+            const SizedBox(height: 16),
+            const ThirukkuralBanner(),
             const SizedBox(height: 16),
             SizedBox(
               height: 270,

@@ -24,6 +24,10 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
   String _shStart = '13:00';
   String _shEnd = '17:30';
 
+  // Location Tracking Duration
+  String _locationTrackingStart = '08:30';
+  String _locationTrackingEnd = '17:30';
+
   // Auto-extension settings
   bool _autoExpandCheckinEnabled = true;
   bool _autoExpandCheckoutEnabled = true;
@@ -54,6 +58,11 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
           _fhEnd = sb['first_half_end'] ?? '13:00';
           _shStart = sb['second_half_start'] ?? '13:00';
           _shEnd = sb['second_half_end'] ?? '17:30';
+        }
+        if (data['location_tracking'] != null) {
+          final loc = data['location_tracking'];
+          _locationTrackingStart = loc['start_time'] ?? '08:30';
+          _locationTrackingEnd = loc['end_time'] ?? '17:30';
         }
         if (data['auto_expansion'] != null) {
           final ae = data['auto_expansion'];
@@ -145,6 +154,10 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
             'first_half_end': _fhEnd,
             'second_half_start': _shStart,
             'second_half_end': _shEnd,
+          },
+          'location_tracking': {
+            'start_time': _locationTrackingStart,
+            'end_time': _locationTrackingEnd,
           },
           'auto_expansion': {
             'auto_expand_checkin_enabled': _autoExpandCheckinEnabled,
@@ -472,6 +485,60 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                                       }),
                                     ),
                                   ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Location Tracking Boundaries Card
+                  Card(
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.location_on, color: Colors.teal, size: 24),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Location Tracking Window',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Define the permitted window when staff locations will be tracked and recorded by the system. Ping operations outside these bounds will be dropped.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.teal.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.teal.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: _buildBoundaryTimePicker('Start Time', _locationTrackingStart, (newTime) {
+                                    setState(() => _locationTrackingStart = newTime);
+                                  }),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _buildBoundaryTimePicker('End Time', _locationTrackingEnd, (newTime) {
+                                    setState(() => _locationTrackingEnd = newTime);
+                                  }),
                                 ),
                               ],
                             ),

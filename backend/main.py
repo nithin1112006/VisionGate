@@ -716,6 +716,41 @@ async def lifespan(app: FastAPI):
 
     leave_expiry_task = asyncio.create_task(periodic_leave_expiry())
 
+    # Start periodic session absence marker
+    async def periodic_session_absence_marker():
+        processed_sessions = {}
+        while True:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                time_str = datetime.now().strftime("%H:%M")
+                
+                if processed_sessions.get("date") != today_str:
+                    processed_sessions = {"date": today_str, "FN_marked": False, "AN_marked": False}
+                
+                # Fetch boundaries
+                hd = _get_half_day_settings()
+                if not hd["half_day_enabled"]:
+                    continue
+                
+                fn_end = hd["first_half_end"]
+                an_end = hd["second_half_end"]
+                
+                if time_str >= fn_end and not processed_sessions["FN_marked"]:
+                    print(f"⏳ Triggering auto-absence for FN session at {time_str}")
+                    _process_session_absences(today_str, "FN")
+                    processed_sessions["FN_marked"] = True
+                    
+                if time_str >= an_end and not processed_sessions["AN_marked"]:
+                    print(f"⏳ Triggering auto-absence for AN session at {time_str}")
+                    _process_session_absences(today_str, "AN")
+                    processed_sessions["AN_marked"] = True
+                    
+            except Exception as e:
+                print(f"⚠️ Periodic session absence marker failed: {e}")
+
+    session_absence_task = asyncio.create_task(periodic_session_absence_marker())
+
     print("✅ Application startup complete")
 
     yield
@@ -724,6 +759,7 @@ async def lifespan(app: FastAPI):
     threat_update_task.cancel()
     mv_refresh_task.cancel()
     leave_expiry_task.cancel()
+    session_absence_task.cancel()
     try:
         await threat_update_task
         await mv_refresh_task
@@ -1858,12 +1894,17 @@ async def get_attendance_duration_settings(request: Request):
         "auto_expand_minutes": hd_settings["auto_expand_minutes"],
         "require_fn_check_out": hd_settings["require_fn_check_out"],
     }
+    location_tracking = {
+        "start_time": hd_settings["location_tracking_start"],
+        "end_time": hd_settings["location_tracking_end"],
+    }
 
     return {
         "success": True,
         "data": settings,
         "session_boundaries": session_boundaries,
         "auto_expansion": auto_expansion,
+        "location_tracking": location_tracking,
     }
 
 
@@ -1877,6 +1918,7 @@ async def save_attendance_duration_settings(request: Request):
         data = await request.json()
         settings = data.get("settings", [])
         session_boundaries = data.get("session_boundaries")
+        location_tracking = data.get("location_tracking")
     except:
         raise HTTPException(status_code=400, detail="Invalid request body")
 
@@ -1920,6 +1962,24 @@ async def save_attendance_duration_settings(request: Request):
         _save_leave_setting("first_half_end", fh_end_str, admin_user["name"])
         _save_leave_setting("second_half_start", sh_start_str, admin_user["name"])
         _save_leave_setting("second_half_end", sh_end_str, admin_user["name"])
+
+    # Process and save location tracking boundaries if provided
+    current_boundaries = _get_half_day_settings()
+    loc_start_str = current_boundaries["location_tracking_start"]
+    loc_end_str = current_boundaries["location_tracking_end"]
+
+    if location_tracking and isinstance(location_tracking, dict):
+        loc_start_str = location_tracking.get("start_time", loc_start_str)
+        loc_end_str = location_tracking.get("end_time", loc_end_str)
+
+        loc_start_m = to_minutes(loc_start_str)
+        loc_end_m = to_minutes(loc_end_str)
+
+        if loc_start_m >= loc_end_m:
+            raise HTTPException(status_code=400, detail=f"Location tracking start time ({loc_start_str}) must be before end time ({loc_end_str}).")
+
+        _save_leave_setting("location_tracking_start", loc_start_str, admin_user["name"])
+        _save_leave_setting("location_tracking_end", loc_end_str, admin_user["name"])
 
     fh_boundary_start = to_minutes(fh_start_str)
     fh_boundary_end = to_minutes(fh_end_str)
@@ -4125,6 +4185,8 @@ def _get_half_day_settings() -> dict:
         "first_half_end": s.get("first_half_end", "13:00"),
         "second_half_start": s.get("second_half_start", "13:00"),
         "second_half_end": s.get("second_half_end", "17:30"),
+        "location_tracking_start": s.get("location_tracking_start", "08:30"),
+        "location_tracking_end": s.get("location_tracking_end", "17:30"),
     }
 
 
@@ -4289,39 +4351,41 @@ def _format_scan_status(status_val: str | None, timestamp_val) -> str:
         return action
 
 
-def _mark_halves_absent_for_day(date_str: str):
-    """End-of-day job: for every user, set NULL halves to 'Absent' and recompute status.
-
-    Should be called after the second-half window closes for that date.
-    Only runs when half_day_enabled = True.
-    """
+def _process_session_absences(date_str: str, session: str):
+    """Mark users as absent for a specific session (FN or AN) if they haven't marked attendance."""
     hd = _get_half_day_settings()
     if not hd["half_day_enabled"]:
         return
 
     try:
-        # Find all users who have an attendance record that is still open (half status NULL)
-        cursor.execute(
-            """
+        target_roles = ('staff', 'hod') + OTHER_STAFF_ROLES
+        placeholders = ','.join(['%s'] * len(target_roles))
+
+        # First, mark any NULL half-day status as 'Absent'
+        condition = "first_half_status IS NULL" if session == "FN" else "(second_half_status IS NULL OR first_half_status IS NULL)"
+
+        cursor.execute(f"""
             SELECT reg_no, name, dept, first_half_status, second_half_status
             FROM daily_attendance_status
-            WHERE date = %s
-              AND (first_half_status IS NULL OR second_half_status IS NULL)
-        """,
-            (date_str,),
-        )
+            WHERE date = %s AND {condition}
+        """, (date_str,))
+        
         rows = cursor.fetchall()
         updated = 0
         for row in rows:
             reg_no, name, dept, fh, sh = row
-            new_fh = fh if fh else "Absent"
-            new_sh = sh if sh else "Absent"
+            
+            if session == "FN":
+                new_fh = fh if fh else "Absent"
+                new_sh = sh  # Keep as is
+            else:  # AN
+                new_fh = fh if fh else "Absent"
+                new_sh = sh if sh else "Absent"
+                
             new_status = _compute_daily_status(new_fh, new_sh)
-            # Calculate attendance value
             attendance_value = _compute_attendance_value_from_halves(new_fh, new_sh)
             
-            cursor.execute(
-                """
+            cursor.execute("""
                 UPDATE daily_attendance_status
                 SET first_half_status = %s,
                     second_half_status = %s,
@@ -4329,41 +4393,51 @@ def _mark_halves_absent_for_day(date_str: str):
                     attendance_value = %s,
                     marked_at = CURRENT_TIMESTAMP
                 WHERE reg_no = %s AND date = %s
-            """,
-                (new_fh, new_sh, new_status, attendance_value, reg_no, date_str),
-            )
+            """, (new_fh, new_sh, new_status, attendance_value, reg_no, date_str))
             updated += 1
-
-        # Also mark users with NO record at all as Absent (insert rows)
-        cursor.execute(
-            """
+            
+        # Also mark users with NO record at all
+        cursor.execute(f"""
             SELECT u.reg_no, u.name, u.dept
             FROM users u
             WHERE NOT EXISTS (
                 SELECT 1 FROM daily_attendance_status das
                 WHERE das.reg_no = u.reg_no AND das.date = %s
             )
-              AND u.role IN ('staff', 'hod')
-        """,
-            (date_str,),
-        )
+              AND u.role IN ({placeholders})
+        """, [date_str] + list(target_roles))
+        
         missing = cursor.fetchall()
         for reg_no, name, dept in missing:
-            cursor.execute(
-                """
-                INSERT INTO daily_attendance_status
-                  (reg_no, name, dept, date, status, first_half_status, second_half_status, attendance_value, marked_by, marked_at)
-                VALUES (%s, %s, %s, %s, 'Absent', 'Absent', 'Absent', 0.0, 'System EOD', CURRENT_TIMESTAMP)
-                ON CONFLICT (reg_no, date) DO NOTHING
-            """,
-                (reg_no, name, dept, date_str),
-            )
+            if session == "FN":
+                cursor.execute("""
+                    INSERT INTO daily_attendance_status
+                      (reg_no, name, dept, date, status, first_half_status, second_half_status, attendance_value, marked_by, marked_at)
+                    VALUES (%s, %s, %s, %s, 'Pending', 'Absent', NULL, 0.0, 'System Auto', CURRENT_TIMESTAMP)
+                    ON CONFLICT (reg_no, date) DO NOTHING
+                """, (reg_no, name, dept, date_str))
+            else: # AN
+                cursor.execute("""
+                    INSERT INTO daily_attendance_status
+                      (reg_no, name, dept, date, status, first_half_status, second_half_status, attendance_value, marked_by, marked_at)
+                    VALUES (%s, %s, %s, %s, 'Absent', 'Absent', 'Absent', 0.0, 'System Auto', CURRENT_TIMESTAMP)
+                    ON CONFLICT (reg_no, date) DO NOTHING
+                """, (reg_no, name, dept, date_str))
             updated += 1
 
         conn.commit()
-        print(f"[EOD] Half-day absent marking done for {date_str}: {updated} records updated.")
+        print(f"[{session}] Auto absence marking done for {date_str}: {updated} records updated.")
     except Exception as e:
-        print(f"[EOD] Error in _mark_halves_absent_for_day({date_str}): {e}")
+        print(f"[{session}] Error in _process_session_absences({date_str}): {e}")
+
+
+def _mark_halves_absent_for_day(date_str: str):
+    """End-of-day job: for every user, set NULL halves to 'Absent' and recompute status.
+
+    Should be called after the second-half window closes for that date.
+    Only runs when half_day_enabled = True.
+    """
+    _process_session_absences(date_str, "AN")
 
 
 def _check_and_expire_leaves(triggered_by: str = "system"):
@@ -5204,6 +5278,15 @@ async def update_user_location(request: Request):
     client_device_id = body.get("device_id")
     reg_no = user.get("reg_no")
     
+    # Check if the current time is within the permitted location tracking duration
+    hd_settings = _get_half_day_settings()
+    track_start = hd_settings.get("location_tracking_start", "08:30")
+    track_end = hd_settings.get("location_tracking_end", "17:30")
+    current_time_str = datetime.now().strftime("%H:%M")
+    
+    if not (track_start <= current_time_str <= track_end):
+        return {"message": "Location tracking disabled outside permitted duration", "status": "ignored"}
+    
     # Try looking in users table
     cursor.execute("SELECT current_device_id FROM users WHERE reg_no = ?", (reg_no,))
     db_row = cursor.fetchone()
@@ -5457,6 +5540,25 @@ async def sync_offline_locations(request: Request):
         logs.sort(key=get_captured_at)
     except Exception as e:
         print(f"Sorting error: {e}")
+
+    # Enforce location tracking duration
+    hd_settings = _get_half_day_settings()
+    track_start = hd_settings.get("location_tracking_start", "08:30")
+    track_end = hd_settings.get("location_tracking_end", "17:30")
+
+    filtered_logs = []
+    for log in logs:
+        try:
+            log_time = get_captured_at(log)
+            time_str = log_time.strftime("%H:%M")
+            if track_start <= time_str <= track_end:
+                filtered_logs.append(log)
+        except Exception:
+            pass
+            
+    logs = filtered_logs
+    if not logs:
+        return {"success": True, "message": "No valid logs within tracking duration to sync", "rule_violation": False}
 
     # Check if user has marked attendance today
     cursor.execute(

@@ -18,6 +18,7 @@ import '../services/api_client.dart';
 import '../services/session_service.dart';
 import '../services/theme_service.dart';
 import '../utils/responsive.dart';
+import '../widgets/thirukkural_banner.dart';
 import '../utils/api_response_utils.dart';
 import '../utils/validators.dart';
 import '../widgets/advanced_stat_card.dart';
@@ -6515,7 +6516,9 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              const ThirukkuralBanner(),
+              const SizedBox(height: 16),
               // Section Header
               Row(
                 children: [
