@@ -1,5 +1,5 @@
 """
-Async PostgreSQL database layer for Attenda.
+Async PostgreSQL database layer for VisionGate.
 Replaces all sqlite3 direct calls with asyncpg pool.
 """
 

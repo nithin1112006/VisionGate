@@ -36,12 +36,14 @@ class _LocationPermissionEnforcerState extends State<LocationPermissionEnforcer>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkPermissions();
+      _checkPermissions(showLoading: false);
     }
   }
 
-  Future<void> _checkPermissions() async {
-    setState(() => _isChecking = true);
+  Future<void> _checkPermissions({bool showLoading = true}) async {
+    if (showLoading && mounted) {
+      setState(() => _isChecking = true);
+    }
     try {
       final gpsEnabled = await Geolocator.isLocationServiceEnabled();
       final permission = await Geolocator.checkPermission();
@@ -56,14 +58,18 @@ class _LocationPermissionEnforcerState extends State<LocationPermissionEnforcer>
 
       final alwaysGranted = permission == LocationPermission.always;
 
-      setState(() {
-        _gpsEnabled = gpsEnabled;
-        _alwaysPermissionGranted = alwaysGranted;
-        _notificationPermissionGranted = notificationGranted;
-        _isChecking = false;
-      });
+      if (mounted) {
+        setState(() {
+          _gpsEnabled = gpsEnabled;
+          _alwaysPermissionGranted = alwaysGranted;
+          _notificationPermissionGranted = notificationGranted;
+          _isChecking = false;
+        });
+      }
     } catch (_) {
-      setState(() => _isChecking = false);
+      if (mounted) {
+        setState(() => _isChecking = false);
+      }
     }
   }
 
@@ -152,7 +158,7 @@ class _LocationPermissionEnforcerState extends State<LocationPermissionEnforcer>
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 320),
                     child: Text(
-                      'To prevent moving outside the attendance boundary, FacultySphere requires Always-On Location access. This runs verified tracking even when the app is closed or in the background.',
+                      'To prevent moving outside the attendance boundary, VisionGate requires Always-On Location access. This runs verified tracking even when the app is closed or in the background.',
                       style: TextStyle(
                         fontSize: 14,
                         color: isDark ? Colors.white70 : Colors.grey[600],

@@ -77,7 +77,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="FacultySphere - Attendance Management System for educational institutions">
+  <meta name="description" content="VisionGate - Attendance Management System for educational institutions">
   
   <!-- Viewport for responsive design -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
@@ -86,19 +86,52 @@
   <meta name="theme-color" content="#673AB7">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="FacultySphere">
+  <meta name="apple-mobile-web-app-title" content="VisionGate">
   
-  <!-- Prevent tap highlight on mobile -->
+  <!-- Prevent pull-to-refresh, overscroll reload, and tap highlight on mobile -->
   <style>
-    * { -webkit-tap-highlight-color: transparent; }
-    html, body { overflow-x: hidden; }
+    * {
+      -webkit-tap-highlight-color: transparent;
+    }
+    html, body, :root, flt-glasspane, flt-scene-host, canvas {
+      overflow-x: hidden;
+      overscroll-behavior: none !important;
+      overscroll-behavior-y: none !important;
+      overscroll-behavior-x: none !important;
+      touch-action: pan-x pan-y;
+    }
   </style>
+
+  <script>
+    // Prevent mobile browser native pull-to-refresh reload when dragging top status/notification bar
+    (function() {
+      let touchStartY = 0;
+      window.addEventListener('touchstart', function(e) {
+        if (e.touches && e.touches.length === 1) {
+          touchStartY = e.touches[0].clientY;
+        }
+      }, { passive: true });
+
+      window.addEventListener('touchmove', function(e) {
+        if (e.touches && e.touches.length === 1) {
+          const touchY = e.touches[0].clientY;
+          const touchYDiff = touchY - touchStartY;
+          // Intercept downward drag near top of screen (status bar / notification shade area) when scroll is at top
+          if ((window.scrollY <= 5 || document.documentElement.scrollTop <= 5) && touchStartY <= 120 && touchYDiff > 0) {
+            if (e.cancelable) {
+              e.preventDefault();
+            }
+          }
+        }
+      }, { passive: false });
+    })();
+  </script>
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <title>FacultySphere - Attendance Management</title>
+  <title>VisionGate - Attendance Management</title>
   <link rel="manifest" href="manifest.json">
   
   <!-- Preconnect to common origins for faster loading -->
@@ -148,7 +181,7 @@
   <!-- Loading indicator shown before Flutter loads -->
   <div class="loading" id="loading">
     <div class="loading-spinner"></div>
-    <div class="loading-text">Loading FacultySphere...</div>
+    <div class="loading-text">Loading VisionGate...</div>
   </div>
   
   <script>

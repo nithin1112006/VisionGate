@@ -19,10 +19,12 @@ class _DashboardPageState extends State<DashboardPage> {
   List<dynamic> attendanceRecords = [];
   bool isLoading = true;
   String? errorMessage;
+  late Future<String> _wifiStatusFuture;
 
   @override
   void initState() {
     super.initState();
+    _wifiStatusFuture = WifiChecker.getWifiStatusMessage();
     fetchData();
   }
 
@@ -102,7 +104,7 @@ class _DashboardPageState extends State<DashboardPage> {
         elevation: 2,
         actions: [
           FutureBuilder<String>(
-            future: WifiChecker.getWifiStatusMessage(),
+            future: _wifiStatusFuture,
             builder: (context, snapshot) {
               final isConnected = snapshot.data?.contains('Connected') ?? false;
               return IconButton(

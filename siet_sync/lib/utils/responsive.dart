@@ -222,7 +222,7 @@ class _DesktopRail extends StatelessWidget {
           ? Padding(
               padding: const EdgeInsets.only(bottom: 16, top: 8),
               child: Text(
-                'StaffSync',
+                'VisionGate',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,

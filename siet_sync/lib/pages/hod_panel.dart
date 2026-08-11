@@ -25,6 +25,7 @@ import '../widgets/location_permission_enforcer.dart';
 import '../services/pre_verification_service.dart';
 import '../services/leave_balance_notifier.dart';
 import 'attendance_log_page.dart';
+import '../widgets/student_attendance_log_widget.dart';
 
 
 // Quick select chip widget
@@ -456,6 +457,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     'Analytics',
     'My Face',
     'Attendance Log',
+    'Student Log',
     'Settings',
   ];
 
@@ -537,6 +539,12 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       ),
       HODFaceRegisterTab(token: widget.token, user: widget.user),
       AttendanceLogTab(token: widget.token, user: widget.user),
+      StudentAttendanceLogWidget(
+        token: widget.token,
+        user: widget.user,
+        isHod: true,
+        defaultDept: widget.user['dept'],
+      ),
       UserSettingsTab(title: 'HOD Settings', token: widget.token),
     ]);
   }
@@ -595,6 +603,11 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       icon: Icons.history_edu_outlined,
       selectedIcon: Icons.history_edu_rounded,
       label: 'Log',
+    ),
+    NavDestination(
+      icon: Icons.person_search_outlined,
+      selectedIcon: Icons.person_search_rounded,
+      label: 'Student Log',
     ),
     NavDestination(
       icon: Icons.settings_outlined,
@@ -1343,15 +1356,44 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                     ),
                     itemBuilder: (context, index) {
                       final record = recentAttendance[index];
+                      final when = _formatTimestamp(record['timestamp']);
+                      final isAbsent = record['status'] == 'Absent' ||
+                          record['punch_type'] == 'absent' ||
+                          record['punch_type'] == 'system_marked_absent' ||
+                          record['is_absent'] == true;
+                      final punchType = record['punch_type'] as String? ?? (isAbsent ? 'absent' : 'check_in');
+                      final isCheckOut = punchType == 'check_out';
+
+                      final punchColor = isAbsent
+                          ? const Color(0xFFEF4444)
+                          : isCheckOut
+                              ? Colors.orange
+                              : const Color(0xFF10B981);
+
+                      final punchIcon = isAbsent
+                          ? Icons.cancel_rounded
+                          : isCheckOut
+                              ? Icons.logout_rounded
+                              : Icons.login_rounded;
+
+                      final punchLabel = isAbsent
+                          ? 'Absent'
+                          : isCheckOut
+                              ? 'Check Out'
+                              : 'Check In';
+
+                      final regNo = record['reg_no'] ?? record['regNo'] ?? '';
+                      final dept = record['dept'] ?? record['department'] ?? '';
+                      final regAndDept = [if (regNo.toString().isNotEmpty) regNo, if (dept.toString().isNotEmpty) dept].join(' • ');
+                      final reason = record['absent_reason'] ?? record['reason'] ?? (isAbsent ? 'System marked absent' : null);
+                      final session = record['session_label'] ?? record['session'] ?? record['session_type'];
+                      final timeText = (session != null && session.toString().isNotEmpty) ? '$session • $when' : when;
+
                       final avatarRadius = isSmallScreen ? 14.0 : 18.0;
                       final avatarIconSize = isSmallScreen ? 14.0 : 18.0;
                       final titleSize = isSmallScreen ? 13.0 : 14.0;
                       final subtitleSize = isSmallScreen ? 11.0 : 12.0;
-                      final punchType = record['punch_type'] as String? ?? 'check_in';
-                      final isCheckOut = punchType == 'check_out';
-                      final punchColor = isCheckOut ? Colors.orange : hodAccent;
-                      final punchIcon = isCheckOut ? Icons.logout : Icons.login;
-                      final punchLabel = isCheckOut ? 'Check Out' : 'Check In';
+
                       return ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                         leading: CircleAvatar(
@@ -1370,13 +1412,18 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                             fontWeight: FontWeight.w600,
                             color: isDark ? Colors.white : Colors.black87,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
-                          record['reg_no'] ?? '',
+                          isAbsent
+                              ? '$regAndDept\nReason: $reason'
+                              : regAndDept,
                           style: TextStyle(
                             fontSize: subtitleSize,
                             color: isDark ? Colors.white60 : Colors.grey.shade600,
                           ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: isAbsent ? 2 : 1,
                         ),
                         trailing: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -1384,10 +1431,10 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: punchColor.withValues(alpha: isDark ? 0.22 : 0.10),
-                                borderRadius: BorderRadius.circular(5),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: punchColor.withValues(alpha: 0.35),
                                   width: 0.8,
@@ -1404,7 +1451,7 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                             ),
                             const SizedBox(height: 3),
                             Text(
-                              _formatTimestamp(record['timestamp']),
+                              timeText,
                               style: TextStyle(
                                 color: isDark ? Colors.white54 : Colors.grey[600],
                                 fontSize: 10,
@@ -1583,26 +1630,30 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
               crossAxisCount: 2,
               crossAxisSpacing: gridSpacing,
               mainAxisSpacing: gridSpacing,
-              childAspectRatio: 1.15,
+              childAspectRatio: 1.45,
               physics: const NeverScrollableScrollPhysics(),
               children: [
                 bentoCard(
                   accentColor: Colors.orange,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.people_rounded, color: Colors.orange, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Faculty Staff',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Faculty Staff',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.people_rounded, color: Colors.orange, size: 18),
+                        ],
                       ),
                       Text(
                         stats['total_staff']?.toString() ?? '0',
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1613,19 +1664,23 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                   accentColor: Colors.purple,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.assignment_rounded, color: Colors.purple, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Total Logs',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Total Logs',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.assignment_rounded, color: Colors.purple, size: 18),
+                        ],
                       ),
                       Text(
                         stats['total_attendance']?.toString() ?? '0',
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1636,19 +1691,23 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
                   accentColor: Colors.green,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.today_rounded, color: Colors.green, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Today Logs',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Today Logs',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.today_rounded, color: Colors.green, size: 18),
+                        ],
                       ),
                       Text(
                         stats['today_attendance']?.toString() ?? '0',
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),

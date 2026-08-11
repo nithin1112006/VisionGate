@@ -504,15 +504,28 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
                 fillColor: Colors.grey[100]!,
               ),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: deptCtrl,
+            DropdownButtonFormField<String>(
+              value: const [
+                'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
+              ].contains(deptCtrl.text.trim().toUpperCase())
+                  ? deptCtrl.text.trim().toUpperCase()
+                  : 'CSE',
               decoration: InputDecoration(
                 labelText: "Department",
                 prefixIcon: const Icon(Icons.school),
                 filled: true,
                 fillColor: Colors.grey[100]!,
               ),
+              items: const [
+                'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
+              ].map((d) => DropdownMenuItem<String>(value: d, child: Text(d))).toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  setState(() {
+                    deptCtrl.text = val;
+                  });
+                }
+              },
             ),
             const SizedBox(height: 20),
             SizedBox(

@@ -207,3 +207,18 @@ class FaceReregisterRequest:
     status: str  # 'PENDING', 'APPROVED', 'REJECTED'
     processed_by: Optional[str] = None
     processed_at: Optional[datetime] = None
+
+
+@dataclass
+class StaffStudentPermission:
+    """Staff student permission delegation table model."""
+    id: int
+    grantor_staff_reg_no: str
+    grantee_staff_reg_no: str
+    student_reg_no: Optional[str] = None  # None means ALL students owned by grantor
+    permission_type: str = 'MARK_ATTENDANCE'
+    valid_from: Optional[datetime] = None
+    valid_until: Optional[datetime] = None
+    status: str = 'ACTIVE'  # 'ACTIVE', 'REVOKED', 'EXPIRED'
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

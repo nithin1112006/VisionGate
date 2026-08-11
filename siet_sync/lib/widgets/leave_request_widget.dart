@@ -64,6 +64,7 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
 
 
   Future<void> _fetchBalances() async {
+    if (!mounted) return;
     setState(() => _loadingBalances = true);
     try {
       final session = await sessionService.getSession();
@@ -103,9 +104,11 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
         if (clResponse.statusCode == 200) {
           final clData = json.decode(clResponse.body);
           if (clData['success'] == true && clData['data'] != null) {
-            setState(() {
-              _availableCL = (clData['data']['total_cl_available'] as num?)?.toDouble() ?? 0.0;
-            });
+            if (mounted) {
+              setState(() {
+                _availableCL = (clData['data']['total_cl_available'] as num?)?.toDouble() ?? 0.0;
+              });
+            }
             print('CL Balance fetched: $_availableCL');
           }
         } else {
@@ -122,9 +125,11 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
         if (cclResponse.statusCode == 200) {
           final cclData = json.decode(cclResponse.body);
           if (cclData['success'] == true && cclData['data'] != null) {
-            setState(() {
-              _availableCCL = (cclData['data']['earned_leave_available'] as num?)?.toDouble() ?? 0.0;
-            });
+            if (mounted) {
+              setState(() {
+                _availableCCL = (cclData['data']['earned_leave_available'] as num?)?.toDouble() ?? 0.0;
+              });
+            }
             print('EL Balance fetched: $_availableCCL');
           }
         } else {

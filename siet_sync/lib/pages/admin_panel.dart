@@ -17,7 +17,6 @@ import '../utils/wifi_check.dart';
 import '../services/api_client.dart';
 import '../services/session_service.dart';
 import '../services/theme_service.dart';
-import '../utils/responsive.dart';
 import '../widgets/thirukkural_banner.dart';
 import '../utils/api_response_utils.dart';
 import '../utils/validators.dart';
@@ -31,8 +30,12 @@ import 'attendance_duration_settings.dart';
 import 'cl_management_page.dart';
 import 'ccl_management_page.dart';
 import 'attendance_log_page.dart';
+import '../widgets/student_attendance_log_widget.dart';
 import 'package:file_picker/file_picker.dart';
 import '../utils/file_saver.dart';
+import '../theme/admin_theme.dart';
+import '../theme/admin_breakpoints.dart';
+import '../widgets/admin_design_system.dart';
 
 // ============================================
 // ERROR CLEANING HELPERS
@@ -1282,8 +1285,8 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
                                       ? 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                                       : 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
                                   userAgentPackageName: kIsWeb
-                                      ? 'web.staffsync.app'
-                                      : 'com.staffsync.app',
+                                      ? 'web.visiongate.app'
+                                      : 'com.visiongate.app',
                                   tileProvider: NetworkTileProvider(),
                                   maxNativeZoom: _useSatelliteView ? 18 : 19,
                                   maxZoom: _useSatelliteView ? 21 : 20,
@@ -2246,6 +2249,12 @@ class GlassContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final baseColor = isDark ? Colors.black : Colors.white;
+    final defaultBorderColor = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.indigo.withValues(alpha: 0.12);
+
     return Container(
       margin: margin,
       child: ClipRRect(
@@ -2261,22 +2270,22 @@ class GlassContainer extends StatelessWidget {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Colors.white.withValues(alpha: opacity),
-                      Colors.white.withValues(alpha: opacity * 0.5),
+                      baseColor.withValues(alpha: opacity),
+                      baseColor.withValues(alpha: opacity * 0.5),
                     ],
                   ),
               borderRadius: BorderRadius.circular(borderRadius),
               border: Border.all(
-                color: borderColor ?? Colors.white.withValues(alpha: 0.3),
+                color: borderColor ?? defaultBorderColor,
                 width: borderWidth,
               ),
               boxShadow:
                   boxShadow ??
                   [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
+                      color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.indigo.withValues(alpha: 0.05),
                       blurRadius: 20,
-                      spreadRadius: 5,
+                      spreadRadius: 2,
                     ),
                   ],
             ),
@@ -2937,8 +2946,6 @@ class _QuickSelectChip extends StatelessWidget {
   }
 }
 
-String get API_URL => CollegeIPConfig.defaultURL;
-
 class AdminLoginPage extends StatefulWidget {
   const AdminLoginPage({super.key});
 
@@ -2950,10 +2957,13 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
   final usernameCtrl = TextEditingController();
   final passwordCtrl = TextEditingController();
   bool isLoading = false;
+  bool obscurePassword = true;
   String errorMsg = '';
 
   @override
   void dispose() {
+    usernameCtrl.dispose();
+    passwordCtrl.dispose();
     super.dispose();
   }
 
@@ -3017,164 +3027,274 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isMobile = size.width < 600;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double pagePadding = AdminBreakpoints.pagePadding(screenWidth);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Admin Login'),
-        backgroundColor: Color(0xFF3949AB),
-        foregroundColor: Colors.white,
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.all(isMobile ? 16 : 32),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: isMobile ? double.infinity : 400,
+      backgroundColor: AdminColors.getSurface(isDark),
+      body: Stack(
+        children: [
+          // Background Ambient Orbs
+          Positioned(
+            top: -100,
+            left: -80,
+            child: Container(
+              width: 320,
+              height: 320,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    AdminColors.primary.withOpacity(isDark ? 0.25 : 0.12),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    height: 80,
-                    width: 80,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              Color(0xFF1565C0),
-                              Color(0xFF3949AB),
-                              Color(0xFF5E35B1),
-                              Color(0xFF6A1B9A),
-                              Color(0xFF512DA8),
-                              Color(0xFFD81B60),
-                              Color(0xFFEC407A),
-                              Color(0xFFF4511E),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.admin_panel_settings,
-                          size: 60,
-                          color: Colors.white,
-                        ),
-                      );
-                    },
-                  ),
+          ),
+          Positioned(
+            bottom: -120,
+            right: -100,
+            child: Container(
+              width: 400,
+              height: 400,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    AdminColors.rose.withOpacity(isDark ? 0.2 : 0.08),
+                    Colors.transparent,
+                  ],
                 ),
-                const SizedBox(height: 24),
-                Text(
-                  'Admin Panel',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF3949AB),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Enter your credentials to continue',
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 32),
-                TextField(
-                  controller: usernameCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Username',
-                    prefixIcon: const Icon(Icons.person),
-                    filled: true,
-                    fillColor: Colors.grey[100],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: passwordCtrl,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: const Icon(Icons.lock),
-                    filled: true,
-                    fillColor: Colors.grey[100],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                ),
-                if (errorMsg.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                     decoration: BoxDecoration(
-                       color: Colors.red.withValues(alpha: 0.1),
-                       borderRadius: BorderRadius.circular(8),
-                     ),
-                    child: Row(
+              ),
+            ),
+          ),
+
+          // Main Center Card
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(pagePadding),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: AdminCard(
+                    padding: EdgeInsets.all(screenWidth < AdminBreakpoints.xs ? 16 : 28),
+                    borderRadius: AdminRadii.xxl,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Icon(Icons.error, color: Colors.red),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            errorMsg,
-                            style: const TextStyle(color: Colors.red),
+                        // App Logo Hero
+                        Center(
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(AdminRadii.xl),
+                              boxShadow: AdminShadows.glow(AdminColors.primary, opacity: 0.3),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(AdminRadii.xl),
+                              child: Image.asset(
+                                'assets/images/logo.png',
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return const Icon(
+                                    Icons.admin_panel_settings_rounded,
+                                    size: 44,
+                                    color: Colors.white,
+                                  );
+                                },
+                              ),
+                            ),
                           ),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Title & Subtitle
+                        Text(
+                          'VisionGate Admin',
+                          textAlign: TextAlign.center,
+                          style: AdminTextStyles.displayLg(isDark).copyWith(
+                            fontSize: screenWidth < AdminBreakpoints.xs ? 22 : 26,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Administrative Access Portal',
+                          textAlign: TextAlign.center,
+                          style: AdminTextStyles.bodyMd(
+                            isDark,
+                            color: AdminColors.getTextSecondary(isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 32),
+
+                        // Username Field
+                        TextField(
+                          controller: usernameCtrl,
+                          textInputAction: TextInputAction.next,
+                          style: AdminTextStyles.bodyMd(isDark),
+                          decoration: InputDecoration(
+                            labelText: 'Username',
+                            labelStyle: AdminTextStyles.labelSm(isDark),
+                            prefixIcon: const Icon(
+                              Icons.person_rounded,
+                              color: AdminColors.primary,
+                              size: 20,
+                            ),
+                            filled: true,
+                            fillColor: AdminColors.getCardTinted(isDark),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: BorderSide(color: AdminColors.getBorder(isDark)),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: BorderSide(color: AdminColors.getBorder(isDark)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: const BorderSide(color: AdminColors.primary, width: 1.5),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Password Field
+                        TextField(
+                          controller: passwordCtrl,
+                          obscureText: obscurePassword,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _login(),
+                          style: AdminTextStyles.bodyMd(isDark),
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            labelStyle: AdminTextStyles.labelSm(isDark),
+                            prefixIcon: const Icon(
+                              Icons.lock_rounded,
+                              color: AdminColors.primary,
+                              size: 20,
+                            ),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                obscurePassword
+                                    ? Icons.visibility_off_rounded
+                                    : Icons.visibility_rounded,
+                                color: AdminColors.getTextMuted(isDark),
+                                size: 20,
+                              ),
+                              onPressed: () {
+                                setState(() => obscurePassword = !obscurePassword);
+                              },
+                            ),
+                            filled: true,
+                            fillColor: AdminColors.getCardTinted(isDark),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: BorderSide(color: AdminColors.getBorder(isDark)),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: BorderSide(color: AdminColors.getBorder(isDark)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              borderSide: const BorderSide(color: AdminColors.primary, width: 1.5),
+                            ),
+                          ),
+                        ),
+
+                        // Error Banner
+                        if (errorMsg.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: AdminColors.dangerSoft,
+                              borderRadius: BorderRadius.circular(AdminRadii.md),
+                              border: Border.all(color: AdminColors.danger.withOpacity(0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.error_outline_rounded, color: AdminColors.danger, size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    errorMsg,
+                                    style: const TextStyle(
+                                      color: AdminColors.danger,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 28),
+
+                        // Sign In Action Button
+                        AdminActionButton(
+                          label: 'Sign In to Dashboard',
+                          icon: Icons.login_rounded,
+                          isLoading: isLoading,
+                          onPressed: _login,
+                          variant: ButtonVariant.primary,
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Back to Home Ghost Link
+                        TextButton.icon(
+                          onPressed: () => Navigator.pop(context),
+                          icon: Icon(
+                            Icons.arrow_back_rounded,
+                            size: 16,
+                            color: AdminColors.getTextSecondary(isDark),
+                          ),
+                          label: Text(
+                            'Back to User Home',
+                            style: AdminTextStyles.labelSm(
+                              isDark,
+                              color: AdminColors.getTextSecondary(isDark),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Security Footer Badge
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.security_rounded,
+                              size: 14,
+                              color: AdminColors.getTextMuted(isDark),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Encrypted Administrative Session',
+                              style: AdminTextStyles.micro(isDark),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                ],
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: isLoading ? null : _login,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: isLoading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Login as Admin',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                  ),
                 ),
-                const SizedBox(height: 16),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Back to Home'),
-                ),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -3211,6 +3331,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     'Live Locations',
     'Academics',
     'Attendance Log',
+    'Student Log',
     'Settings',
   ];
 
@@ -3229,6 +3350,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       LiveLocationsTab(token: widget.token),
       AcademicsSettingsPage(token: widget.token),
       AttendanceLogTab(token: widget.token, user: widget.user),
+      StudentAttendanceLogWidget(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: true,
+      ),
       SettingsTab(token: widget.token),
     ]);
   }
@@ -3243,9 +3369,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final isPhone = width < 768; // iPhone XR/12/14 Pro, Pixel 7
-    final useDrawerNavigation = isPhone;
-    final shouldExtendRail = width >= 1280;
+    final useDrawerNavigation = width < 768; // Mobile & small tablets
+    final shouldExtendRail = width >= AdminBreakpoints.xxl; // Desktop 1280dp+
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     Widget currentPage = _selectedIndex == 2
@@ -3254,7 +3379,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
     Widget pageBody = Stack(
       children: [
-        // Beautiful floating neon mesh gradient orbs in the background
+        // Background Ambient Mesh Orbs
         Positioned(
           top: -120,
           left: -120,
@@ -3265,15 +3390,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFF6366F1).withValues(alpha: isDark ? 0.22 : 0.12),
-                  const Color(0xFF6366F1).withValues(alpha: 0.0),
+                  AdminColors.primary.withOpacity(isDark ? 0.18 : 0.08),
+                  Colors.transparent,
                 ],
               ),
             ),
           ),
         ),
         Positioned(
-          bottom: 50,
+          bottom: -150,
           right: -150,
           child: Container(
             width: 500,
@@ -3282,42 +3407,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFFEC4899).withValues(alpha: isDark ? 0.18 : 0.08),
-                  const Color(0xFFEC4899).withValues(alpha: 0.0),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 300,
-          right: 120,
-          child: Container(
-            width: 300,
-            height: 300,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFF10B981).withValues(alpha: isDark ? 0.12 : 0.05),
-                  const Color(0xFF10B981).withValues(alpha: 0.0),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          bottom: -100,
-          left: 100,
-          child: Container(
-            width: 350,
-            height: 350,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.15 : 0.06),
-                  const Color(0xFF8B5CF6).withValues(alpha: 0.0),
+                  AdminColors.rose.withOpacity(isDark ? 0.15 : 0.05),
+                  Colors.transparent,
                 ],
               ),
             ),
@@ -3325,64 +3416,68 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         ),
         
         // Active Tab Page View
-        RefreshIndicator(
-          onRefresh: () async {
-            setState(() {
-              if (_selectedIndex == 2) {
-                _analysisTabKey = UniqueKey();
-              } else {
-                _pages.clear();
-                _pages.addAll([
-                  DashboardTab(token: widget.token, user: widget.user),
-                  DepartmentsTab(token: widget.token),
-                  AnalysisTab(token: widget.token),
-                  AdminFaceRequestsTab(token: widget.token),
-                  OtherStaffAttendanceTab(token: widget.token),
-                  AdminLeaveManagement(token: widget.token),
-                  CLManagementPage(token: widget.token),
-                  CCLManagementPage(token: widget.token),
-                  LiveLocationsTab(token: widget.token),
-                  AcademicsSettingsPage(token: widget.token),
-                  AttendanceLogTab(token: widget.token, user: widget.user),
-                  SettingsTab(token: widget.token),
-                ]);
-              }
-            });
-            await Future.delayed(const Duration(milliseconds: 100));
-          },
-          color: const Color(0xFF6366F1),
-          child: currentPage,
+        Positioned.fill(
+          child: RefreshIndicator(
+            onRefresh: () async {
+              setState(() {
+                if (_selectedIndex == 2) {
+                  _analysisTabKey = UniqueKey();
+                } else {
+                  _pages.clear();
+                  _pages.addAll([
+                    DashboardTab(token: widget.token, user: widget.user),
+                    DepartmentsTab(token: widget.token),
+                    AnalysisTab(token: widget.token),
+                    AdminFaceRequestsTab(token: widget.token),
+                    OtherStaffAttendanceTab(token: widget.token),
+                    AdminLeaveManagement(token: widget.token),
+                    CLManagementPage(token: widget.token),
+                    CCLManagementPage(token: widget.token),
+                    LiveLocationsTab(token: widget.token),
+                    AcademicsSettingsPage(token: widget.token),
+                    AttendanceLogTab(token: widget.token, user: widget.user),
+                    StudentAttendanceLogWidget(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdmin: true,
+                    ),
+                    SettingsTab(token: widget.token),
+                  ]);
+                }
+              });
+              await Future.delayed(const Duration(milliseconds: 100));
+            },
+            color: AdminColors.primary,
+            child: currentPage,
+          ),
         ),
       ],
     );
 
     return Scaffold(
+      backgroundColor: AdminColors.getSurface(isDark),
       appBar: AppBar(
         title: Text(
           _titles[_selectedIndex],
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            color: isDark ? Colors.white : Colors.black,
-          ),
+          style: AdminTextStyles.titleLg(isDark),
           overflow: TextOverflow.ellipsis,
         ),
-        backgroundColor: isDark
-            ? const Color(0xFF000000)
-            : const Color(0xFFF2F2F7),
+        backgroundColor: AdminColors.getCard(isDark),
         elevation: 0,
-        foregroundColor: isDark ? Colors.white : Colors.black,
+        scrolledUnderElevation: 0.5,
         leading: useDrawerNavigation
             ? Builder(
                 builder: (context) => Container(
                   margin: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                    borderRadius: BorderRadius.circular(10),
+                    color: AdminColors.getCardTinted(isDark),
+                    borderRadius: BorderRadius.circular(AdminRadii.md),
                   ),
                   child: IconButton(
                     icon: Icon(
-                      Icons.menu,
-                      color: isDark ? Colors.white : Colors.black,
+                      Icons.menu_rounded,
+                      color: AdminColors.getTextPrimary(isDark),
+                      size: 20,
                     ),
                     onPressed: () => Scaffold.of(context).openDrawer(),
                     tooltip: 'Menu',
@@ -3394,25 +3489,27 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           // Refresh button for Analysis tab
           if (_selectedIndex == 2)
             IconButton(
-              icon: const Icon(Icons.refresh),
+              icon: const Icon(Icons.refresh_rounded),
               onPressed: () {
                 setState(() {
-                  // Create a new key to rebuild the AnalysisTab
                   _analysisTabKey = UniqueKey();
                 });
               },
               tooltip: 'Refresh Analysis',
             ),
+
+          // Logout Action Button
           Container(
-            margin: const EdgeInsets.only(right: 8),
+            margin: const EdgeInsets.only(right: 12, left: 4),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-              borderRadius: BorderRadius.circular(10),
+              color: AdminColors.dangerSoft,
+              borderRadius: BorderRadius.circular(AdminRadii.md),
             ),
             child: IconButton(
-              icon: Icon(
-                Icons.logout,
-                color: isDark ? Colors.white : Colors.black,
+              icon: const Icon(
+                Icons.logout_rounded,
+                color: AdminColors.danger,
+                size: 20,
               ),
               onPressed: _logout,
               tooltip: 'Logout',
@@ -3426,66 +3523,155 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             ? pageBody
             : Row(
                 children: [
-                  NavigationRail(
-                    selectedIndex: _selectedIndex,
-                    onDestinationSelected: (index) =>
-                        setState(() => _selectedIndex = index),
-                    extended: shouldExtendRail,
-                    labelType: shouldExtendRail
-                        ? NavigationRailLabelType.none
-                        : NavigationRailLabelType.selected,
-                    destinations: const [
-                      NavigationRailDestination(
-                        icon: Icon(Icons.dashboard),
-                        label: Text('Dash'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.business),
-                        label: Text('Dept'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.analytics),
-                        label: Text('Analysis'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.face),
-                        label: Text('Face Req'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.admin_panel_settings),
-                        label: Text('Other User Dept'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.event_note),
-                        label: Text('Leave'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.beach_access),
-                        label: Text('CL'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.more_time),
-                        label: Text('CCL'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.location_on),
-                        label: Text('Locations'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.school),
-                        label: Text('Academics'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.history_edu),
-                        label: Text('Attendance Log'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.settings),
-                        label: Text('Settings'),
-                      ),
-                    ],
+                  // Desktop / Tablet Custom Sidebar Navigation Rail
+                  Container(
+                    width: AdminBreakpoints.navRailWidth(width),
+                    color: AdminColors.getCard(isDark),
+                    child: Column(
+                      children: [
+                        // Extended Header Info (when wide desktop)
+                        if (shouldExtendRail) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                                    ),
+                                    borderRadius: BorderRadius.circular(AdminRadii.md),
+                                  ),
+                                  child: const Icon(
+                                    Icons.admin_panel_settings_rounded,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'VisionGate',
+                                        style: AdminTextStyles.titleMd(isDark),
+                                      ),
+                                      Text(
+                                        'Admin Panel',
+                                        style: AdminTextStyles.micro(isDark),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Divider(color: AdminColors.getBorder(isDark), height: 1),
+                        ],
+                        Expanded(
+                          child: NavigationRail(
+                            backgroundColor: Colors.transparent,
+                            selectedIndex: _selectedIndex,
+                            onDestinationSelected: (index) =>
+                                setState(() => _selectedIndex = index),
+                            extended: shouldExtendRail,
+                            labelType: shouldExtendRail
+                                ? NavigationRailLabelType.none
+                                : NavigationRailLabelType.selected,
+                            indicatorColor: AdminColors.primarySoft,
+                            selectedIconTheme: const IconThemeData(color: AdminColors.primary),
+                            unselectedIconTheme: IconThemeData(
+                              color: AdminColors.getTextMuted(isDark),
+                            ),
+                            selectedLabelTextStyle: TextStyle(
+                              color: AdminColors.primary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            unselectedLabelTextStyle: TextStyle(
+                              color: AdminColors.getTextMuted(isDark),
+                              fontSize: 11,
+                            ),
+                            destinations: const [
+                              NavigationRailDestination(
+                                icon: Icon(Icons.dashboard_outlined),
+                                selectedIcon: Icon(Icons.dashboard_rounded),
+                                label: Text('Dashboard'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.business_outlined),
+                                selectedIcon: Icon(Icons.business_rounded),
+                                label: Text('Depts'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.analytics_outlined),
+                                selectedIcon: Icon(Icons.analytics_rounded),
+                                label: Text('Analysis'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.face_outlined),
+                                selectedIcon: Icon(Icons.face_rounded),
+                                label: Text('Face Req'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.apartment_outlined),
+                                selectedIcon: Icon(Icons.apartment_rounded),
+                                label: Text('Other Users'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.event_note_outlined),
+                                selectedIcon: Icon(Icons.event_note_rounded),
+                                label: Text('Leave'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.beach_access_outlined),
+                                selectedIcon: Icon(Icons.beach_access_rounded),
+                                label: Text('Casual Leave'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.more_time_outlined),
+                                selectedIcon: Icon(Icons.more_time_rounded),
+                                label: Text('CCL'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.location_on_outlined),
+                                selectedIcon: Icon(Icons.location_on_rounded),
+                                label: Text('Live Map'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.school_outlined),
+                                selectedIcon: Icon(Icons.school_rounded),
+                                label: Text('Academics'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.history_edu_outlined),
+                                selectedIcon: Icon(Icons.history_edu_rounded),
+                                label: Text('Log'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.person_search_outlined),
+                                selectedIcon: Icon(Icons.person_search_rounded),
+                                label: Text('Student Log'),
+                              ),
+                              NavigationRailDestination(
+                                icon: Icon(Icons.settings_outlined),
+                                selectedIcon: Icon(Icons.settings_rounded),
+                                label: Text('Settings'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const VerticalDivider(width: 1),
+                  VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                    color: AdminColors.getBorder(isDark),
+                  ),
                   Expanded(child: pageBody),
                 ],
               ),
@@ -3495,178 +3681,132 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   Widget _buildDrawer(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final String adminName = widget.user['name'] ?? 'System Admin';
 
     return Drawer(
-      child: Container(
-        color: isDark ? const Color(0xFF000000) : Colors.white,
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            Container(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 20,
-                bottom: 24,
-                left: 20,
-                right: 20,
+      backgroundColor: AdminColors.getCard(isDark),
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          // Drawer Gradient Header
+          Container(
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 20,
+              bottom: 24,
+              left: 20,
+              right: 20,
+            ),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isDark
-                      ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
-                      : [
-                          const Color(0xFF1A237E),
-                          const Color(0xFF3949AB),
-                          const Color(0xFF5C6BC0),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: AdminShadows.sm,
+                      ),
+                      child: Center(
+                        child: Text(
+                          adminName.isNotEmpty ? adminName[0].toUpperCase() : 'A',
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: AdminColors.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            adminName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          const AdminBadge(
+                            label: 'System Administrator',
+                            color: Colors.white,
+                          ),
                         ],
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.admin_panel_settings,
-                      size: 36,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Admin Panel',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.user['name'] ?? 'Admin',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70, fontSize: 15),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildDrawerItem(
-              0,
-              Icons.dashboard_rounded,
-              'Dashboard',
-              Icons.dashboard_outlined,
-            ),
-            _buildDrawerItem(
-              1,
-              Icons.business_rounded,
-              'Departments',
-              Icons.business_outlined,
-            ),
-            _buildDrawerItem(
-              2,
-              Icons.analytics_rounded,
-              'Analysis',
-              Icons.analytics_outlined,
-            ),
-            _buildDrawerItem(
-              3,
-              Icons.face_rounded,
-              'Face Requests',
-              Icons.face_outlined,
-            ),
-            _buildDrawerItem(
-              4,
-              Icons.apartment_rounded,
-              'Other User Departments',
-              Icons.apartment_outlined,
-            ),
-            _buildDrawerItem(
-              5,
-              Icons.event_note_rounded,
-              'Leave Management',
-              Icons.event_note_outlined,
-            ),
-            _buildDrawerItem(
-              6,
-              Icons.beach_access_rounded,
-              'Casual Leave',
-              Icons.beach_access_outlined,
-            ),
-            _buildDrawerItem(
-              7,
-              Icons.more_time_rounded,
-              'CCL Management',
-              Icons.more_time_outlined,
-            ),
-            _buildDrawerItem(
-              8,
-              Icons.location_on_rounded,
-              'Live Locations',
-              Icons.location_on_outlined,
-            ),
-            _buildDrawerItem(
-              9,
-              Icons.school_rounded,
-              'Academics',
-              Icons.school_outlined,
-            ),
-            _buildDrawerItem(
-              10,
-              Icons.history_edu_rounded,
-              'Attendance Log',
-              Icons.history_edu_outlined,
-            ),
-            _buildDrawerItem(
-              11,
-              Icons.settings_rounded,
-              'Settings',
-              Icons.settings_outlined,
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Divider(
-                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF3D1A1A)
-                        : Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.logout,
-                    color: Colors.red.shade400,
-                    size: 22,
-                  ),
+                  ],
                 ),
-                title: Text(
-                  'Logout',
-                  style: TextStyle(
-                    color: Colors.red.shade400,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                onTap: _logout,
-                contentPadding: EdgeInsets.zero,
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Drawer Nav Options
+          _buildDrawerItem(0, Icons.dashboard_rounded, 'Dashboard', Icons.dashboard_outlined),
+          _buildDrawerItem(1, Icons.business_rounded, 'Departments', Icons.business_outlined),
+          _buildDrawerItem(2, Icons.analytics_rounded, 'Analysis', Icons.analytics_outlined),
+          _buildDrawerItem(3, Icons.face_rounded, 'Face Requests', Icons.face_outlined),
+          _buildDrawerItem(4, Icons.apartment_rounded, 'Other Users', Icons.apartment_outlined),
+          _buildDrawerItem(5, Icons.event_note_rounded, 'Leave Management', Icons.event_note_outlined),
+          _buildDrawerItem(6, Icons.beach_access_rounded, 'Casual Leave', Icons.beach_access_outlined),
+          _buildDrawerItem(7, Icons.more_time_rounded, 'CCL Management', Icons.more_time_outlined),
+          _buildDrawerItem(8, Icons.location_on_rounded, 'Live Locations', Icons.location_on_outlined),
+          _buildDrawerItem(9, Icons.school_rounded, 'Academics', Icons.school_outlined),
+          _buildDrawerItem(10, Icons.history_edu_rounded, 'Attendance Log', Icons.history_edu_outlined),
+          _buildDrawerItem(11, Icons.person_search_rounded, 'Student Log', Icons.person_search_outlined),
+          _buildDrawerItem(12, Icons.settings_rounded, 'Settings', Icons.settings_outlined),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Divider(color: AdminColors.getBorder(isDark)),
+          ),
+
+          // Logout Action
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AdminColors.dangerSoft,
+                borderRadius: BorderRadius.circular(AdminRadii.md),
+              ),
+              child: const Icon(
+                Icons.logout_rounded,
+                color: AdminColors.danger,
+                size: 20,
               ),
             ),
-          ],
-        ),
+            title: const Text(
+              'Sign Out',
+              style: TextStyle(
+                color: AdminColors.danger,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              _logout();
+            },
+          ),
+          const SizedBox(height: 20),
+        ],
       ),
     );
   }
@@ -3674,69 +3814,69 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   Widget _buildDrawerItem(
     int index,
     IconData selectedIcon,
-    String title,
+    String label,
     IconData unselectedIcon,
   ) {
-    final isSelected = _selectedIndex == index;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final adminAccent = const Color(0xFF3949AB);
+    final isSelected = _selectedIndex == index;
+    const accent = AdminColors.primary;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      decoration: BoxDecoration(
         color: isSelected
-            ? adminAccent.withValues(alpha: 0.12)
+            ? accent.withValues(alpha: isDark ? 0.2 : 0.1)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () {
-            setState(() => _selectedIndex = index);
-            Navigator.pop(context);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          setState(() => _selectedIndex = index);
+          Navigator.pop(context);
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? accent
+                      : (isDark
+                            ? const Color(0xFF1C1C1E)
+                            : Colors.grey.shade100),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  isSelected ? selectedIcon : unselectedIcon,
+                  color: isSelected
+                      ? Colors.white
+                      : (isDark ? Colors.white60 : Colors.grey.shade600),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: isSelected
+                        ? FontWeight.bold
+                        : FontWeight.w500,
                     color: isSelected
-                        ? adminAccent
-                        : (isDark
-                              ? const Color(0xFF1C1C1E)
-                              : Colors.grey.shade100),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    isSelected ? selectedIcon : unselectedIcon,
-                    color: isSelected
-                        ? Colors.white
-                        : (isDark ? Colors.white60 : Colors.grey.shade600),
-                    size: 22,
+                        ? accent
+                        : (isDark ? Colors.white : Colors.grey.shade700),
+                    fontSize: 15,
                   ),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.w500,
-                      color: isSelected
-                          ? adminAccent
-                          : (isDark ? Colors.white : Colors.grey.shade700),
-                      fontSize: 15,
-                    ),
-                  ),
-                ),
-                if (isSelected)
-                  Icon(Icons.chevron_right, color: adminAccent, size: 22),
-              ],
-            ),
+              ),
+              if (isSelected)
+                const Icon(Icons.chevron_right, color: accent, size: 22),
+            ],
           ),
         ),
       ),
@@ -3917,6 +4057,35 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
       ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
     }
   }
+
+  Future<void> _toggleKioskPermission(String regNo, String name, bool currentStatus) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$API_URL/admin/staff/$regNo/kiosk-toggle'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json'
+        },
+      );
+      if (response.statusCode == 200) {
+        final newStatus = !currentStatus;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kiosk permission ${newStatus ? 'granted to' : 'revoked from'} $name')),
+        );
+        fetchStaff();
+      } else {
+        final data = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(data['detail'] ?? 'Failed to toggle kiosk permission')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')),
+      );
+    }
+  }
+
 
   Future<void> _editStaff(Map<String, dynamic> staffMember) async {
     final nameCtrl = TextEditingController(text: staffMember['name']);
@@ -4555,10 +4724,12 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                     final member = filteredStaff[index];
                     final faceRegistered = member['face_registered'] == true;
                     final canReregister = member['can_reregister'] == true;
+                    final kioskEnabled = member['kiosk_enabled'] == true;
                     return _StaffCard(
                       member: member,
                       faceRegistered: faceRegistered,
                       canReregister: canReregister,
+                      kioskEnabled: kioskEnabled,
                       isMobile: isMobile,
                       onTap: () => _showStaffAttendanceDetails(member),
                       onRegisterFace: () => _registerStaffFace(member),
@@ -4568,6 +4739,9 @@ class _AdminStaffTabState extends State<AdminStaffTab> {
                         } else {
                           _grantPermission(member['reg_no'], member['name']);
                         }
+                      },
+                      onToggleKioskPermission: () {
+                        _toggleKioskPermission(member['reg_no'], member['name'], kioskEnabled);
                       },
                       onEdit: () => _editStaff(member),
                       onDelete: () =>
@@ -4586,10 +4760,12 @@ class _StaffCard extends StatelessWidget {
   final Map<String, dynamic> member;
   final bool faceRegistered;
   final bool canReregister;
+  final bool kioskEnabled;
   final bool isMobile;
   final VoidCallback onTap;
   final VoidCallback onRegisterFace;
   final VoidCallback onTogglePermission;
+  final VoidCallback onToggleKioskPermission;
   final VoidCallback onDelete;
   final VoidCallback onEdit;
 
@@ -4597,10 +4773,12 @@ class _StaffCard extends StatelessWidget {
     required this.member,
     required this.faceRegistered,
     required this.canReregister,
+    required this.kioskEnabled,
     required this.isMobile,
     required this.onTap,
     required this.onRegisterFace,
     required this.onTogglePermission,
+    required this.onToggleKioskPermission,
     required this.onDelete,
     required this.onEdit,
   });
@@ -4706,6 +4884,12 @@ class _StaffCard extends StatelessWidget {
                       'Can Re-register',
                       color: Colors.orange,
                     ),
+                  if (kioskEnabled)
+                    _buildChip(
+                      Icons.camera_front,
+                      'Kiosk Mode',
+                      color: Colors.blue,
+                    ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -4746,6 +4930,7 @@ class _StaffCard extends StatelessWidget {
                       if (value == 'edit') onEdit();
                       if (value == 'delete') onDelete();
                       if (value == 'permission') onTogglePermission();
+                      if (value == 'kiosk') onToggleKioskPermission();
                     },
                     itemBuilder: (context) => [
                       PopupMenuItem(
@@ -4767,6 +4952,25 @@ class _StaffCard extends StatelessWidget {
                         ),
                       ),
                       PopupMenuItem(
+                        value: 'kiosk',
+                        child: Row(
+                          children: [
+                            Icon(
+                              kioskEnabled ? Icons.videocam_off : Icons.videocam,
+                              size: 20,
+                              color: kioskEnabled ? Colors.red : Colors.blue,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              kioskEnabled
+                                  ? 'Revoke Kiosk'
+                                  : 'Grant Kiosk',
+                            ),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+
                         value: 'edit',
                         child: Row(
                           children: [
@@ -4829,26 +5033,38 @@ class _StaffCard extends StatelessWidget {
               '${member['reg_no']} • ${member['dept']}',
               style: const TextStyle(fontSize: 12),
             ),
-            Row(
-              children: [
-                Icon(
-                  faceRegistered ? Icons.face : Icons.face_outlined,
-                  size: 14,
-                  color: faceRegistered ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  faceRegistered ? 'Face Registered' : 'Face Not Registered',
-                  style: TextStyle(
-                    fontSize: 10,
+              Row(
+                children: [
+                  Icon(
+                    faceRegistered ? Icons.face : Icons.face_outlined,
+                    size: 14,
                     color: faceRegistered ? Colors.green : Colors.orange,
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        trailing: Row(
+                  const SizedBox(width: 4),
+                  Text(
+                    faceRegistered ? 'Face Registered' : 'Face Not Registered',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: faceRegistered ? Colors.green : Colors.orange,
+                    ),
+                  ),
+                  if (kioskEnabled) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.camera_front, size: 14, color: Colors.blue),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Kiosk Enabled',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.blue,
+                      ),
+                    ),
+                  ]
+                ],
+              ),
+            ],
+          ),
+          trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
@@ -4868,6 +5084,16 @@ class _StaffCard extends StatelessWidget {
               tooltip: canReregister
                   ? 'Revoke re-register permission'
                   : 'Grant re-register permission',
+            ),
+            IconButton(
+              icon: Icon(
+                kioskEnabled ? Icons.videocam : Icons.videocam_off,
+                color: kioskEnabled ? Colors.blue : Colors.grey,
+              ),
+              onPressed: onToggleKioskPermission,
+              tooltip: kioskEnabled
+                  ? 'Revoke kiosk permission'
+                  : 'Grant kiosk permission',
             ),
             const SizedBox(width: 8),
             Container(
@@ -5639,61 +5865,43 @@ class ModernAttendanceStatCard extends StatelessWidget {
     final labelSize = isSmallScreen ? 13.0 : 14.0;
     final valueSize = isSmallScreen ? 26.0 : 28.0;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.7),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 15,
-                offset: const Offset(0, 6),
-              ),
-            ],
+    return AdminCard(
+      padding: EdgeInsets.zero,
+      child: Stack(
+        children: [
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Icon(
+              icon,
+              size: iconSize,
+              color: color.withValues(alpha: 0.8),
+            ),
           ),
-          child: Stack(
-            children: [
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Icon(
-                  icon,
-                  size: iconSize,
-                  color: color.withOpacity(0.8),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: AdminTextStyles.caption(isDark).copyWith(
+                    fontSize: labelSize,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: labelSize,
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      value,
-                      style: TextStyle(
-                        fontSize: valueSize,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white : color,
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 6),
+                Text(
+                  value,
+                  style: AdminTextStyles.h2(isDark).copyWith(
+                    fontSize: valueSize,
+                    color: isDark ? Colors.white : color,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -6395,120 +6603,90 @@ class _DashboardTabState extends State<DashboardTab> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final isSmallScreen = screenWidth < 400;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final adminAccent = Colors.deepPurple;
+    final pagePadding = AdminBreakpoints.pagePadding(screenWidth);
 
     if (isLoading) {
-      return Center(child: CircularProgressIndicator(color: adminAccent));
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.all(pagePadding),
+        child: const Column(
+          children: [
+            AdminShimmerLoader(height: 120, borderRadius: AdminRadii.xl),
+            SizedBox(height: 16),
+            AdminShimmerLoader(height: 180, borderRadius: AdminRadii.lg),
+            SizedBox(height: 16),
+            AdminShimmerLoader(height: 240, borderRadius: AdminRadii.lg),
+          ],
+        ),
+      );
     }
 
     final stats = data?['stats'] ?? {};
     final recentAttendance = data?['recent_attendance'] ?? [];
-    final pagePadding = Breakpoints.pagePadding(screenWidth);
 
     return SingleChildScrollView(
       padding: EdgeInsets.all(pagePadding),
       child: Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: Breakpoints.contentMaxWidth(screenWidth),
+            maxWidth: AdminBreakpoints.maxContentWidth(screenWidth),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // iOS-style Welcome Card
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isDark
-                        ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
-                        : [adminAccent, const Color(0xFF7C4DFF)],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: adminAccent.withValues(alpha: 0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              // Hero Welcome Card
+              AdminGradientCard(
+                gradientColors: const [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                padding: const EdgeInsets.all(16),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Icon(
-                            Icons.waving_hand,
-                            color: Colors.white,
-                            size: isSmallScreen ? 24 : 28,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(AdminRadii.md),
+                      ),
+                      child: const Icon(
+                        Icons.waving_hand_rounded,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
+                              const Text(
                                 'Welcome back,',
                                 style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.8),
-                                  fontSize: isSmallScreen ? 12 : 14,
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              Text(
-                                widget.user['name'] ?? 'Admin',
-                                style: TextStyle(
-                                  fontSize: isSmallScreen ? 18 : 22,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
+                              const SizedBox(width: 8),
+                              AdminBadge(
+                                label: widget.user['role']?.toString().toUpperCase() ?? 'ADMIN',
+                                color: Colors.white,
+                                icon: Icons.shield_rounded,
                               ),
                             ],
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isSmallScreen ? 12 : 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.admin_panel_settings,
-                            color: Colors.white.withValues(alpha: 0.9),
-                            size: isSmallScreen ? 16 : 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              'Role: ${widget.user['role']?.toString().toUpperCase() ?? 'ADMIN'}',
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.9),
-                                fontSize: isSmallScreen ? 11 : 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.user['name'] ?? 'Admin',
+                            style: TextStyle(
+                              fontSize: screenWidth < AdminBreakpoints.sm ? 18 : 22,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
@@ -6516,141 +6694,59 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              const ThirukkuralBanner(),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
+
               // Section Header
-              Row(
+              const AdminSectionHeader(
+                title: 'System Statistics',
+                subtitle: 'Real-time overview of staff attendance & status',
+                icon: Icons.analytics_rounded,
+              ),
+              const SizedBox(height: 8),
+
+              // Statistics Bento Grid (2x2 grid on mobile, 4 columns on desktop)
+              GridView.count(
+                crossAxisCount: AdminBreakpoints.statGridColumns(screenWidth),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                childAspectRatio: screenWidth < AdminBreakpoints.lg ? 1.65 : 1.6,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
                 children: [
-                  Container(
-                    padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
-                    decoration: BoxDecoration(
-                      color: adminAccent.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.analytics_outlined,
-                      color: adminAccent,
-                      size: isSmallScreen ? 18 : 22,
-                    ),
+                  ModernStatCard(
+                    icon: Icons.people_rounded,
+                    title: 'Total Users',
+                    value: stats['total_users']?.toString() ?? '0',
+                    color: const Color(0xFF6366F1),
                   ),
-                  const SizedBox(width: 12),
-                  Flexible(
-                    child: Text(
-                      'System Statistics',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1A1A2E),
-                      ),
-                    ),
+                  ModernStatCard(
+                    icon: Icons.business_rounded,
+                    title: 'Departments',
+                    value: stats['total_departments']?.toString() ?? '0',
+                    color: const Color(0xFF10B981),
                   ),
+                  ModernStatCard(
+                    icon: Icons.check_circle_rounded,
+                    title: 'Present Today',
+                    value: stats['today_attendance']?.toString() ?? '0',
+                    color: const Color(0xFFEC4899),
+                  ),
+                  _SystemStatusCard(token: widget.token),
                 ],
               ),
-              const SizedBox(height: 16),
-              // Statistics Grid
-              // Apple Bento Grid Layout
-              Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SizedBox(
-                          height: 130,
-                          child: AnimatedStatCard(
-                            icon: Icons.people_rounded,
-                            title: 'Total Users',
-                            value: stats['total_users']?.toString() ?? '0',
-                            color: const Color(0xFF6366F1),
-                            index: 0,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: SizedBox(
-                          height: 130,
-                          child: AnimatedStatCard(
-                            icon: Icons.business_rounded,
-                            title: 'Departments',
-                            value: stats['total_departments']?.toString() ?? '0',
-                            color: const Color(0xFF10B981),
-                            index: 1,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SizedBox(
-                          height: 130,
-                          child: AnimatedStatCard(
-                            icon: Icons.check_circle_rounded,
-                            title: 'Present Today',
-                            value: stats['today_attendance']?.toString() ?? '0',
-                            color: const Color(0xFFEC4899),
-                            index: 2,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: SizedBox(
-                          height: 130,
-                          child: _SystemStatusCard(token: widget.token),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              // Institution-wide daily attendance pie chart
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 15,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
+              const SizedBox(height: 24),
+
+              // Today's Attendance Breakdown Pie Chart
+              AdminCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: adminAccent.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            Icons.pie_chart_rounded,
-                            color: adminAccent,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          "Today's Attendance Breakdown",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                            color: isDark ? Colors.white : const Color(0xFF1A1A2E),
-                          ),
-                        ),
-                      ],
+                    const AdminSectionHeader(
+                      title: "Today's Attendance Breakdown",
+                      subtitle: "Distribution of full day, half day, absent, and leave staff",
+                      icon: Icons.pie_chart_rounded,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     AttendancePieChart(
                       fullDay:  (stats['today_full_day']   as num? ?? 0).toInt(),
                       halfDay:  (stats['today_half_day']   as num? ?? 0).toInt(),
@@ -6662,204 +6758,125 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
               ),
-              const SizedBox(height: 26),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Flexible(
-                    child: Text(
-                      'Recent Attendance',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : Colors.black,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: adminAccent.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: TextButton.icon(
-                      onPressed: fetchDashboard,
-                      icon: Icon(
-                        Icons.refresh,
-                        size: isSmallScreen ? 16 : 18,
-                        color: adminAccent,
-                      ),
-                      label: Text(
-                        'Refresh',
-                        style: TextStyle(
-                          color: adminAccent,
-                          fontSize: isSmallScreen ? 12 : 14,
-                        ),
+              const SizedBox(height: 24),
+
+              // Recent Attendance Feed
+              AdminCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AdminSectionHeader(
+                      title: 'Recent Attendance',
+                      subtitle: 'Live faculty check-ins and status updates',
+                      icon: Icons.history_rounded,
+                      trailing: IconButton(
+                        icon: const Icon(Icons.refresh_rounded, size: 20),
+                        onPressed: fetchDashboard,
+                        tooltip: 'Refresh Attendance',
+                        color: AdminColors.primary,
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              recentAttendance.isEmpty
-                  ? Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(40),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 15,
-                            offset: const Offset(0, 5),
-                          ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Column(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? const Color(0xFF2C2C2E)
-                                    : Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Icon(
-                                Icons.history,
-                                size: 40,
-                                color: isDark
-                                    ? Colors.white30
-                                    : Colors.grey[400],
-                              ),
+                    const SizedBox(height: 8),
+                    recentAttendance.isEmpty
+                        ? const AdminEmptyState(
+                            icon: Icons.history_rounded,
+                            title: 'No Recent Attendance',
+                            message: 'Staff check-ins will appear here live once recorded.',
+                          )
+                        : ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: recentAttendance.length,
+                            separatorBuilder: (context, index) => Divider(
+                              height: 1,
+                              indent: 54,
+                              color: AdminColors.getBorder(isDark),
                             ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No recent attendance',
-                              style: TextStyle(
-                                color: isDark
-                                    ? Colors.white60
-                                    : Colors.grey[600],
-                                fontSize: 15,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : Container(
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 15,
-                            offset: const Offset(0, 5),
-                          ),
-                        ],
-                      ),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: recentAttendance.length,
-                        separatorBuilder: (context, index) => Divider(
-                          height: 1,
-                          indent: isSmallScreen ? 60 : 70,
-                          color: isDark ? Colors.white12 : Colors.grey.shade200,
-                        ),
-                        itemBuilder: (context, index) {
-                          final record = recentAttendance[index];
-                          final when = _formatTimestamp(record['timestamp']);
-                          final avatarRadius = isSmallScreen ? 14.0 : 18.0;
-                          final avatarIconSize = isSmallScreen ? 14.0 : 18.0;
-                          final titleSize = isSmallScreen ? 13.0 : 14.0;
-                          final subtitleSize = isSmallScreen ? 11.0 : 12.0;
-                          final trailingSize = isSmallScreen ? 9.0 : 10.0;
-                          final isAbsent = record['status'] == 'Absent';
-                          final punchType = record['punch_type'] as String? ?? 'check_in';
-                          final isCheckOut = punchType == 'check_out';
-                          final punchColor = isAbsent
-                              ? Colors.red
-                              : isCheckOut
-                                  ? Colors.orange
-                                  : Colors.green;
-                          final punchLabel = isAbsent
-                              ? 'Absent'
-                              : isCheckOut
-                                  ? 'Check Out'
-                                  : 'Check In';
-                          final punchIcon = isAbsent
-                              ? Icons.cancel
-                              : isCheckOut
-                                  ? Icons.logout
-                                  : Icons.login;
-                          return ListTile(
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: isSmallScreen ? 8.0 : 12.0,
-                              vertical: 2.0,
-                            ),
-                            leading: CircleAvatar(
-                              radius: avatarRadius,
-                              backgroundColor: punchColor.withValues(alpha: 0.12),
-                              child: Icon(
-                                punchIcon,
-                                size: avatarIconSize,
-                                color: punchColor,
-                              ),
-                            ),
-                            title: Text(
-                              record['name'] ?? 'Unknown',
-                              style: TextStyle(fontSize: titleSize),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              isAbsent
-                                  ? '${record['reg_no']} • ${record['dept']}\nReason: ${record['absent_reason'] ?? 'System marked absent'}'
-                                  : '${record['reg_no']} • ${record['dept']}',
-                              style: TextStyle(fontSize: subtitleSize),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: isAbsent ? 2 : 1,
-                            ),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            itemBuilder: (context, index) {
+                              final record = recentAttendance[index];
+                              final when = _formatTimestamp(record['timestamp']);
+                              final isAbsent = record['status'] == 'Absent' ||
+                                  record['punch_type'] == 'absent' ||
+                                  record['punch_type'] == 'system_marked_absent' ||
+                                  record['is_absent'] == true;
+                              final punchType = record['punch_type'] as String? ?? (isAbsent ? 'absent' : 'check_in');
+                              final isCheckOut = punchType == 'check_out';
+                              final punchColor = isAbsent
+                                  ? AdminColors.danger
+                                  : isCheckOut
+                                      ? AdminColors.warning
+                                      : AdminColors.success;
+                              final punchLabel = isAbsent
+                                  ? 'Absent'
+                                  : isCheckOut
+                                      ? 'Check Out'
+                                      : 'Check In';
+                              final punchIcon = isAbsent
+                                  ? Icons.cancel_rounded
+                                  : isCheckOut
+                                      ? Icons.logout_rounded
+                                      : Icons.login_rounded;
+
+                              final regNo = record['reg_no'] ?? record['regNo'] ?? '';
+                              final dept = record['dept'] ?? record['department'] ?? '';
+                              final regAndDept = [if (regNo.toString().isNotEmpty) regNo, if (dept.toString().isNotEmpty) dept].join(' • ');
+                              final reason = record['absent_reason'] ?? record['reason'] ?? (isAbsent ? 'System marked absent' : null);
+                              final session = record['session_label'] ?? record['session'] ?? record['session_type'];
+                              final timeText = (session != null && session.toString().isNotEmpty) ? '$session • $when' : when;
+
+                              return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+                                leading: Container(
+                                  width: 40,
+                                  height: 40,
                                   decoration: BoxDecoration(
-                                    color: punchColor.withValues(alpha: isDark ? 0.22 : 0.10),
-                                    borderRadius: BorderRadius.circular(5),
-                                    border: Border.all(
-                                      color: punchColor.withValues(alpha: 0.35),
-                                      width: 0.8,
-                                    ),
+                                    color: punchColor.withValues(alpha: 0.12),
+                                    shape: BoxShape.circle,
                                   ),
-                                  child: Text(
-                                    punchLabel,
-                                    style: TextStyle(
+                                  child: Icon(
+                                    punchIcon,
+                                    size: 20,
+                                    color: punchColor,
+                                  ),
+                                ),
+                                title: Text(
+                                  record['name'] ?? 'Unknown',
+                                  style: AdminTextStyles.bodyMd(isDark).copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  isAbsent
+                                      ? '$regAndDept\nReason: $reason'
+                                      : regAndDept,
+                                  style: AdminTextStyles.labelSm(isDark),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: isAbsent ? 2 : 1,
+                                ),
+                                trailing: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    AdminBadge(
+                                      label: punchLabel,
                                       color: punchColor,
-                                      fontSize: trailingSize,
-                                      fontWeight: FontWeight.bold,
                                     ),
-                                  ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      timeText,
+                                      style: AdminTextStyles.micro(isDark),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  when,
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: trailingSize,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+                              );
+                            },
+                          ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
             ],
           ),
         ),
@@ -6868,7 +6885,7 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 }
 
-/// Modern responsive stat card with gradient accent and glass effect
+/// Modern responsive stat card with enterprise design system styling
 class ModernStatCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -6888,75 +6905,58 @@ class ModernStatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final isSmallScreen = screenWidth < 400;
-    final isMobile = screenWidth < 600;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isSmall = screenWidth < AdminBreakpoints.sm;
 
-    final iconSize = isSmallScreen ? 18.0 : (isMobile ? 20.0 : 22.0);
-    final titleSize = isSmallScreen ? 13.0 : 14.0;
-    final valueSize = isSmallScreen ? 26.0 : 28.0;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.7),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 15,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Stack(
+    return AdminCard(
+      padding: EdgeInsets.symmetric(
+        horizontal: isSmall ? 12.0 : 16.0,
+        vertical: isSmall ? 10.0 : 14.0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Icon(
-                  icon,
-                  size: iconSize,
-                  color: color.withOpacity(0.8),
+              Expanded(
+                child: Text(
+                  subtitle == null ? title : '$title • $subtitle',
+                  style: AdminTextStyles.labelSm(isDark).copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: isSmall ? 12.0 : 13.0,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      subtitle == null ? title : '$title • $subtitle',
-                      style: TextStyle(
-                        fontSize: titleSize,
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      value,
-                      style: TextStyle(
-                        fontSize: valueSize,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white : color,
-                      ),
-                    ),
-                  ],
+              const SizedBox(width: 4),
+              Container(
+                padding: EdgeInsets.all(isSmall ? 6 : 8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AdminRadii.md),
                 ),
+                child: Icon(icon, size: isSmall ? 16 : 18, color: color),
               ),
             ],
           ),
-        ),
+          Text(
+            value,
+            style: AdminTextStyles.displayLg(isDark).copyWith(
+              fontSize: isSmall ? 22.0 : 28.0,
+              fontWeight: FontWeight.bold,
+              color: isDark ? AdminColors.dTextPrimary : color,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-// System Status Card - Shows system health and is clickable to view error logs
+/// System Status Card - Shows system health and is clickable to view error logs
 class _SystemStatusCard extends StatefulWidget {
   final String token;
 
@@ -7009,133 +7009,98 @@ class _SystemStatusCardState extends State<_SystemStatusCard> {
   Color get statusColor {
     switch (status) {
       case 'healthy':
-        return Colors.green;
+        return AdminColors.success;
       case 'warning':
-        return Colors.orange;
+        return AdminColors.warning;
       case 'error':
-        return Colors.red;
+        return AdminColors.danger;
       default:
-        return Colors.grey;
+        return AdminColors.textMuted;
     }
   }
 
   IconData get statusIcon {
     switch (status) {
       case 'healthy':
-        return Icons.check_circle;
+        return Icons.check_circle_rounded;
       case 'warning':
-        return Icons.warning;
+        return Icons.warning_rounded;
       case 'error':
-        return Icons.error;
+        return Icons.error_rounded;
       default:
-        return Icons.help;
+        return Icons.help_outline_rounded;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final isSmallScreen = screenWidth < 400;
-    final isMobile = screenWidth < 600;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isSmall = screenWidth < AdminBreakpoints.sm;
 
-    final iconSize = isSmallScreen ? 18.0 : (isMobile ? 20.0 : 22.0);
-    final titleSize = isSmallScreen ? 13.0 : 14.0;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E1E22) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.08) : Colors.grey.shade200,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+    return AdminCard(
+      padding: EdgeInsets.symmetric(
+        horizontal: isSmall ? 12.0 : 16.0,
+        vertical: isSmall ? 10.0 : 14.0,
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          onTap: () => _showErrorLogsDialog(context),
-          borderRadius: BorderRadius.circular(20),
-          child: Stack(
+      onTap: () {
+        if (systemStatus != null) {
+          _showErrorLogsDialog(context);
+        }
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Positioned(
-                top: 12,
-                right: 12,
-                child: isLoading
-                    ? SizedBox(
-                        width: iconSize,
-                        height: iconSize,
-                        child: const CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.grey),
-                        ),
-                      )
-                    : Icon(
-                        statusIcon,
-                        size: iconSize,
-                        color: statusColor,
-                      ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'System Status',
-                      style: TextStyle(
-                        fontSize: titleSize,
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: statusColor.withOpacity(0.3),
-                            ),
-                          ),
-                          child: Text(
-                            status.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: statusColor,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (errorCount > 0) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        '$errorCount error(s) logged',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.red[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
+              Expanded(
+                child: Text(
+                  'System Status',
+                  style: AdminTextStyles.labelSm(isDark).copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: isSmall ? 12.0 : 13.0,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
+              ),
+              const SizedBox(width: 4),
+              Container(
+                padding: EdgeInsets.all(isSmall ? 6 : 8),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AdminRadii.md),
+                ),
+                child: Icon(statusIcon, size: isSmall ? 16 : 18, color: statusColor),
               ),
             ],
           ),
-        ),
+          isLoading
+              ? const AdminShimmerLoader(height: 24, width: 70)
+              : Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                        boxShadow: AdminShadows.glow(statusColor, opacity: 0.5),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      status.toUpperCase(),
+                      style: AdminTextStyles.titleMd(isDark, color: statusColor).copyWith(
+                        fontSize: isSmall ? 13.0 : 16.0,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+        ],
       ),
     );
   }
@@ -7612,8 +7577,9 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-    final bg = isDark ? const Color(0xFF0A0A0F) : const Color(0xFFF2F0FF);
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+    final pagePadding = AdminBreakpoints.pagePadding(screenWidth);
     final cardBg = isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.85);
     final borderClr = isDark ? Colors.white.withValues(alpha: 0.10) : Colors.deepPurple.withValues(alpha: 0.1);
 
@@ -7623,11 +7589,21 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
     ];
 
     if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.all(pagePadding),
+        child: const Column(
+          children: [
+            AdminShimmerLoader(height: 100, borderRadius: AdminRadii.xl),
+            SizedBox(height: 16),
+            AdminShimmerLoader(height: 200, borderRadius: AdminRadii.lg),
+          ],
+        ),
+      );
     }
 
     return Container(
-      color: bg,
+      color: AdminColors.getSurface(isDark),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -12838,20 +12814,21 @@ class _AnalysisTabState extends State<AnalysisTab> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-    final bg = isDark ? const Color(0xFF0A0A0F) : const Color(0xFFF0F4FF);
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+    final pagePadding = AdminBreakpoints.pagePadding(screenWidth);
     final cardBg = isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.90);
     final borderClr = isDark ? Colors.white.withValues(alpha: 0.10) : Colors.indigo.withValues(alpha: 0.12);
 
     return Container(
-      color: bg,
+      color: AdminColors.getSurface(isDark),
       child: Column(
         children: [
           // Scrollable content
           Expanded(
             child: SingleChildScrollView(
               child: Padding(
-                padding: EdgeInsets.all(isMobile ? 12 : 16),
+                padding: EdgeInsets.all(pagePadding),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -17805,7 +17782,7 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                   fallbackUrl: _useSatelliteView
                       ? 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                       : 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: kIsWeb ? 'web.staffsync.app' : 'com.staffsync.app',
+                  userAgentPackageName: kIsWeb ? 'web.visiongate.app' : 'com.visiongate.app',
                   tileProvider: NetworkTileProvider(),
                   maxNativeZoom: _useSatelliteView ? 18 : 19,
                   maxZoom: _useSatelliteView ? 21 : 20,
@@ -18597,7 +18574,7 @@ class _UserTrackingDetailPageState extends State<UserTrackingDetailPage> {
                                   fallbackUrl: _useSatelliteView
                                       ? 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                                       : 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                  userAgentPackageName: 'com.staffsync.app',
+                                  userAgentPackageName: 'com.visiongate.app',
                                   tileProvider: NetworkTileProvider(),
                                   maxZoom: 21,
                                 ),
@@ -19003,6 +18980,7 @@ class _SettingsTabState extends State<SettingsTab> {
   bool _enforceGeoFence = true;
   bool _enforceAppGeoFence = true;
   bool _enforceVpnBlocking = true;
+  bool _multiUserKioskMode = false;
   bool _isThemeExpanded = false;
   bool _isLoading = true;
   bool _isSaving = false;
@@ -19034,6 +19012,8 @@ class _SettingsTabState extends State<SettingsTab> {
                 data['settings']['enforce_app_geo_fence'] ?? true;
             _enforceVpnBlocking =
                 data['settings']['enforce_vpn_blocking'] ?? true;
+            _multiUserKioskMode =
+                data['settings']['multi_user_kiosk_mode'] ?? false;
           });
         }
       }
@@ -19060,6 +19040,7 @@ class _SettingsTabState extends State<SettingsTab> {
           'enforce_geo_fence': _enforceGeoFence,
           'enforce_app_geo_fence': _enforceAppGeoFence,
           'enforce_vpn_blocking': _enforceVpnBlocking,
+          'multi_user_kiosk_mode': _multiUserKioskMode,
           'profile_password': profilePassword,
         }),
       );
@@ -19939,6 +19920,34 @@ class _SettingsTabState extends State<SettingsTab> {
                               );
                             },
                     ),
+                    const SizedBox(height: 16),
+                    // Multi-User Kiosk Mode Toggle
+                    _buildSleekToggleRow(
+                      title: 'Multi-User Kiosk Mode',
+                      subtitle: _multiUserKioskMode ? 'ON' : 'OFF',
+                      value: _multiUserKioskMode,
+                      isDark: isDark,
+                      onChanged: _isSaving
+                          ? null
+                          : (value) {
+                              final prevVal = _multiUserKioskMode;
+                              setState(() {
+                                _multiUserKioskMode = value;
+                              });
+                              _saveSettings(
+                                title: 'Multi-User Kiosk Mode',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _multiUserKioskMode = prevVal;
+                                  });
+                                },
+                                successMsg: value
+                                    ? 'Multi-User Kiosk Mode enabled.'
+                                    : 'Multi-User Kiosk Mode disabled.',
+                              );
+                            },
+                    ),
                   ],
                 ),
               ),
@@ -20190,6 +20199,9 @@ class _SettingsTabState extends State<SettingsTab> {
                   ],
                 ),
               ),
+              const SizedBox(height: 24),
+              const ThirukkuralBanner(),
+              const SizedBox(height: 24),
             ],
           ),
         );

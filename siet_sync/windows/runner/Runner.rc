@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "FacultySphere" "\0"
+            VALUE "FileDescription", "VisionGate" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "faculty_sphere" "\0"
+            VALUE "InternalName", "vision_gate" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "faculty_sphere.exe" "\0"
-            VALUE "ProductName", "FacultySphere" "\0"
+            VALUE "OriginalFilename", "vision_gate.exe" "\0"
+            VALUE "ProductName", "VisionGate" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

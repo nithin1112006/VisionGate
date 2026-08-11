@@ -1,8 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from fastapi import BackgroundTasks
 from contextlib import asynccontextmanager
+from typing import Optional, List, Dict, Any, Union, Tuple
 import asyncio
 import os
 import pg_adapter
@@ -773,7 +775,7 @@ async def lifespan(app: FastAPI):
 # -------------------------------------------------
 # APP INIT
 # -------------------------------------------------
-app = FastAPI(title="Automated Face Attendance System", lifespan=lifespan)
+app = FastAPI(title="VisionGate - Automated Face Attendance System", lifespan=lifespan)
 
 # Add CORS middleware for web access
 app.add_middleware(
@@ -802,6 +804,8 @@ async def vpn_detection_middleware(request: Request, call_next):
         "/other_staff/face/register",
         "/hod/face/register",
         "/admin/face/register",
+        "/settings/multi-user-mode",
+        "/staff/multi-user",
     ]
 
     if any(request.url.path.startswith(path) for path in skip_paths):
@@ -880,6 +884,7 @@ _app_settings = {
     "enforce_geo_fence": True,
     "enforce_app_geo_fence": True,
     "enforce_vpn_blocking": True,
+    "multi_user_kiosk_mode": True,
     "profile_password": "admin123",
 }
 
@@ -1280,6 +1285,12 @@ async def update_settings(request: Request):
                 save_system_config("enforce_vpn_blocking", str(new_value))
                 status = "enabled" if new_value else "disabled"
                 changes.append(f"VPN blocking {status}")
+        if "multi_user_kiosk_mode" in body:
+            new_value = bool(body["multi_user_kiosk_mode"])
+            _app_settings["multi_user_kiosk_mode"] = new_value
+            save_system_config("multi_user_kiosk_mode", str(new_value))
+            status = "enabled" if new_value else "disabled"
+            changes.append(f"Multi-user kiosk mode {status}")
 
         message = ", ".join(changes) if changes else "No settings were changed"
 
@@ -1359,6 +1370,7 @@ async def get_network_setting():
         "enforce_geo_fence": _app_settings.get("enforce_geo_fence", True),
         "enforce_app_geo_fence": _app_settings.get("enforce_app_geo_fence", True),
         "enforce_vpn_blocking": _app_settings.get("enforce_vpn_blocking", True),
+        "multi_user_kiosk_mode": _app_settings.get("multi_user_kiosk_mode", False),
     }
 
 
@@ -3843,6 +3855,7 @@ def save_system_config(key: str, value: str):
             cursor.execute("UPDATE system_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?", (value, key))
         else:
             cursor.execute("INSERT INTO system_config (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
     except Exception as e:
         print(f"Error saving config to database: {e}")
 
@@ -4810,11 +4823,18 @@ def _run_ddl():
         # Half-day fields on leave_requests
         "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS is_half_day BOOLEAN DEFAULT FALSE",
         "ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS which_half VARCHAR(10) DEFAULT NULL",
+        # Kiosk mode field on users
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS kiosk_enabled BOOLEAN DEFAULT TRUE",
     ]:
         try:
             cursor.execute(_col_sql)
         except Exception:
             pass
+
+    try:
+        cursor.execute("UPDATE users SET kiosk_enabled = TRUE WHERE kiosk_enabled IS NULL OR kiosk_enabled = FALSE")
+    except Exception:
+        pass
 
     # 2. leave_settings table — stores CL/EL expiry dates and half-day toggle
     cursor.execute("""
@@ -4867,7 +4887,67 @@ def _run_ddl():
                 (_key, _val),
             )
 
+    # 4. Kiosk Mode Tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS student_face_profiles (
+            reg_no VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(160) NOT NULL,
+            dept VARCHAR(160) NOT NULL,
+            embeddings JSONB NOT NULL,
+            registered_by VARCHAR(64),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kiosk_sessions (
+            session_uuid UUID PRIMARY KEY,
+            staff_reg_no VARCHAR(64) NOT NULL,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            total_scans INT DEFAULT 0
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kiosk_attendance_logs (
+            id SERIAL PRIMARY KEY,
+            session_uuid UUID NOT NULL,
+            student_reg_no VARCHAR(64) NOT NULL,
+            matched_score DECIMAL(5, 4),
+            scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_uuid) REFERENCES kiosk_sessions(session_uuid)
+        )
+    """)
+
+    # 5. Controlled Access & Staff Student Permissions Delegation Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS staff_student_permissions (
+            id SERIAL PRIMARY KEY,
+            grantor_staff_reg_no VARCHAR(64) NOT NULL,
+            grantee_staff_reg_no VARCHAR(64) NOT NULL,
+            student_reg_no VARCHAR(64) DEFAULT NULL,
+            permission_type VARCHAR(50) DEFAULT 'MARK_ATTENDANCE',
+            valid_from TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            valid_until TIMESTAMP DEFAULT NULL,
+            status VARCHAR(20) DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_ssp_grantor ON staff_student_permissions (grantor_staff_reg_no, status)",
+        "CREATE INDEX IF NOT EXISTS idx_ssp_grantee ON staff_student_permissions (grantee_staff_reg_no, status)",
+        "CREATE INDEX IF NOT EXISTS idx_ssp_student ON staff_student_permissions (student_reg_no, status)",
+    ]:
+        try:
+            cursor.execute(idx)
+        except Exception:
+            pass
+
     print("Database indexes and materialized views created successfully")
+
 
 
 _init_db_schema()
@@ -6893,6 +6973,60 @@ def verify_face_identity(
     return False, 0.0, reason
 
 
+def _get_active_attendance_slot():
+    """
+    Check if current time falls within an active attendance slot window or CCL window.
+    Returns: (allowed: bool, active_slot_type: str, active_slot_half: str, slots_info: str)
+    """
+    try:
+        cursor.execute("""
+            SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
+            FROM attendance_duration_settings
+            WHERE is_enabled = 1
+            ORDER BY slot_number ASC
+        """)
+        duration_rows = cursor.fetchall()
+
+        current_time = datetime.now()
+        if duration_rows:
+            for row in duration_rows:
+                slot_number = row[0]
+                start_time = row[1]
+                duration_minutes = row[2]
+                slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
+                slot_half = row[5] if len(row) > 5 and row[5] else "full_day"
+                effective_duration, _, _ = _calculate_effective_slot_duration(slot_type, slot_half, duration_minutes)
+
+                start_hour, start_minute = map(int, start_time.split(":"))
+                start_datetime = current_time.replace(
+                    hour=start_hour, minute=start_minute, second=0, microsecond=0
+                )
+                end_datetime = start_datetime + timedelta(minutes=effective_duration)
+
+                if start_datetime <= current_time < end_datetime:
+                    half_val = slot_half if slot_half in ("first_half", "second_half") else None
+                    return True, slot_type, half_val, f"Slot {slot_number}"
+
+            ccl_slot_type = get_active_ccl_slot_type()
+            if ccl_slot_type:
+                return True, ccl_slot_type, None, "CCL Window"
+
+            slots_info = ", ".join(
+                [f"Slot {row[0]} ({row[4] if len(row) > 4 and row[4] else 'check_in'}): {row[1]} ({row[2]} min)" for row in duration_rows]
+            )
+            return False, "check_in", None, f"Available slots: {slots_info}"
+        else:
+            settings = get_ccl_settings_for_date()
+            if settings.get("early_check_in_ccl_enabled") or settings.get("late_check_out_ccl_enabled"):
+                ccl_slot_type = get_active_ccl_slot_type()
+                if ccl_slot_type:
+                    return True, ccl_slot_type, None, "CCL Window"
+            return False, "check_in", None, "No active attendance slots configured"
+    except Exception as e:
+        print(f"Error checking active attendance slot: {e}")
+        return False, "check_in", None, f"Error checking slot window: {e}"
+
+
 # Thread lock for thread-safe InsightFace inference
 _face_app_lock = threading.Lock()
 
@@ -7310,11 +7444,15 @@ def extract_face(img, _recursion_depth=0):
 
     else:
         # Use InsightFace
-        # Only check Original (upright) rotation to ensure high performance and prevent long loading times
-        rotations = [None]
-        rot_names = ["Original"]
+        # Try Original upright first; if no face detected, try 90 CW, 90 CCW, 180 rotations for mobile photos
+        rotations = [
+            (None, "Original"),
+            (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
+            (cv2.ROTATE_90_COUNTERCLOCKWISE, "90_CCW"),
+            (cv2.ROTATE_180, "180"),
+        ]
 
-        for i, rot in enumerate(rotations):
+        for rot, rot_name in rotations:
             temp = img if rot is None else cv2.rotate(img, rot)
 
             try:
@@ -7330,13 +7468,13 @@ def extract_face(img, _recursion_depth=0):
                 )
 
                 if face.embedding is not None and len(face.embedding) > 0:
-                    print(f"InsightFace embedding found in rotation {rot_names[i]}")
+                    print(f"InsightFace embedding found in rotation {rot_name}")
                     return face
                 else:
-                    print(f"No embedding in rotation {rot_names[i]}")
+                    print(f"No embedding in rotation {rot_name}")
 
             except Exception as e:
-                print(f"Error in rotation {rot_names[i]}: {e}")
+                print(f"Error in rotation {rot_name}: {e}")
                 continue
 
         print("InsightFace failed to detect any face.")
@@ -9145,50 +9283,495 @@ async def _legacy_mark_attendance(img_bytes: bytes):
 
 # -------------------------------------------------
 # AUDIT ENDPOINT
-# -------------------------------------------------
-@app.get("/audit/logs")
-async def get_audit_logs_endpoint(reg_no: str = None, limit: int = 100):
-    """Get audit logs"""
-    logs = get_audit_logs(reg_no, limit)
-    return {"logs": logs, "count": len(logs)}
+# --------------------@app.get("/attendance/logs")
+async def get_attendance_logs(
+    reg_no: str = "",
+    role: str = "staff",
+    dept: str = "",
+    start_date: str = None,
+    end_date: str = None
+):
+    """
+    Unified attendance logs endpoint supporting Admin, HOD, Staff, and Other Staff.
+    """
+    try:
+        now = datetime.now()
+        if not start_date or start_date.strip() == "":
+            start_date = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+        if not end_date or end_date.strip() == "":
+            end_date = now.strftime("%Y-%m-%d")
 
+        logs = []
+        role_clean = (role or "staff").strip().lower()
+        is_admin = role_clean in ["admin", "administrator"]
+        is_hod = role_clean == "hod"
+        is_other_staff = role_clean in ["other_staff", "other staff"]
 
-@app.get("/audit/status/{reg_no}")
-async def get_verification_status(reg_no: str):
-    """Get verification status for a user"""
-    is_locked, remaining = check_lockout(reg_no)
-    failed_count = _failed_attempts.get(reg_no, 0)
-    return {
-        "is_locked": is_locked,
-        "remaining_seconds": remaining,
-        "failed_attempts": failed_count,
-    }
+        # Clean inputs
+        reg_no_clean = (reg_no or "").strip()
+        if reg_no_clean.lower() in ["admin", "administrator", "null", "undefined"]:
+            reg_no_clean = ""
+            
+        dept_clean = (dept or "").strip()
+        if dept_clean.lower() in ["all", "null", "undefined", "administration", "admin"]:
+            dept_clean = ""
 
+        # Check if reg_no_clean belongs to an admin account
+        if reg_no_clean:
+            try:
+                cursor.execute("SELECT role FROM users WHERE reg_no = %s OR username = %s", (reg_no_clean, reg_no_clean))
+                u_row = cursor.fetchone()
+                if u_row and u_row[0] in ["admin", "administrator"]:
+                    reg_no_clean = ""
+            except Exception:
+                pass
 
-@app.get("/attendance")
-async def get_attendance():
-    """Get all attendance records"""
-    # Use explicit column names to avoid IndexError
-    cursor.execute("""
-        SELECT id, reg_no, name, dept, class_div, timestamp 
-        FROM attendance 
-        ORDER BY id DESC 
-        LIMIT 100
-    """)
-    rows = cursor.fetchall()
-    return {
-        "attendance": [
-            {
-                "id": row[0],
-                "reg_no": row[1],
-                "name": row[2],
-                "dept": row[3],
-                "class_div": row[4] or "",
-                "timestamp": _ts(row[5]),
-            }
-            for row in rows
-        ]
-    }
+        # Case A: Admin (All departments / All staff or specific filter)
+        if is_admin:
+            # 1) Main attendance table (Staff & HOD)
+            query_1 = """
+                SELECT id, reg_no, name, dept, class_div, timestamp, status
+                FROM attendance
+                WHERE (timestamp::date >= %s AND timestamp::date <= %s)
+            """
+            params_1 = [start_date, end_date]
+            if reg_no_clean:
+                query_1 += " AND reg_no = %s"
+                params_1.append(reg_no_clean)
+            elif dept_clean:
+                query_1 += " AND dept = %s"
+                params_1.append(dept_clean)
+            query_1 += " ORDER BY timestamp DESC LIMIT 1000"
+            cursor.execute(query_1, params_1)
+            rows = cursor.fetchall()
+            scan_dates = set()
+            for r in rows:
+                ts_val = _ts(r[5])
+                if ts_val:
+                    scan_dates.add(ts_val.split("T")[0].split(" ")[0])
+                st = r[6] if r[6] else "Present"
+                if st in ["check_in", "check_out"]:
+                    st = "Present"
+                logs.append({
+                    "id": r[0],
+                    "reg_no": r[1],
+                    "name": r[2],
+                    "dept": r[3],
+                    "class_div": r[4] or "",
+                    "timestamp": ts_val,
+                    "status": st,
+                    "source": "face_scan"
+                })
+
+            # 2) Other staff attendance table
+            try:
+                query_2 = """
+                    SELECT id, reg_no, name, dept, timestamp, status
+                    FROM other_staff_attendance
+                    WHERE (timestamp::date >= %s AND timestamp::date <= %s)
+                """
+                params_2 = [start_date, end_date]
+                if reg_no_clean:
+                    query_2 += " AND reg_no = %s"
+                    params_2.append(reg_no_clean)
+                elif dept_clean:
+                    query_2 += " AND dept = %s"
+                    params_2.append(dept_clean)
+                query_2 += " ORDER BY timestamp DESC LIMIT 1000"
+                cursor.execute(query_2, params_2)
+                o_rows = cursor.fetchall()
+                for r in o_rows:
+                    ts_val = _ts(r[4])
+                    if ts_val:
+                        scan_dates.add(ts_val.split("T")[0].split(" ")[0])
+                    st = r[5] if r[5] else "Present"
+                    if st in ["check_in", "check_out"]:
+                        st = "Present"
+                    logs.append({
+                        "id": r[0],
+                        "reg_no": r[1],
+                        "name": r[2],
+                        "dept": r[3],
+                        "class_div": "",
+                        "timestamp": ts_val,
+                        "status": st,
+                        "source": "face_scan"
+                    })
+            except Exception as oe:
+                print(f"[ATTENDANCE LOGS] Exception fetching other_staff: {oe}")
+
+            # 3) Daily attendance status (leaves, OD, absents, half day)
+            try:
+                query_3 = """
+                    SELECT reg_no, name, dept, date, status, leave_type, absent_reason,
+                           first_half_status, second_half_status,
+                           first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value
+                    FROM daily_attendance_status
+                    WHERE (date::date >= %s AND date::date <= %s)
+                """
+                params_3 = [start_date, end_date]
+                if reg_no_clean:
+                    query_3 += " AND reg_no = %s"
+                    params_3.append(reg_no_clean)
+                elif dept_clean:
+                    query_3 += " AND dept = %s"
+                    params_3.append(dept_clean)
+                query_3 += " ORDER BY date DESC LIMIT 1000"
+                cursor.execute(query_3, params_3)
+                d_rows = cursor.fetchall()
+                for r in d_rows:
+                    date_str = str(r[3])
+                    st_val = r[4] if r[4] else "Present"
+                    src = "leave" if st_val == "Leave" else ("absent" if st_val == "Absent" else ("od" if r[5] == "od" else "daily_status"))
+                    logs.append({
+                        "id": None,
+                        "reg_no": r[0],
+                        "name": r[1],
+                        "dept": r[2],
+                        "timestamp": date_str + " 00:00:00",
+                        "status": st_val,
+                        "source": src,
+                        "leave_type": r[5],
+                        "absent_reason": r[6],
+                        "first_half_status": r[7],
+                        "second_half_status": r[8],
+                        "first_half_in_time": str(r[9]) if r[9] else None,
+                        "first_half_out_time": str(r[10]) if r[10] else None,
+                        "second_half_in_time": str(r[11]) if r[11] else None,
+                        "second_half_out_time": str(r[12]) if r[12] else None,
+                        "attendance_value": float(r[13]) if r[13] is not None else None
+                    })
+            except Exception as de:
+                print(f"[ATTENDANCE LOGS] Exception fetching daily_attendance_status: {de}")
+
+            # Admin Fallback if empty
+            if not logs:
+                try:
+                    cursor.execute("SELECT id, reg_no, name, dept, class_div, timestamp, status FROM attendance ORDER BY timestamp DESC LIMIT 100")
+                    f_rows = cursor.fetchall()
+                    for r in f_rows:
+                        st = r[6] if r[6] else "Present"
+                        if st in ["check_in", "check_out"]:
+                            st = "Present"
+                        logs.append({
+                            "id": r[0],
+                            "reg_no": r[1],
+                            "name": r[2],
+                            "dept": r[3],
+                            "class_div": r[4] or "",
+                            "timestamp": _ts(r[5]),
+                            "status": st,
+                            "source": "face_scan"
+                        })
+                except Exception as fe:
+                    print(f"[ATTENDANCE LOGS] Admin fallback error: {fe}")
+
+        # Case B: HOD (fetches department attendance for HOD's dept)
+        elif is_hod:
+            target_dept = dept_clean
+            query = """
+                SELECT id, reg_no, name, dept, class_div, timestamp, status
+                FROM attendance
+                WHERE (timestamp::date >= %s AND timestamp::date <= %s)
+            """
+            params = [start_date, end_date]
+            if target_dept:
+                query += " AND dept = %s"
+                params.append(target_dept)
+            elif reg_no_clean:
+                query += " AND reg_no = %s"
+                params.append(reg_no_clean)
+            query += " ORDER BY timestamp DESC LIMIT 500"
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            scan_dates = set()
+            for r in rows:
+                ts_val = _ts(r[5])
+                if ts_val:
+                    scan_dates.add(ts_val.split("T")[0].split(" ")[0])
+                st = r[6] if r[6] else "Present"
+                if st in ["check_in", "check_out"]:
+                    st = "Present"
+                logs.append({
+                    "id": r[0],
+                    "reg_no": r[1],
+                    "name": r[2],
+                    "dept": r[3],
+                    "class_div": r[4] or "",
+                    "timestamp": ts_val,
+                    "status": st,
+                    "source": "face_scan"
+                })
+
+            # Fetch daily status records for HOD's department
+            try:
+                d_query = """
+                    SELECT date, status, leave_type, absent_reason,
+                           first_half_status, second_half_status, name, dept, reg_no,
+                           first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value
+                    FROM daily_attendance_status
+                    WHERE (date::date >= %s AND date::date <= %s)
+                """
+                d_params = [start_date, end_date]
+                if target_dept:
+                    d_query += " AND dept = %s"
+                    d_params.append(target_dept)
+                elif reg_no_clean:
+                    d_query += " AND reg_no = %s"
+                    d_params.append(reg_no_clean)
+                cursor.execute(d_query, d_params)
+                d_rows = cursor.fetchall()
+                for r in d_rows:
+                    date_str = str(r[0])
+                    st_val = r[1] if r[1] else "Present"
+                    src = "leave" if st_val == "Leave" else ("absent" if st_val == "Absent" else ("od" if r[2] == "od" else "daily_status"))
+                    logs.append({
+                        "id": None,
+                        "reg_no": r[8] if len(r) > 8 else reg_no_clean,
+                        "name": r[6] if len(r) > 6 and r[6] else "",
+                        "dept": r[7] if len(r) > 7 and r[7] else "",
+                        "timestamp": date_str + " 00:00:00",
+                        "status": st_val,
+                        "source": src,
+                        "leave_type": r[2],
+                        "absent_reason": r[3],
+                        "first_half_status": r[4],
+                        "second_half_status": r[5],
+                        "first_half_in_time": str(r[9]) if r[9] else None,
+                        "first_half_out_time": str(r[10]) if r[10] else None,
+                        "second_half_in_time": str(r[11]) if r[11] else None,
+                        "second_half_out_time": str(r[12]) if r[12] else None,
+                        "attendance_value": float(r[13]) if r[13] is not None else None
+                    })
+            except Exception as de:
+                print(f"[ATTENDANCE LOGS] Exception fetching HOD daily_attendance_status: {de}")
+
+            # Fallback for HOD if 0 records
+            if not logs and target_dept:
+                try:
+                    cursor.execute(
+                        "SELECT id, reg_no, name, dept, class_div, timestamp, status FROM attendance WHERE dept = %s ORDER BY timestamp DESC LIMIT 100",
+                        (target_dept,)
+                    )
+                    fb_rows = cursor.fetchall()
+                    for r in fb_rows:
+                        st = r[6] if r[6] else "Present"
+                        if st in ["check_in", "check_out"]:
+                            st = "Present"
+                        logs.append({
+                            "id": r[0],
+                            "reg_no": r[1],
+                            "name": r[2],
+                            "dept": r[3],
+                            "class_div": r[4] or "",
+                            "timestamp": _ts(r[5]),
+                            "status": st,
+                            "source": "face_scan"
+                        })
+                except Exception as fbe:
+                    print(f"[ATTENDANCE LOGS] HOD fallback error: {fbe}")
+
+        # Case C: Staff / Other Staff / Individual User
+        else:
+            target_reg = reg_no_clean
+            table = "other_staff_attendance" if is_other_staff else "attendance"
+
+            if target_reg:
+                cursor.execute(
+                    f"""
+                    SELECT id, reg_no, name, dept, timestamp, status
+                    FROM {table}
+                    WHERE reg_no = %s AND timestamp::date >= %s AND timestamp::date <= %s
+                    ORDER BY timestamp DESC
+                    """,
+                    (target_reg, start_date, end_date)
+                )
+            elif dept_clean:
+                cursor.execute(
+                    f"""
+                    SELECT id, reg_no, name, dept, timestamp, status
+                    FROM {table}
+                    WHERE dept = %s AND timestamp::date >= %s AND timestamp::date <= %s
+                    ORDER BY timestamp DESC
+                    LIMIT 500
+                    """,
+                    (dept_clean, start_date, end_date)
+                )
+            else:
+                cursor.execute(
+                    f"""
+                    SELECT id, reg_no, name, dept, timestamp, status
+                    FROM {table}
+                    WHERE timestamp::date >= %s AND timestamp::date <= %s
+                    ORDER BY timestamp DESC
+                    LIMIT 500
+                    """,
+                    (start_date, end_date)
+                )
+
+            rows = cursor.fetchall()
+            scan_dates = set()
+            for r in rows:
+                ts_val = _ts(r[4])
+                if ts_val:
+                    scan_dates.add(ts_val.split("T")[0].split(" ")[0])
+                st = r[5] if r[5] else "Present"
+                if st in ["check_in", "check_out"]:
+                    st = "Present"
+                logs.append({
+                    "id": r[0],
+                    "reg_no": r[1],
+                    "name": r[2],
+                    "dept": r[3],
+                    "class_div": "",
+                    "timestamp": ts_val,
+                    "status": st,
+                    "source": "face_scan"
+                })
+
+            # Also check attendance table if other_staff returned 0 rows
+            if is_other_staff and not rows and target_reg:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT id, reg_no, name, dept, class_div, timestamp, status
+                        FROM attendance
+                        WHERE reg_no = %s AND timestamp::date >= %s AND timestamp::date <= %s
+                        ORDER BY timestamp DESC
+                        """,
+                        (target_reg, start_date, end_date)
+                    )
+                    s_rows = cursor.fetchall()
+                    for r in s_rows:
+                        ts_val = _ts(r[5])
+                        if ts_val:
+                            scan_dates.add(ts_val.split("T")[0].split(" ")[0])
+                        st = r[6] if r[6] else "Present"
+                        if st in ["check_in", "check_out"]:
+                            st = "Present"
+                        logs.append({
+                            "id": r[0],
+                            "reg_no": r[1],
+                            "name": r[2],
+                            "dept": r[3],
+                            "class_div": r[4] or "",
+                            "timestamp": ts_val,
+                            "status": st,
+                            "source": "face_scan"
+                        })
+                except Exception as se:
+                    print(f"[ATTENDANCE LOGS] Fallback check attendance table error: {se}")
+
+            # Fetch daily status records
+            try:
+                if target_reg:
+                    cursor.execute(
+                        """
+                        SELECT date, status, leave_type, absent_reason,
+                               first_half_status, second_half_status, name, dept, reg_no,
+                               first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value
+                        FROM daily_attendance_status
+                        WHERE reg_no = %s AND date::date >= %s AND date::date <= %s
+                        """,
+                        (target_reg, start_date, end_date)
+                    )
+                    d_rows = cursor.fetchall()
+                elif dept_clean:
+                    cursor.execute(
+                        """
+                        SELECT date, status, leave_type, absent_reason,
+                               first_half_status, second_half_status, name, dept, reg_no,
+                               first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value
+                        FROM daily_attendance_status
+                        WHERE dept = %s AND date::date >= %s AND date::date <= %s
+                        """,
+                        (dept_clean, start_date, end_date)
+                    )
+                    d_rows = cursor.fetchall()
+                else:
+                    d_rows = []
+
+                for r in d_rows:
+                    date_str = str(r[0])
+                    st_val = r[1] if r[1] else "Present"
+                    src = "leave" if st_val == "Leave" else ("absent" if st_val == "Absent" else ("od" if r[2] == "od" else "daily_status"))
+                    logs.append({
+                        "id": None,
+                        "reg_no": r[8] if len(r) > 8 else target_reg,
+                        "name": r[6] if len(r) > 6 and r[6] else "",
+                        "dept": r[7] if len(r) > 7 and r[7] else "",
+                        "timestamp": date_str + " 00:00:00",
+                        "status": st_val,
+                        "source": src,
+                        "leave_type": r[2],
+                        "absent_reason": r[3],
+                        "first_half_status": r[4],
+                        "second_half_status": r[5],
+                        "first_half_in_time": str(r[9]) if r[9] else None,
+                        "first_half_out_time": str(r[10]) if r[10] else None,
+                        "second_half_in_time": str(r[11]) if r[11] else None,
+                        "second_half_out_time": str(r[12]) if r[12] else None,
+                        "attendance_value": float(r[13]) if r[13] is not None else None
+                    })
+            except Exception as de:
+                print(f"[ATTENDANCE LOGS] Exception fetching daily_attendance_status: {de}")
+
+            # Final Fallback if logs list is still empty
+            if not logs:
+                try:
+                    tbl = "other_staff_attendance" if is_other_staff else "attendance"
+                    if target_reg:
+                        cursor.execute(
+                            f"SELECT id, reg_no, name, dept, timestamp, status FROM {tbl} WHERE reg_no = %s ORDER BY timestamp DESC LIMIT 50",
+                            (target_reg,)
+                        )
+                    elif dept_clean:
+                        cursor.execute(
+                            f"SELECT id, reg_no, name, dept, timestamp, status FROM {tbl} WHERE dept = %s ORDER BY timestamp DESC LIMIT 50",
+                            (dept_clean,)
+                        )
+                    else:
+                        cursor.execute(
+                            f"SELECT id, reg_no, name, dept, timestamp, status FROM {tbl} ORDER BY timestamp DESC LIMIT 50"
+                        )
+                    fb_rows = cursor.fetchall()
+                    for r in fb_rows:
+                        st = r[5] if r[5] else "Present"
+                        if st in ["check_in", "check_out"]:
+                            st = "Present"
+                        logs.append({
+                            "id": r[0],
+                            "reg_no": r[1],
+                            "name": r[2],
+                            "dept": r[3],
+                            "class_div": "",
+                            "timestamp": _ts(r[4]),
+                            "status": st,
+                            "source": "face_scan"
+                        })
+                except Exception as fbe:
+                    print(f"[ATTENDANCE LOGS] Fallback error: {fbe}")
+
+        # Sort logs by timestamp descending
+        logs.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+
+        return {
+            "success": True,
+            "logs": logs,
+            "attendance": logs,
+            "count": len(logs)
+        }
+    except Exception as e:
+        print(f"[ATTENDANCE LOGS] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "logs": [],
+            "attendance": [],
+            "count": 0,
+            "error": str(e)
+        }
 
 
 # -------------------------------------------------
@@ -9291,133 +9874,149 @@ async def admin_login(request: Request):
 @app.get("/admin/dashboard")
 async def admin_dashboard(request: Request):
     """Get admin dashboard statistics - includes instant OD sync"""
-    admin_user = verify_admin_token(request)
-
-    # Get counts
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'staff'")
-    total_staff = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM attendance")
-    total_attendance = cursor.fetchone()[0]
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM attendance WHERE timestamp::date = CURRENT_DATE"
-    )
-    today_face_scan = cursor.fetchone()[0]
-
-    # Get today's OD count (separate by type)
-    cursor.execute("""
-        SELECT leave_type, COUNT(*) as cnt
-        FROM daily_attendance_status
-        WHERE date::date = CURRENT_DATE AND status = 'Present' AND leave_type IN ('od', 'earned', 'casual')
-        GROUP BY leave_type
-    """)
-    od_breakdown = cursor.fetchall()
-    od_count = sum(row[1] for row in od_breakdown)
-    earned_count = sum(row[1] for row in od_breakdown if row[0] == "earned")
-    casual_count = sum(row[1] for row in od_breakdown if row[0] == "casual")
-
-    # Total today = face scan + OD
-    today_attendance = today_face_scan + od_count
-
-    cursor.execute("SELECT COUNT(*) FROM departments")
-    total_departments = cursor.fetchone()[0]
-
-    # Get recent attendance (face scan + OD)
     try:
-        cursor.execute("""
-            SELECT id, reg_no, name, dept, timestamp, 'face_scan' as source, status
-            FROM attendance
-            ORDER BY timestamp DESC
-            LIMIT 8
-        """)
-        face_scan_attendance = cursor.fetchall()
+        admin_user = verify_admin_token(request)
 
+        # Get counts
+        cursor.execute("SELECT COUNT(*) FROM users")
+        row = cursor.fetchone()
+        total_users = row[0] if row else 0
+
+        cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'staff'")
+        row = cursor.fetchone()
+        total_staff = row[0] if row else 0
+
+        cursor.execute("SELECT COUNT(*) FROM attendance")
+        row = cursor.fetchone()
+        total_attendance = row[0] if row else 0
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM attendance WHERE timestamp::date = CURRENT_DATE"
+        )
+        row = cursor.fetchone()
+        today_face_scan = row[0] if row else 0
+
+        # Get today's OD count (separate by type)
         cursor.execute("""
-            SELECT id, reg_no, name, dept, date as timestamp, 'od' as source, NULL as status
+            SELECT leave_type, COUNT(*) as cnt
             FROM daily_attendance_status
             WHERE date::date = CURRENT_DATE AND status = 'Present' AND leave_type IN ('od', 'earned', 'casual')
-            ORDER BY date DESC
-            LIMIT 5
+            GROUP BY leave_type
         """)
-        od_records = cursor.fetchall()
+        od_breakdown = cursor.fetchall() or []
+        od_count = sum(r[1] for r in od_breakdown)
+        earned_count = sum(r[1] for r in od_breakdown if r[0] == "earned")
+        casual_count = sum(r[1] for r in od_breakdown if r[0] == "casual")
 
-        combined = list(face_scan_attendance) + list(od_records)
-        combined.sort(key=lambda x: str(x[4]) if x[4] else "", reverse=True)
-        recent_attendance = combined[:10]
+        # Total today = face scan + OD
+        today_attendance = today_face_scan + od_count
 
-    except Exception as e:
-        print(f"Error getting combined attendance: {e}")
+        cursor.execute("SELECT COUNT(*) FROM departments")
+        row = cursor.fetchone()
+        total_departments = row[0] if row else 0
+
+        # Get recent attendance (face scan + OD)
+        try:
+            cursor.execute("""
+                SELECT id, reg_no, name, dept, timestamp, 'face_scan' as source, status
+                FROM attendance
+                ORDER BY timestamp DESC
+                LIMIT 8
+            """)
+            face_scan_attendance = cursor.fetchall() or []
+
+            cursor.execute("""
+                SELECT id, reg_no, name, dept, date as timestamp, 'od' as source, NULL as status
+                FROM daily_attendance_status
+                WHERE date::date = CURRENT_DATE AND status = 'Present' AND leave_type IN ('od', 'earned', 'casual')
+                ORDER BY date DESC
+                LIMIT 5
+            """)
+            od_records = cursor.fetchall() or []
+
+            combined = list(face_scan_attendance) + list(od_records)
+            combined.sort(key=lambda x: str(x[4]) if len(x) > 4 and x[4] else "", reverse=True)
+            recent_attendance = combined[:10]
+
+        except Exception as e:
+            print(f"Error getting combined attendance: {e}")
+            cursor.execute("""
+                SELECT id, reg_no, name, dept, timestamp, 'attendance' as source, status
+                FROM attendance 
+                ORDER BY id DESC 
+                LIMIT 10
+            """)
+            recent_attendance = cursor.fetchall() or []
+
+        # --- Pie chart: institution-wide breakdown from daily_attendance_status ---
         cursor.execute("""
-            SELECT id, reg_no, name, dept, timestamp, 'attendance' as source, status
-            FROM attendance 
-            ORDER BY id DESC 
-            LIMIT 10
+            SELECT status, COUNT(*) as cnt
+            FROM daily_attendance_status
+            WHERE date::date = CURRENT_DATE
+            GROUP BY status
         """)
-        recent_attendance = cursor.fetchall()
+        admin_das_breakdown = {r[0]: r[1] for r in (cursor.fetchall() or [])}
+        admin_pie_full_day  = admin_das_breakdown.get("Present", 0)
+        admin_pie_half_day  = admin_das_breakdown.get("Half Day", 0)
+        admin_pie_absent    = admin_das_breakdown.get("Absent", 0)
+        admin_pie_leave     = admin_das_breakdown.get("Leave", 0)
+        admin_pie_holiday   = admin_das_breakdown.get("Holiday", 0)
 
-    # --- Pie chart: institution-wide breakdown from daily_attendance_status ---
-    cursor.execute("""
-        SELECT status, COUNT(*) as cnt
-        FROM daily_attendance_status
-        WHERE date::date = CURRENT_DATE
-        GROUP BY status
-    """)
-    admin_das_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
-    admin_pie_full_day  = admin_das_breakdown.get("Present", 0)
-    admin_pie_half_day  = admin_das_breakdown.get("Half Day", 0)
-    admin_pie_absent    = admin_das_breakdown.get("Absent", 0)
-    admin_pie_leave     = admin_das_breakdown.get("Leave", 0)
-    admin_pie_holiday   = admin_das_breakdown.get("Holiday", 0)
+        response_data = {
+            "stats": {
+                "total_users": total_users,
+                "total_staff": total_staff,
+                "total_attendance": total_attendance,
+                "today_attendance": today_attendance,
+                "today_face_scan": today_face_scan,
+                "today_od": od_count,
+                "today_earned": earned_count,
+                "today_casual": casual_count,
+                "total_departments": total_departments,
+                # Pie chart breakdown fields
+                "today_full_day": admin_pie_full_day,
+                "today_half_day": admin_pie_half_day,
+                "today_absent_das": admin_pie_absent,
+                "today_leave": admin_pie_leave,
+                "today_holiday": admin_pie_holiday,
+            },
+            "recent_attendance": [
+                {
+                    "id": row[0],
+                    "reg_no": row[1],
+                    "name": row[2],
+                    "dept": row[3],
+                    "timestamp": _ts(row[4]) if len(row) > 4 and row[4] else str(row[4]) if len(row) > 4 else "",
+                    "source": row[5] if len(row) > 5 else "face_scan",
+                    "status": _format_scan_status(row[6] if len(row) > 6 else None, row[4] if len(row) > 4 else None) if len(row) > 5 and row[5] == "face_scan" else None,
+                    "punch_type": (row[6] or "check_in") if len(row) > 6 and row[5] == "face_scan" else None,
+                }
+                for row in recent_attendance
+            ],
+            "admin_user": admin_user,
+        }
 
-    response_data = {
-        "stats": {
-            "total_users": total_users,
-            "total_staff": total_staff,
-            "total_attendance": total_attendance,
-            "today_attendance": today_attendance,
-            "today_face_scan": today_face_scan,
-            "today_od": od_count,
-            "today_earned": earned_count,
-            "today_casual": casual_count,
-            "total_departments": total_departments,
-            # Pie chart breakdown fields
-            "today_full_day": admin_pie_full_day,
-            "today_half_day": admin_pie_half_day,
-            "today_absent_das": admin_pie_absent,
-            "today_leave": admin_pie_leave,
-            "today_holiday": admin_pie_holiday,
-        },
-        "recent_attendance": [
-            {
-                "id": row[0],
-                "reg_no": row[1],
-                "name": row[2],
-                "dept": row[3],
-                "timestamp": _ts(row[4]) if row[4] else str(row[4]),
-                "source": row[5],
-                "status": _format_scan_status(row[6] if len(row) > 6 else None, row[4]) if row[5] == "face_scan" else None,
-                "punch_type": (row[6] or "check_in") if row[5] == "face_scan" and len(row) > 6 else None,
-            }
-            for row in recent_attendance
-        ],
-        "admin_user": admin_user,
-    }
-
-    # Return with no-cache headers to prevent caching
-    return JSONResponse(
-        content=response_data,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Vary": "Accept-Encoding",
-            "X-Accel-Expires": "0",
-        },
-    )
+        # Return with no-cache headers to prevent caching
+        return JSONResponse(
+            content=response_data,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Vary": "Accept-Encoding",
+                "X-Accel-Expires": "0",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in admin_dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Admin dashboard error: {str(e)}"},
+        )
 
 
 @app.get("/admin/recent-attendance")
@@ -12594,164 +13193,178 @@ async def hod_login(request: Request):
 @app.get("/hod/dashboard")
 async def hod_dashboard(request: Request):
     """Get HOD dashboard statistics (department-specific)"""
-    hod_user = verify_hod_token(request)
-    dept = hod_user["dept"]
+    try:
+        hod_user = verify_hod_token(request)
+        dept = hod_user["dept"]
 
-    # Get counts for this department only
-    cursor.execute("SELECT COUNT(*) FROM attendance WHERE dept = ?", (dept,))
-    dept_attendance = cursor.fetchone()[0]
+        # Get counts for this department only
+        cursor.execute("SELECT COUNT(*) FROM attendance WHERE dept = %s", (dept,))
+        row = cursor.fetchone()
+        dept_attendance = row[0] if row else 0
 
-    cursor.execute(
-        "SELECT COUNT(*) FROM attendance WHERE dept = ? AND timestamp::date = CURRENT_DATE",
-        (dept,),
-    )
-    today_attendance = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM attendance WHERE dept = %s AND timestamp::date = CURRENT_DATE",
+            (dept,),
+        )
+        row = cursor.fetchone()
+        today_attendance = row[0] if row else 0
 
-    cursor.execute(
-        "SELECT COUNT(*) FROM users WHERE dept = ? AND role = 'staff'", (dept,)
-    )
-    dept_staff = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE dept = %s AND role = 'staff'", (dept,)
+        )
+        row = cursor.fetchone()
+        dept_staff = row[0] if row else 0
 
-    # Get recent attendance for this department (face scan + OD)
-    cursor.execute(
-        """
-        SELECT id, reg_no, name, dept, class_div, timestamp, 'face_scan' as source, status
-        FROM attendance 
-        WHERE dept = ? 
-        ORDER BY id DESC 
-        LIMIT 8
-    """,
-        (dept,),
-    )
-    face_scan_attendance = cursor.fetchall()
+        # Get recent attendance for this department (face scan + OD)
+        cursor.execute(
+            """
+            SELECT id, reg_no, name, dept, class_div, timestamp, 'face_scan' as source, status
+            FROM attendance 
+            WHERE dept = %s 
+            ORDER BY id DESC 
+            LIMIT 8
+        """,
+            (dept,),
+        )
+        face_scan_attendance = cursor.fetchall() or []
 
-    # Get OD records for today with approval date
-    cursor.execute(
-        """
-        SELECT das.id, das.reg_no, das.name, das.dept, das.date as timestamp, 'od' as source, 
-               das.leave_type, lr.processed_date
-        FROM daily_attendance_status das
-        LEFT JOIN leave_requests lr ON das.leave_request_id = lr.id
-        WHERE das.dept = %s AND das.date::date = CURRENT_DATE AND das.status = 'Present' 
-        AND das.leave_type IN ('od', 'earned', 'casual')
-        ORDER BY das.date DESC
-        LIMIT 5
-    """,
-        (dept,),
-    )
-    od_records = cursor.fetchall()
+        # Get OD records for today with approval date
+        cursor.execute(
+            """
+            SELECT das.id, das.reg_no, das.name, das.dept, das.date as timestamp, 'od' as source, 
+                   das.leave_type, lr.processed_date
+            FROM daily_attendance_status das
+            LEFT JOIN leave_requests lr ON das.leave_request_id = lr.id
+            WHERE das.dept = %s AND das.date::date = CURRENT_DATE AND das.status = 'Present' 
+            AND das.leave_type IN ('od', 'earned', 'casual')
+            ORDER BY das.date DESC
+            LIMIT 5
+        """,
+            (dept,),
+        )
+        od_records = cursor.fetchall() or []
 
-    # Combine face scan + OD
-    combined = list(face_scan_attendance) + list(od_records)
-    combined.sort(key=lambda x: str(x[5]) if len(x) > 5 and x[5] else "", reverse=True)
-    recent_attendance = combined[:10]
+        # Combine face scan + OD
+        combined = list(face_scan_attendance) + list(od_records)
+        combined.sort(key=lambda x: str(x[5]) if len(x) > 5 and x[5] else "", reverse=True)
+        recent_attendance = combined[:10]
 
-    # Get today's OD count for department (separate counts)
-    cursor.execute(
-        """
-        SELECT leave_type, COUNT(*) as cnt
-        FROM daily_attendance_status
-        WHERE dept = %s AND date::date = CURRENT_DATE AND status = 'Present' 
-        AND leave_type IN ('od', 'earned', 'casual')
-        GROUP BY leave_type
-    """,
-        (dept,),
-    )
-    od_breakdown = cursor.fetchall()
-    od_count = sum(row[1] for row in od_breakdown)
-    earned_count = sum(row[1] for row in od_breakdown if row[0] == "earned")
-    casual_count = sum(row[1] for row in od_breakdown if row[0] == "casual")
+        # Get today's OD count for department (separate counts)
+        cursor.execute(
+            """
+            SELECT leave_type, COUNT(*) as cnt
+            FROM daily_attendance_status
+            WHERE dept = %s AND date::date = CURRENT_DATE AND status = 'Present' 
+            AND leave_type IN ('od', 'earned', 'casual')
+            GROUP BY leave_type
+        """,
+            (dept,),
+        )
+        od_breakdown = cursor.fetchall() or []
+        od_count = sum(row[1] for row in od_breakdown)
+        earned_count = sum(row[1] for row in od_breakdown if row[0] == "earned")
+        casual_count = sum(row[1] for row in od_breakdown if row[0] == "casual")
 
-    # Build recent_attendance list with approval_date
-    recent_attendance_list = []
-    for row in recent_attendance:
-        if len(row) >= 8:
-            # OD record with approval date
-            recent_attendance_list.append(
-                {
-                    "id": row[0],
-                    "reg_no": row[1],
-                    "name": row[2],
-                    "dept": row[3],
-                    "timestamp": str(row[4]) if row[4] else "",
-                    "source": row[5],
-                    "leave_type": row[6],
-                    "approval_date": _ts(row[7]) if len(row) > 7 and row[7] else None,
-                }
-            )
-        else:
-            # Face scan record
-            raw_status = row[7] if len(row) > 7 else None
-            recent_attendance_list.append(
-                {
-                    "id": row[0],
-                    "reg_no": row[1],
-                    "name": row[2],
-                    "dept": row[3],
-                    "class_div": row[4] or "",
-                    "timestamp": _ts(row[5])
-                    if len(row) > 5 and row[5]
-                    else str(row[5])
-                    if len(row) > 5
-                    else "",
-                    "source": row[6] if len(row) > 6 else "face_scan",
-                    "leave_type": None,
-                    "status": _format_scan_status(raw_status, row[5] if len(row) > 5 else None),
-                    "punch_type": raw_status or "check_in",
-                }
-            )
+        # Build recent_attendance list with approval_date
+        recent_attendance_list = []
+        for row in recent_attendance:
+            is_od = len(row) > 5 and row[5] == "od"
+            if is_od:
+                # OD record with approval date
+                recent_attendance_list.append(
+                    {
+                        "id": row[0],
+                        "reg_no": row[1],
+                        "name": row[2],
+                        "dept": row[3],
+                        "timestamp": str(row[4]) if row[4] else "",
+                        "source": "od",
+                        "leave_type": row[6] if len(row) > 6 else "od",
+                        "approval_date": _ts(row[7]) if len(row) > 7 and row[7] else None,
+                    }
+                )
+            else:
+                # Face scan record
+                raw_status = row[7] if len(row) > 7 else None
+                recent_attendance_list.append(
+                    {
+                        "id": row[0],
+                        "reg_no": row[1],
+                        "name": row[2],
+                        "dept": row[3],
+                        "class_div": row[4] or "",
+                        "timestamp": _ts(row[5])
+                        if len(row) > 5 and row[5]
+                        else str(row[5])
+                        if len(row) > 5
+                        else "",
+                        "source": "face_scan",
+                        "leave_type": None,
+                        "status": _format_scan_status(raw_status, row[5] if len(row) > 5 else None),
+                        "punch_type": raw_status or "check_in",
+                    }
+                )
 
-    # Calculate present and absent for department
-    # Present = face scan + OD, Absent = staff without any attendance/OD today
-    total_staff_in_dept = dept_staff
-    today_present_count = today_attendance + od_count
-    today_absent_count = max(0, total_staff_in_dept - today_present_count)
+        # Calculate present and absent for department
+        total_staff_in_dept = dept_staff
+        today_present_count = today_attendance + od_count
+        today_absent_count = max(0, total_staff_in_dept - today_present_count)
 
-    # --- Pie chart: breakdown from daily_attendance_status for dept ---
-    cursor.execute(
-        """
-        SELECT status, COUNT(*) as cnt
-        FROM daily_attendance_status
-        WHERE dept = %s AND date::date = CURRENT_DATE
-        GROUP BY status
-    """,
-        (dept,),
-    )
-    das_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
-    pie_full_day  = das_breakdown.get("Present", 0)
-    pie_half_day  = das_breakdown.get("Half Day", 0)
-    pie_absent    = das_breakdown.get("Absent", 0)
-    pie_leave     = das_breakdown.get("Leave", 0)
-    pie_holiday   = das_breakdown.get("Holiday", 0)
+        # --- Pie chart: breakdown from daily_attendance_status for dept ---
+        cursor.execute(
+            """
+            SELECT status, COUNT(*) as cnt
+            FROM daily_attendance_status
+            WHERE dept = %s AND date::date = CURRENT_DATE
+            GROUP BY status
+        """,
+            (dept,),
+        )
+        das_breakdown = {row[0]: row[1] for row in cursor.fetchall() or []}
+        pie_full_day  = das_breakdown.get("Present", 0)
+        pie_half_day  = das_breakdown.get("Half Day", 0)
+        pie_absent    = das_breakdown.get("Absent", 0)
+        pie_leave     = das_breakdown.get("Leave", 0)
+        pie_holiday   = das_breakdown.get("Holiday", 0)
 
-    return JSONResponse(
-        content={
-            "stats": {
-                "department": dept,
-                "total_attendance": dept_attendance,
-                "today_attendance": today_attendance + od_count,
-                "today_face_scan": today_attendance,
-                "today_od": od_count,
-                "today_earned": earned_count,
-                "today_casual": casual_count,
-                "total_staff": dept_staff,
-                "today_present": today_present_count,
-                "today_absent": today_absent_count,
-                # Pie chart breakdown fields
-                "today_full_day": pie_full_day,
-                "today_half_day": pie_half_day,
-                "today_leave": pie_leave,
-                "today_holiday": pie_holiday,
+        return JSONResponse(
+            content={
+                "stats": {
+                    "department": dept,
+                    "total_attendance": dept_attendance,
+                    "today_attendance": today_attendance + od_count,
+                    "today_face_scan": today_attendance,
+                    "today_od": od_count,
+                    "today_earned": earned_count,
+                    "today_casual": casual_count,
+                    "total_staff": dept_staff,
+                    "today_present": today_present_count,
+                    "today_absent": today_absent_count,
+                    # Pie chart breakdown fields
+                    "today_full_day": pie_full_day,
+                    "today_half_day": pie_half_day,
+                    "today_leave": pie_leave,
+                    "today_holiday": pie_holiday,
+                },
+                "recent_attendance": recent_attendance_list,
+                "hod_user": hod_user,
             },
-            "recent_attendance": recent_attendance_list,
-            "hod_user": hod_user,
-        },
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in hod_dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"HOD dashboard error: {str(e)}"},
+        )
 
 
 @app.get("/hod/attendance")
@@ -12767,7 +13380,7 @@ async def hod_get_attendance(request: Request, date: str = None):
                 """
                 SELECT id, reg_no, name, dept, class_div, timestamp, status
                 FROM attendance 
-                WHERE dept = ? AND timestamp::date = ? 
+                WHERE dept = %s AND timestamp::date = %s 
                 ORDER BY id DESC
             """,
                 (dept, date),
@@ -12777,7 +13390,7 @@ async def hod_get_attendance(request: Request, date: str = None):
                 """
                 SELECT id, reg_no, name, dept, class_div, timestamp, status
                 FROM attendance 
-                WHERE dept = ? 
+                WHERE dept = %s 
                 ORDER BY id DESC
             """,
                 (dept,),
@@ -12817,7 +13430,7 @@ async def hod_get_staff_attendance(request: Request, date: str = None):
                 """
                 SELECT a.id, a.reg_no, a.name, a.dept, a.timestamp, a.status 
                 FROM attendance a
-                WHERE a.dept = ? AND a.timestamp::date = ?
+                WHERE a.dept = %s AND a.timestamp::date = %s
                 ORDER BY a.id DESC
             """,
                 (dept, date),
@@ -12827,7 +13440,7 @@ async def hod_get_staff_attendance(request: Request, date: str = None):
                 """
                 SELECT a.id, a.reg_no, a.name, a.dept, a.timestamp, a.status 
                 FROM attendance a
-                WHERE a.dept = ?
+                WHERE a.dept = %s
                 ORDER BY a.id DESC
             """,
                 (dept,),
@@ -12836,7 +13449,7 @@ async def hod_get_staff_attendance(request: Request, date: str = None):
         attendance_rows = cursor.fetchall()
 
         # Get all users in this department with their roles
-        cursor.execute("SELECT reg_no, role FROM users WHERE dept = ?", (dept,))
+        cursor.execute("SELECT reg_no, role FROM users WHERE dept = %s", (dept,))
         user_rows = cursor.fetchall()
         user_roles = {row[0]: row[1] for row in user_rows}
 
@@ -12874,7 +13487,7 @@ async def hod_get_staff(request: Request):
 
     try:
         cursor.execute(
-            "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister FROM users WHERE dept = ? AND role = 'staff'",
+            "SELECT id, username, reg_no, name, dept, role, created_at, embedding, can_reregister FROM users WHERE dept = %s AND role = 'staff'",
             (dept,),
         )
         rows = cursor.fetchall()
@@ -12918,7 +13531,7 @@ async def hod_get_attendance_stats(request: Request):
             """
             SELECT timestamp::date as date, COUNT(*) as count 
             FROM attendance 
-            WHERE dept = ? AND timestamp >= CURRENT_DATE - INTERVAL '7 days'
+            WHERE dept = %s AND timestamp >= CURRENT_DATE - INTERVAL '7 days'
             GROUP BY timestamp::date
             ORDER BY date DESC
         """,
@@ -14383,7 +14996,6 @@ async def hod_check_face_status(request: Request):
     }
 
 
-# -------------------------------------------------
 # -------------------------------------------------
 # CONFIG ENDPOINT
 # -------------------------------------------------
@@ -16593,8 +17205,9 @@ def verify_staff_token(request: Request) -> dict:
         if is_user_suspended(username, is_other_staff=False):
             raise HTTPException(status_code=403, detail="Account suspended. Access denied.")
 
-        # Check if user is staff
-        if user[6] != "staff":
+        # Check if user is staff or authorized role
+        role_lower = str(user[6] or "").lower()
+        if role_lower not in ["staff", "other staff", "hod", "admin", "principal", "office_staff", "system_admin"]:
             raise HTTPException(status_code=403, detail="Staff access required")
 
         return {
@@ -18666,7 +19279,1566 @@ async def admin_deny_other_staff_reregister(
     return {"message": "Request denied", "staff_reg_no": staff_reg_no, "reason": reason}
 
 
+class KioskToggleRequest(BaseModel):
+    enabled: bool
+
+class KioskStudentRegisterRequest(BaseModel):
+    reg_no: str
+    name: str
+    dept: str
+    images_base64: list[str]
+    overwrite: bool = False
+
+class KioskScanRequest(BaseModel):
+    image_base64: str
+
+_student_face_profile_cache = {}
+
+def load_student_face_profiles():
+    global _student_face_profile_cache
+    _student_face_profile_cache.clear()
+    try:
+        cursor.execute("SELECT reg_no, name, dept, embeddings, registered_by FROM student_face_profiles")
+        for row in cursor.fetchall():
+            try:
+                if isinstance(row, dict):
+                    reg_no = row.get("reg_no")
+                    name = row.get("name")
+                    dept = row.get("dept")
+                    emb_raw = row.get("embeddings")
+                    registered_by = row.get("registered_by", "")
+                else:
+                    reg_no = row[0]
+                    name = row[1]
+                    dept = row[2]
+                    emb_raw = row[3]
+                    registered_by = row[4] if len(row) > 4 else ""
+
+                if emb_raw is None:
+                    continue
+
+                if isinstance(emb_raw, (bytes, str)):
+                    emb_list = json.loads(emb_raw)
+                elif isinstance(emb_raw, list):
+                    emb_list = emb_raw
+                else:
+                    emb_list = json.loads(str(emb_raw))
+
+                _student_face_profile_cache[reg_no] = {
+                    "name": name,
+                    "dept": dept,
+                    "registered_by": registered_by or "",
+                    "embeddings": [np.array(e, dtype=np.float32) for e in emb_list if e is not None]
+                }
+            except Exception as e:
+                print(f"Error parsing student face profile: {e}")
+        print(f"Loaded {len(_student_face_profile_cache)} student face profiles for Kiosk")
+    except Exception as e:
+        print(f"Error loading student face profiles: {e}")
+
+# Call immediately to load any existing profiles at startup
+load_student_face_profiles()
+
+
+def check_staff_student_permission(staff_reg_no: str, student_reg_no: str) -> bool:
+    """
+    Checks if a staff member has permission to manage / mark attendance for a student.
+    Rules:
+    1. Admin has global access. HOD has departmental access.
+    2. Primary registered staff (`registered_by` == staff_reg_no) has full permission.
+    3. Staff with active delegation in `staff_student_permissions` has permission.
+    """
+    if not staff_reg_no or not student_reg_no:
+        return False
+
+    staff_reg_clean = staff_reg_no.strip()
+    student_reg_clean = student_reg_no.strip()
+
+    # 1. Check role of staff
+    cursor.execute("SELECT role, dept FROM users WHERE LOWER(reg_no) = LOWER(?)", (staff_reg_clean,))
+    staff_row = cursor.fetchone()
+    if staff_row:
+        role = staff_row.get("role") if isinstance(staff_row, dict) else staff_row[0]
+        staff_dept = staff_row.get("dept") if isinstance(staff_row, dict) else staff_row[1]
+
+        if role and str(role).lower() in ("admin", "superadmin"):
+            return True
+
+        if role and str(role).lower() in ("hod", "head of department"):
+            cursor.execute("SELECT dept FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)", (student_reg_clean,))
+            stu_row = cursor.fetchone()
+            if stu_row:
+                stu_dept = stu_row.get("dept") if isinstance(stu_row, dict) else stu_row[0]
+                if stu_dept and str(stu_dept).lower() == str(staff_dept).lower():
+                    return True
+
+    # 2. Check primary ownership
+    cursor.execute("SELECT registered_by FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)", (student_reg_clean,))
+    stu_profile = cursor.fetchone()
+    reg_by = ""
+    if stu_profile:
+        reg_by = stu_profile.get("registered_by") if isinstance(stu_profile, dict) else stu_profile[0]
+        if reg_by and str(reg_by).lower() == str(staff_reg_clean).lower():
+            return True
+
+    # 3. Check active delegation
+    cursor.execute(
+        """
+        SELECT id FROM staff_student_permissions
+        WHERE LOWER(grantee_staff_reg_no) = LOWER(?)
+          AND status = 'ACTIVE'
+          AND (valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP)
+          AND (
+            LOWER(student_reg_no) = LOWER(?)
+            OR (
+                student_reg_no IS NULL 
+                AND LOWER(grantor_staff_reg_no) = LOWER(?)
+            )
+          )
+        LIMIT 1
+        """,
+        (staff_reg_clean, student_reg_clean, (reg_by or "").lower())
+    )
+    if cursor.fetchone():
+        return True
+
+    return False
+
+
+def get_authorized_student_reg_nos_for_staff(staff_reg_no: str):
+    """
+    Returns set of student reg_no strings that staff_reg_no is authorized to scan/manage.
+    Returns None if staff has global / department-wide authorization (Admin or HOD).
+    """
+    if not staff_reg_no:
+        return set()
+
+    staff_reg_clean = staff_reg_no.strip()
+
+    cursor.execute("SELECT role, dept FROM users WHERE LOWER(reg_no) = LOWER(?)", (staff_reg_clean,))
+    staff_row = cursor.fetchone()
+    if staff_row:
+        role = staff_row.get("role") if isinstance(staff_row, dict) else staff_row[0]
+        if role and str(role).lower() in ("admin", "superadmin", "hod", "head of department"):
+            return None  # Unrestricted matching
+
+    authorized_set = set()
+
+    # Primary owned students
+    cursor.execute("SELECT reg_no FROM student_face_profiles WHERE LOWER(registered_by) = LOWER(?)", (staff_reg_clean,))
+    for row in cursor.fetchall():
+        r = row.get("reg_no") if isinstance(row, dict) else row[0]
+        if r:
+            authorized_set.add(r.strip())
+
+    # Delegated permissions
+    cursor.execute(
+        """
+        SELECT grantor_staff_reg_no, student_reg_no FROM staff_student_permissions
+        WHERE LOWER(grantee_staff_reg_no) = LOWER(?)
+          AND status = 'ACTIVE'
+          AND (valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP)
+        """,
+        (staff_reg_clean,)
+    )
+    delegations = cursor.fetchall()
+    for del_row in delegations:
+        grantor = del_row.get("grantor_staff_reg_no") if isinstance(del_row, dict) else del_row[0]
+        stu_reg = del_row.get("student_reg_no") if isinstance(del_row, dict) else del_row[1]
+
+        if stu_reg:
+            authorized_set.add(stu_reg.strip())
+        elif grantor:
+            cursor.execute("SELECT reg_no FROM student_face_profiles WHERE LOWER(registered_by) = LOWER(?)", (grantor.strip(),))
+            for s_row in cursor.fetchall():
+                sr = s_row.get("reg_no") if isinstance(s_row, dict) else s_row[0]
+                if sr:
+                    authorized_set.add(sr.strip())
+
+    return authorized_set
+
+
+def _find_matching_student_face(query_embedding, staff_reg_no=None, threshold=0.6):
+    best_match = None
+    best_score = 0.0
+
+    authorized_set = None
+    if staff_reg_no:
+        authorized_set = get_authorized_student_reg_nos_for_staff(staff_reg_no)
+
+    def cosine_sim(a, b):
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return np.dot(a, b) / (norm_a * norm_b)
+
+    for reg_no, data in _student_face_profile_cache.items():
+        if authorized_set is not None and reg_no not in authorized_set:
+            continue
+
+        for emb in data["embeddings"]:
+            sim = cosine_sim(query_embedding, emb)
+            if sim > best_score:
+                best_score = sim
+                best_match = {
+                    "reg_no": reg_no,
+                    "name": data["name"],
+                    "dept": data["dept"],
+                    "registered_by": data.get("registered_by", ""),
+                    "score": float(best_score)
+                }
+
+    if best_match and best_score >= threshold:
+        return best_match
+    return None
+
+
+@app.post("/admin/staff/{reg_no}/kiosk-toggle")
+def toggle_kiosk_mode(reg_no: str, req: KioskToggleRequest, request: Request):
+    """Admin toggles kiosk mode capability for a specific staff member."""
+    verify_admin_token(request)
+    try:
+        cursor.execute("UPDATE users SET kiosk_enabled = ? WHERE reg_no = ?", (req.enabled, reg_no))
+        conn.commit()
+        return {"message": "Kiosk mode updated", "kiosk_enabled": req.enabled}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/kiosk/status")
+def get_kiosk_status(request: Request):
+    """Staff checks if they have kiosk mode enabled (requires global mode ON)."""
+    staff_user = verify_staff_token(request)
+    reg_no = staff_user["reg_no"]
+    try:
+        global_mode = _app_settings.get("multi_user_kiosk_mode", True)
+        if not global_mode:
+            return {"kiosk_enabled": False}
+        cursor.execute("SELECT kiosk_enabled FROM users WHERE reg_no = ?", (reg_no,))
+        row = cursor.fetchone()
+        if row is None or row[0] is None or row[0] == 1 or row[0] is True or row[0] == "1":
+            enabled = True
+        else:
+            enabled = bool(row[0])
+        return {"kiosk_enabled": enabled}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/kiosk/student/check/{reg_no}")
+def check_student_registration_exists(reg_no: str, request: Request):
+    """Check if a student registration number already exists in the system."""
+    verify_staff_token(request)
+    reg_no_clean = reg_no.strip()
+    try:
+        cursor.execute("SELECT reg_no, name, dept FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)", (reg_no_clean,))
+        row = cursor.fetchone()
+        if row:
+            if isinstance(row, dict):
+                return {"exists": True, "name": row.get("name"), "dept": row.get("dept"), "reg_no": row.get("reg_no")}
+            else:
+                return {"exists": True, "name": row[1], "dept": row[2], "reg_no": row[0]}
+        return {"exists": False}
+    except Exception as e:
+        return {"exists": False, "error": str(e)}
+
+@app.post("/staff/kiosk/student/register")
+def register_student_face(req: KioskStudentRegisterRequest, request: Request):
+    """Staff registers a student's face for kiosk mode using exactly 3 images."""
+    staff_user = verify_staff_token(request)
+    staff_reg_no = staff_user["reg_no"]
+
+    reg_no = req.reg_no.strip()
+    name = req.name.strip()
+    dept = req.dept.strip()
+
+    import re
+    if not reg_no or len(reg_no) < 3 or len(reg_no) > 30:
+        raise HTTPException(status_code=400, detail="Registration Number must be between 3 and 30 characters long")
+    if not re.match(r'^[a-zA-Z0-9/\-_]+$', reg_no):
+        raise HTTPException(status_code=400, detail="Registration Number contains invalid characters. Use letters, numbers, -, /, or _ only")
+
+    if not name or len(name) < 2 or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Full Name must be between 2 and 100 characters long")
+    if not re.match(r'^[a-zA-Z\s.]+$', name):
+        raise HTTPException(status_code=400, detail="Full Name must contain only letters, spaces, and dots")
+
+    if not dept or len(dept) < 2 or len(dept) > 50:
+        raise HTTPException(status_code=400, detail="Department must be between 2 and 50 characters long")
+    if not re.match(r'^[a-zA-Z0-9\s&\-_]+$', dept):
+        raise HTTPException(status_code=400, detail="Department contains invalid characters")
+
+    # Check for duplicate registration number unless explicitly overwriting via Re-Register
+    if not req.overwrite:
+        try:
+            cursor.execute("SELECT reg_no, name, dept FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
+            existing = cursor.fetchone()
+            if existing:
+                ex_name = existing.get("name") if isinstance(existing, dict) else existing[1]
+                ex_dept = existing.get("dept") if isinstance(existing, dict) else existing[2]
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Registration Number '{reg_no}' is ALREADY registered to '{ex_name}' ({ex_dept}). Duplicate registrations are not allowed."
+                )
+        except HTTPException:
+            raise
+        except Exception as check_err:
+            print(f"Duplicate check notice: {check_err}")
+
+    if not req.images_base64 or len(req.images_base64) == 0:
+        raise HTTPException(status_code=400, detail="At least 1 face image is required for registration")
+        
+    embeddings = []
+    import base64
+    import json
+    import numpy as np
+
+    for b64 in req.images_base64:
+        try:
+            clean_b64 = b64
+            if "," in clean_b64:
+                clean_b64 = clean_b64.split(",", 1)[1]
+            img_data = base64.b64decode(clean_b64.strip())
+            img = preprocess_image_data(img_data)
+            if img is not None:
+                # Tier 1: Primary face extraction
+                face = extract_face(img)
+                if face and hasattr(face, 'embedding') and face.embedding is not None:
+                    emb = np.array(face.embedding, dtype=np.float32)
+                    norm = np.linalg.norm(emb)
+                    if norm > 0:
+                        emb = (emb / norm).tolist()
+                        embeddings.append(emb)
+                else:
+                    # Tier 2: Secondary feature extraction fallback
+                    emb_feat = extract_face_features(img)
+                    if emb_feat is not None:
+                        emb = np.array(emb_feat, dtype=np.float32)
+                        norm = np.linalg.norm(emb)
+                        if norm > 0:
+                            emb = (emb / norm).tolist()
+                            embeddings.append(emb)
+        except Exception as e:
+            print(f"Error processing face image for {reg_no}: {e}")
+            pass
+            
+    if len(embeddings) < 1:
+        raise HTTPException(status_code=400, detail="Failed to detect face in photos. Please capture clear face photos.")
+        
+    try:
+        emb_json = json.dumps(embeddings)
+        
+        # Primary PostgreSQL upsert query
+        try:
+            cursor.execute(
+                """
+                INSERT INTO student_face_profiles (reg_no, name, dept, embeddings, registered_by)
+                VALUES (?, ?, ?, ?::jsonb, ?)
+                ON CONFLICT (reg_no) DO UPDATE SET 
+                    name = EXCLUDED.name,
+                    dept = EXCLUDED.dept,
+                    embeddings = EXCLUDED.embeddings,
+                    registered_by = EXCLUDED.registered_by,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (req.reg_no, req.name, req.dept, emb_json, staff_reg_no)
+            )
+        except Exception as pg_err:
+            print(f"Primary PostgreSQL upsert notice: {pg_err}. Using fallback query...")
+            cursor.execute("SELECT reg_no FROM student_face_profiles WHERE reg_no = ?", (req.reg_no,))
+            if cursor.fetchone():
+                cursor.execute(
+                    """
+                    UPDATE student_face_profiles 
+                    SET name = ?, dept = ?, embeddings = ?, registered_by = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE reg_no = ?
+                    """,
+                    (req.name, req.dept, emb_json, staff_reg_no, req.reg_no)
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO student_face_profiles (reg_no, name, dept, embeddings, registered_by) 
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (req.reg_no, req.name, req.dept, emb_json, staff_reg_no)
+                )
+
+        # Also sync student profile to users table if not already present
+        try:
+            cursor.execute(
+                """
+                INSERT INTO users (reg_no, name, dept, role, username)
+                VALUES (?, ?, ?, 'student', ?)
+                ON CONFLICT (reg_no) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    dept = EXCLUDED.dept
+                """,
+                (req.reg_no, req.name, req.dept, req.reg_no)
+            )
+        except Exception as user_sync_err:
+            try:
+                cursor.execute("SELECT reg_no FROM users WHERE reg_no = ?", (req.reg_no,))
+                if not cursor.fetchone():
+                    cursor.execute(
+                        "INSERT INTO users (reg_no, name, dept, role, username) VALUES (?, ?, ?, 'student', ?)",
+                        (req.reg_no, req.name, req.dept, req.reg_no)
+                    )
+            except Exception:
+                pass
+
+        # Also sync embeddings to core face_embedding_samples for system-wide face recognition
+        try:
+            for emb in embeddings:
+                cursor.execute(
+                    """
+                    INSERT INTO face_embedding_samples (reg_no, source_table, embedding)
+                    VALUES (?, 'student_face_profiles', ?)
+                    """,
+                    (req.reg_no, json.dumps(emb))
+                )
+        except Exception as sync_err:
+            print(f"Notice syncing face_embedding_samples for {req.reg_no}: {sync_err}")
+            
+        conn.commit()
+        
+        # Reload in-memory face index cache
+        load_student_face_profiles()
+        return {
+            "message": f"Successfully registered face profile and stored embeddings for {req.reg_no}",
+            "reg_no": req.reg_no,
+            "name": req.name,
+            "dept": req.dept,
+            "embeddings_count": len(embeddings)
+        }
+    except Exception as e:
+        print(f"Database error during student face registration: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.post("/staff/kiosk/session/start")
+def start_kiosk_session(request: Request):
+    """Staff starts a new kiosk session."""
+    staff_user = verify_staff_token(request)
+    staff_reg_no = staff_user["reg_no"]
+    
+    global_mode = _app_settings.get("multi_user_kiosk_mode", True)
+    if not global_mode:
+        raise HTTPException(status_code=403, detail="Kiosk mode is disabled globally by Admin")
+
+    cursor.execute("SELECT kiosk_enabled FROM users WHERE reg_no = ?", (staff_reg_no,))
+    row = cursor.fetchone()
+    if row and (row[0] == 0 or row[0] is False or row[0] == "0"):
+        raise HTTPException(status_code=403, detail="Kiosk mode privilege revoked for this staff member")
+        
+    import uuid
+    session_uuid = str(uuid.uuid4())
+    try:
+        cursor.execute(
+            "INSERT INTO kiosk_sessions (session_uuid, staff_reg_no) VALUES (?, ?)",
+            (session_uuid, staff_reg_no)
+        )
+        conn.commit()
+        return {"session_uuid": session_uuid, "message": "Kiosk session started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/staff/kiosk/session/{session_uuid}/end")
+def end_kiosk_session(session_uuid: str, request: Request):
+    """Staff ends an active kiosk session."""
+    staff_user = verify_staff_token(request)
+    staff_reg_no = staff_user["reg_no"]
+    try:
+        cursor.execute(
+            "UPDATE kiosk_sessions SET ended_at = CURRENT_TIMESTAMP WHERE session_uuid = ? AND staff_reg_no = ? AND ended_at IS NULL",
+            (session_uuid, staff_reg_no)
+        )
+        conn.commit()
+        return {"message": "Kiosk session ended"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _validate_and_record_kiosk_attendance(session_uuid: str, student: dict, marked_by_label: str = "Staff Panel Kiosk"):
+    student_reg_no = student["reg_no"]
+    student_name = student["name"]
+    student_dept = student.get("dept", "")
+
+    now_dt = datetime.now()
+    current_date = now_dt.strftime("%Y-%m-%d")
+    current_time = now_dt.strftime("%H:%M:%S")
+
+    # Determine FN vs AN session (< 13:00 is FN, >= 13:00 is AN)
+    session_type = "FN" if now_dt.hour < 13 else "AN"
+
+    # 1. Validation A: Single mark per active kiosk check-in session
+    cursor.execute(
+        "SELECT COUNT(*) FROM kiosk_attendance_logs WHERE session_uuid = ? AND student_reg_no = ?",
+        (session_uuid, student_reg_no)
+    )
+    sess_row = cursor.fetchone()
+    if sess_row and (sess_row[0] if isinstance(sess_row, (tuple, list)) else sess_row.get("COUNT(*)", 0)) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"⚠️ {student_name} ({student_reg_no}) has already marked attendance in this session!"
+        )
+
+    # 2. Validation B: Single mark per FN / AN session today
+    cursor.execute(
+        "SELECT first_half_status, second_half_status FROM daily_attendance_status WHERE reg_no = ? AND date = ?",
+        (student_reg_no, current_date)
+    )
+    das_row = cursor.fetchone()
+    if das_row:
+        fh_status = das_row.get("first_half_status") if isinstance(das_row, dict) else das_row[0]
+        sh_status = das_row.get("second_half_status") if isinstance(das_row, dict) else das_row[1]
+
+        if session_type == "FN" and fh_status == "Present":
+            raise HTTPException(
+                status_code=400,
+                detail=f"⚠️ {student_name} ({student_reg_no}) has already marked FN (Forenoon) attendance today!"
+            )
+        elif session_type == "AN" and sh_status == "Present":
+            raise HTTPException(
+                status_code=400,
+                detail=f"⚠️ {student_name} ({student_reg_no}) has already marked AN (Afternoon) attendance today!"
+            )
+
+    # Log to kiosk_attendance_logs
+    cursor.execute(
+        "INSERT INTO kiosk_attendance_logs (session_uuid, student_reg_no, matched_score) VALUES (?, ?, ?)",
+        (session_uuid, student_reg_no, student.get("score", 1.0))
+    )
+    cursor.execute("UPDATE kiosk_sessions SET total_scans = total_scans + 1 WHERE session_uuid = ?", (session_uuid,))
+
+    # Insert into standard attendance table
+    try:
+        cursor.execute(
+            """
+            INSERT INTO attendance (reg_no, name, dept, "timestamp", status)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'Present')
+            """,
+            (student_reg_no, student_name, student_dept)
+        )
+    except Exception as att_err:
+        print(f"Attendance insert notice: {att_err}")
+
+    # Upsert into daily_attendance_status with FN/AN half-day tracking
+    try:
+        if session_type == "FN":
+            cursor.execute(
+                """
+                INSERT INTO daily_attendance_status 
+                (reg_no, name, dept, date, status, first_half_status, first_half_in_time, in_time, marked_by, marked_at)
+                VALUES (?, ?, ?, ?, 'Present', 'Present', ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT (reg_no, date) DO UPDATE SET
+                    status = 'Present',
+                    first_half_status = 'Present',
+                    first_half_in_time = COALESCE(daily_attendance_status.first_half_in_time, EXCLUDED.first_half_in_time),
+                    in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                    marked_by = EXCLUDED.marked_by,
+                    marked_at = CURRENT_TIMESTAMP
+                """,
+                (student_reg_no, student_name, student_dept, current_date, current_time, current_time, marked_by_label)
+            )
+        else: # AN
+            cursor.execute(
+                """
+                INSERT INTO daily_attendance_status 
+                (reg_no, name, dept, date, status, second_half_status, second_half_in_time, in_time, marked_by, marked_at)
+                VALUES (?, ?, ?, ?, 'Present', 'Present', ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT (reg_no, date) DO UPDATE SET
+                    status = 'Present',
+                    second_half_status = 'Present',
+                    second_half_in_time = COALESCE(daily_attendance_status.second_half_in_time, EXCLUDED.second_half_in_time),
+                    in_time = COALESCE(daily_attendance_status.in_time, EXCLUDED.in_time),
+                    marked_by = EXCLUDED.marked_by,
+                    marked_at = CURRENT_TIMESTAMP
+                """,
+                (student_reg_no, student_name, student_dept, current_date, current_time, current_time, marked_by_label)
+            )
+    except Exception as das_err:
+        print(f"daily_attendance_status insert error in Kiosk: {das_err}")
+
+    conn.commit()
+    return session_type
+
+@app.post("/staff/kiosk/session/{session_uuid}/scan")
+def kiosk_scan(session_uuid: str, req: KioskScanRequest, request: Request):
+    """Scan a student's face during an active kiosk session and mark their attendance."""
+    staff_user = verify_staff_token(request)
+    
+    try:
+        # Verify session is active
+        cursor.execute("SELECT ended_at FROM kiosk_sessions WHERE session_uuid = ?", (session_uuid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if row[0] is not None:
+            raise HTTPException(status_code=400, detail="Session has already ended")
+            
+        import base64
+        img_data = base64.b64decode(req.image_base64)
+        img = preprocess_image_data(img_data)
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+            
+        face = extract_face(img)
+        if not face or not hasattr(face, 'embedding'):
+            raise HTTPException(status_code=400, detail="❌ Not a valid face. Position face clearly in camera view.")
+
+        if ANTISPOOFING_ENABLED:
+            is_live, liveness_reason = detect_single_image_liveness(img)
+            if not is_live:
+                raise HTTPException(status_code=400, detail=f"⚠️ Face Spoofing Detected: {liveness_reason}")
+        
+        match = _find_matching_student_face(face.embedding, staff_reg_no=staff_user["reg_no"])
+        if not match:
+            global_match = _find_matching_student_face(face.embedding, staff_reg_no=None)
+            if global_match:
+                reg_by = global_match.get("registered_by", "Another Staff Member")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"⚠️ Controlled Access Error: Student {global_match['name']} ({global_match['reg_no']}) is registered under Staff '{reg_by}'. You do not have permission to mark attendance for this student unless access is delegated to you."
+                )
+            raise HTTPException(status_code=404, detail="❌ Not a valid face. Student is not registered in system.")
+            
+        session_type = _validate_and_record_kiosk_attendance(session_uuid, match, marked_by_label="Kiosk Session")
+        
+        return {
+            "message": f"Attendance marked successfully for {session_type} session",
+            "student": match,
+            "session_type": session_type
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/kiosk/session/{session_uuid}/records")
+def get_kiosk_records(session_uuid: str, request: Request):
+    """Get the recent records scanned in this session."""
+    verify_staff_token(request)
+    try:
+        cursor.execute(
+            """
+            SELECT k.student_reg_no, s.name, s.dept, k.matched_score, k.scanned_at
+            FROM kiosk_attendance_logs k
+            JOIN student_face_profiles s ON k.student_reg_no = s.reg_no
+            WHERE k.session_uuid = ?
+            ORDER BY k.scanned_at DESC
+            LIMIT 50
+            """,
+            (session_uuid,)
+        )
+        rows = cursor.fetchall()
+        records = [
+            {
+                "reg_no": r[0],
+                "name": r[1],
+                "dept": r[2],
+                "score": float(r[3]),
+                "scanned_at": str(r[4])
+            }
+            for r in rows
+        ]
+        
+        cursor.execute("SELECT total_scans FROM kiosk_sessions WHERE session_uuid = ?", (session_uuid,))
+        total_scans = cursor.fetchone()
+        total_scans = total_scans[0] if total_scans else 0
+        
+        return {"records": records, "total_scans": total_scans}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/staff/kiosk/quick-scan")
+def kiosk_quick_scan(req: KioskScanRequest, request: Request):
+    """On-demand face attendance verification for staff panel (no session start required)."""
+    staff_user = verify_staff_token(request)
+    staff_reg_no = staff_user["reg_no"]
+
+    global_mode = _app_settings.get("multi_user_kiosk_mode", True)
+    if not global_mode:
+        raise HTTPException(status_code=403, detail="Kiosk mode is disabled globally by Admin")
+
+    cursor.execute("SELECT kiosk_enabled FROM users WHERE reg_no = ?", (staff_reg_no,))
+    row = cursor.fetchone()
+    if row and (row[0] == 0 or row[0] is False or row[0] == "0"):
+        raise HTTPException(status_code=403, detail="Kiosk mode privilege revoked for this staff member")
+
+    try:
+        import base64
+        img_data = base64.b64decode(req.image_base64)
+        img = preprocess_image_data(img_data)
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        face = extract_face(img)
+        if not face or not hasattr(face, 'embedding'):
+            raise HTTPException(status_code=400, detail="❌ Not a valid face. Position face clearly in camera view.")
+
+        if ANTISPOOFING_ENABLED:
+            is_live, liveness_reason = detect_single_image_liveness(img)
+            if not is_live:
+                raise HTTPException(status_code=400, detail=f"⚠️ Face Spoofing Detected: {liveness_reason}")
+
+        match = _find_matching_student_face(face.embedding, staff_reg_no=staff_reg_no)
+        if not match:
+            global_match = _find_matching_student_face(face.embedding, staff_reg_no=None)
+            if global_match:
+                reg_by = global_match.get("registered_by", "Another Staff Member")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"⚠️ Controlled Access Error: Student {global_match['name']} ({global_match['reg_no']}) is registered under Staff '{reg_by}'. You do not have permission to mark attendance for this student unless access is delegated to you."
+                )
+            raise HTTPException(status_code=404, detail="❌ Not a valid face. Student is not registered in system.")
+
+        # Auto-create or get active session for staff
+        import uuid
+        cursor.execute("SELECT session_uuid FROM kiosk_sessions WHERE staff_reg_no = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1", (staff_reg_no,))
+        sess_row = cursor.fetchone()
+        if sess_row:
+            session_uuid = sess_row[0]
+        else:
+            session_uuid = str(uuid.uuid4())
+            cursor.execute("INSERT INTO kiosk_sessions (session_uuid, staff_reg_no) VALUES (?, ?)", (session_uuid, staff_reg_no))
+
+        session_type = _validate_and_record_kiosk_attendance(session_uuid, match, marked_by_label="Staff Panel Kiosk")
+
+        return {
+            "message": f"Attendance marked successfully for {session_type} session",
+            "student": match,
+            "session_type": session_type
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/kiosk/recent-records")
+def get_staff_kiosk_recent_records(request: Request):
+    """Fetch recent kiosk attendance records for the authenticated staff member."""
+    staff_user = verify_staff_token(request)
+    staff_reg_no = staff_user["reg_no"]
+    try:
+        cursor.execute(
+            """
+            SELECT k.student_reg_no, s.name, s.dept, k.matched_score, k.scanned_at
+            FROM kiosk_attendance_logs k
+            JOIN kiosk_sessions sess ON k.session_uuid = sess.session_uuid
+            JOIN student_face_profiles s ON k.student_reg_no = s.reg_no
+            WHERE sess.staff_reg_no = ?
+            ORDER BY k.scanned_at DESC
+            LIMIT 50
+            """,
+            (staff_reg_no,)
+        )
+        rows = cursor.fetchall()
+        records = []
+        for r in rows:
+            if isinstance(r, dict):
+                r_reg_no = r.get("student_reg_no")
+                r_name = r.get("name")
+                r_dept = r.get("dept")
+                r_score = r.get("matched_score", 0.0)
+                r_scanned_at = r.get("scanned_at", "")
+            else:
+                r_reg_no = r[0]
+                r_name = r[1]
+                r_dept = r[2]
+                r_score = r[3]
+                r_scanned_at = r[4]
+            records.append({
+                "reg_no": r_reg_no,
+                "name": r_name,
+                "dept": r_dept,
+                "score": float(r_score) if r_score is not None else 0.0,
+                "scanned_at": str(r_scanned_at)
+            })
+        return {"records": records, "total_scans": len(records)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/kiosk/students")
+def get_kiosk_registered_students(request: Request):
+    """List all student face profiles registered for kiosk mode."""
+    staff_user = verify_staff_token(request)
+    try:
+        cursor.execute(
+            """
+            SELECT reg_no, name, dept, registered_by, created_at, updated_at
+            FROM student_face_profiles
+            ORDER BY created_at DESC
+            """
+        )
+        rows = cursor.fetchall()
+        students = []
+        for r in rows:
+            if isinstance(r, dict):
+                reg_no = r.get("reg_no")
+                name = r.get("name")
+                dept = r.get("dept")
+                reg_by = r.get("registered_by", "")
+                created_at = r.get("created_at", "")
+                updated_at = r.get("updated_at", "")
+            else:
+                reg_no = r[0]
+                name = r[1]
+                dept = r[2]
+                reg_by = r[3] or ""
+                created_at = r[4] if len(r) > 4 else ""
+                updated_at = r[5] if len(r) > 5 else ""
+
+            students.append({
+                "reg_no": reg_no,
+                "name": name,
+                "dept": dept,
+                "registered_by": reg_by or "",
+                "created_at": str(created_at) if created_at else "",
+                "updated_at": str(updated_at) if updated_at else "",
+                "face_registered": True
+            })
+        return {"students": students}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
+
+@app.delete("/staff/kiosk/student/{reg_no}")
+def delete_kiosk_student_profile(reg_no: str, request: Request):
+    """Staff deletes a student's face profile and embeddings."""
+    staff_user = verify_staff_token(request)
+    try:
+        cursor.execute("DELETE FROM student_face_profiles WHERE reg_no = ?", (reg_no,))
+        cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ? AND source_table = 'student_face_profiles'", (reg_no,))
+        conn.commit()
+        load_student_face_profiles()
+        return {"message": f"Successfully deleted face profile for student {reg_no}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database deletion error: {str(e)}")
+
+@app.get("/staff/kiosk/student/{reg_no}/history")
+def get_kiosk_student_attendance_history(reg_no: str, request: Request):
+    """Fetch attendance history for a specific kiosk registered student."""
+    verify_staff_token(request)
+    try:
+        cursor.execute(
+            "SELECT reg_no, name, dept, registered_by, created_at FROM student_face_profiles WHERE reg_no = ?",
+            (reg_no,)
+        )
+        student_row = cursor.fetchone()
+        if not student_row:
+            raise HTTPException(status_code=404, detail=f"Student face profile not found for reg_no: {reg_no}")
+
+        if isinstance(student_row, dict):
+            s_name = student_row.get("name", "")
+            s_dept = student_row.get("dept", "")
+        else:
+            s_name = student_row[1]
+            s_dept = student_row[2]
+
+        cursor.execute(
+            """
+            SELECT k.id, k.scanned_at, k.matched_score, k.session_uuid, sess.staff_reg_no, u.name as staff_name
+            FROM kiosk_attendance_logs k
+            LEFT JOIN kiosk_sessions sess ON k.session_uuid = sess.session_uuid
+            LEFT JOIN users u ON sess.staff_reg_no = u.reg_no
+            WHERE k.student_reg_no = ?
+            ORDER BY k.scanned_at DESC
+            """,
+            (reg_no,)
+        )
+        kiosk_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT "timestamp", status
+            FROM attendance
+            WHERE reg_no = ?
+            ORDER BY "timestamp" DESC
+            """,
+            (reg_no,)
+        )
+        att_rows = cursor.fetchall()
+
+        history = []
+        for r in kiosk_rows:
+            if isinstance(r, dict):
+                scanned_at = str(r.get("scanned_at", ""))
+                score = float(r.get("matched_score", 1.0))
+                staff_name = r.get("staff_name") or r.get("staff_reg_no") or "Staff Panel Kiosk"
+            else:
+                scanned_at = str(r[1]) if r[1] else ""
+                score = float(r[2]) if r[2] is not None else 1.0
+                staff_name = r[5] or r[4] or "Staff Panel Kiosk"
+
+            session_type = "FN"
+            if " " in scanned_at:
+                try:
+                    time_part = scanned_at.split(" ")[1]
+                    hour = int(time_part.split(":")[0])
+                    session_type = "FN" if hour < 13 else "AN"
+                except Exception:
+                    session_type = "FN"
+
+            history.append({
+                "date_time": scanned_at,
+                "status": "Present",
+                "session_type": session_type,
+                "score": score,
+                "marked_by": staff_name,
+                "source": "Kiosk Face Scan"
+            })
+
+        if not history and att_rows:
+            for r in att_rows:
+                if isinstance(r, dict):
+                    ts = str(r.get("timestamp", ""))
+                    st = r.get("status", "Present")
+                    mb = r.get("marked_by", "Staff")
+                else:
+                    ts = str(r[0]) if r[0] else ""
+                    st = r[1] if r[1] else "Present"
+                    mb = r[2] if len(r) > 2 and r[2] else "Staff"
+
+                session_type = "FN"
+                if " " in ts:
+                    try:
+                        time_part = ts.split(" ")[1]
+                        hour = int(time_part.split(":")[0])
+                        session_type = "FN" if hour < 13 else "AN"
+                    except Exception:
+                        session_type = "FN"
+
+                history.append({
+                    "date_time": ts,
+                    "status": st,
+                    "session_type": session_type,
+                    "score": 1.0,
+                    "marked_by": mb,
+                    "source": "Attendance Log"
+                })
+
+        return {
+            "reg_no": reg_no,
+            "name": s_name,
+            "dept": s_dept,
+            "total_records": len(history),
+            "history": history
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
+
+
+
+
 # -------------------------------------------------
+# STAFF STUDENT PERMISSION DELEGATION ENDPOINTS
+# -------------------------------------------------
+
+class GrantPermissionRequest(BaseModel):
+    grantee_staff_reg_no: str
+    student_reg_no: Optional[str] = None  # None for ALL students owned by grantor
+    permission_type: str = "MARK_ATTENDANCE"
+    duration_days: Optional[int] = None  # None for permanent until revoked
+
+@app.get("/staff/list")
+def get_staff_list_for_delegation(request: Request):
+    """Fetch active staff members available for permission delegation."""
+    caller = verify_staff_token(request)
+    caller_reg_no = caller["reg_no"]
+    caller_username = caller.get("username", "")
+    try:
+        staff_map = {}
+        # Fetch from users table
+        try:
+            cursor.execute(
+                """
+                SELECT reg_no, username, name, dept, role FROM users 
+                WHERE LOWER(COALESCE(role, '')) != 'student'
+                  AND COALESCE(suspended, FALSE) = FALSE
+                ORDER BY name ASC
+                """
+            )
+            rows = cursor.fetchall()
+            for r in rows:
+                r_reg = (r.get("reg_no") if isinstance(r, dict) else r[0]) or (r.get("username") if isinstance(r, dict) else r[1])
+                r_name = (r.get("name") if isinstance(r, dict) else r[2]) or r_reg
+                r_dept = (r.get("dept") if isinstance(r, dict) else r[3]) or ""
+                r_role = (r.get("role") if isinstance(r, dict) else r[4]) or "staff"
+
+                if r_reg and str(r_reg).strip():
+                    reg_str = str(r_reg).strip()
+                    if (reg_str.lower() != caller_reg_no.lower() and 
+                        reg_str.lower() != caller_username.lower()):
+                        staff_map[reg_str.lower()] = {
+                            "reg_no": reg_str,
+                            "name": str(r_name).strip() if r_name else reg_str,
+                            "dept": str(r_dept).strip() if r_dept else "",
+                            "role": str(r_role).strip() if r_role else "staff",
+                        }
+        except Exception as err1:
+            print(f"[PERMISSION] Error reading users for staff list: {err1}")
+
+        # Fetch from other_staff table
+        try:
+            cursor.execute(
+                """
+                SELECT reg_no, username, name, dept, role FROM other_staff
+                WHERE COALESCE(suspended, FALSE) = FALSE
+                ORDER BY name ASC
+                """
+            )
+            rows = cursor.fetchall()
+            for r in rows:
+                r_reg = (r.get("reg_no") if isinstance(r, dict) else r[0]) or (r.get("username") if isinstance(r, dict) else r[1])
+                r_name = (r.get("name") if isinstance(r, dict) else r[2]) or r_reg
+                r_dept = (r.get("dept") if isinstance(r, dict) else r[3]) or ""
+                r_role = (r.get("role") if isinstance(r, dict) else r[4]) or "staff"
+
+                if r_reg and str(r_reg).strip():
+                    reg_str = str(r_reg).strip()
+                    if (reg_str.lower() != caller_reg_no.lower() and 
+                        reg_str.lower() != caller_username.lower() and 
+                        reg_str.lower() not in staff_map):
+                        staff_map[reg_str.lower()] = {
+                            "reg_no": reg_str,
+                            "name": str(r_name).strip() if r_name else reg_str,
+                            "dept": str(r_dept).strip() if r_dept else "",
+                            "role": str(r_role).strip() if r_role else "staff",
+                        }
+        except Exception as err2:
+            print(f"[PERMISSION] Error reading other_staff for staff list: {err2}")
+
+        staff_list = list(staff_map.values())
+        staff_list.sort(key=lambda x: (x.get("name") or "").lower())
+        return {"staff": staff_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/students/my-registered")
+def get_my_registered_students(request: Request):
+    """Fetch students registered under or belonging to the caller staff member/department."""
+    caller = verify_staff_token(request)
+    staff_reg_no = caller["reg_no"]
+    staff_dept = caller.get("dept") or ""
+    try:
+        students_map = {}
+
+        # 1. Fetch from student_face_profiles matching registered_by
+        cursor.execute(
+            """
+            SELECT reg_no, name, dept, registered_by, created_at
+            FROM student_face_profiles
+            WHERE LOWER(registered_by) = LOWER(?)
+            ORDER BY name ASC
+            """,
+            (staff_reg_no,)
+        )
+        rows = cursor.fetchall()
+        for r in rows:
+            if isinstance(r, dict):
+                s_reg = r.get("reg_no")
+                s_name = r.get("name")
+                s_dept = r.get("dept")
+                s_reg_by = r.get("registered_by")
+                s_created = r.get("created_at")
+            else:
+                s_reg = r[0]
+                s_name = r[1]
+                s_dept = r[2]
+                s_reg_by = r[3]
+                s_created = r[4] if len(r) > 4 else ""
+            if s_reg:
+                students_map[s_reg.lower()] = {
+                    "reg_no": s_reg,
+                    "name": s_name or s_reg,
+                    "dept": s_dept or "",
+                    "registered_by": s_reg_by or "",
+                    "created_at": str(s_created) if s_created else "",
+                }
+
+        # 2. Fetch from student_face_profiles matching department if any
+        if staff_dept:
+            cursor.execute(
+                """
+                SELECT reg_no, name, dept, registered_by, created_at
+                FROM student_face_profiles
+                WHERE LOWER(dept) = LOWER(?)
+                ORDER BY name ASC
+                """,
+                (staff_dept,)
+            )
+            rows = cursor.fetchall()
+            for r in rows:
+                if isinstance(r, dict):
+                    s_reg = r.get("reg_no")
+                    s_name = r.get("name")
+                    s_dept = r.get("dept")
+                    s_reg_by = r.get("registered_by")
+                    s_created = r.get("created_at")
+                else:
+                    s_reg = r[0]
+                    s_name = r[1]
+                    s_dept = r[2]
+                    s_reg_by = r[3]
+                    s_created = r[4] if len(r) > 4 else ""
+                if s_reg and s_reg.lower() not in students_map:
+                    students_map[s_reg.lower()] = {
+                        "reg_no": s_reg,
+                        "name": s_name or s_reg,
+                        "dept": s_dept or "",
+                        "registered_by": s_reg_by or "",
+                        "created_at": str(s_created) if s_created else "",
+                    }
+
+        # 3. Fetch from students table
+        try:
+            where_clause = "WHERE LOWER(dept) = LOWER(?)" if staff_dept else ""
+            params = (staff_dept,) if staff_dept else ()
+            cursor.execute(
+                f"""
+                SELECT reg_no, name, dept
+                FROM students
+                {where_clause}
+                ORDER BY name ASC
+                """,
+                params
+            )
+            rows = cursor.fetchall()
+            for r in rows:
+                if isinstance(r, dict):
+                    s_reg = r.get("reg_no")
+                    s_name = r.get("name")
+                    s_dept = r.get("dept")
+                else:
+                    s_reg = r[0]
+                    s_name = r[1]
+                    s_dept = r[2]
+                if s_reg and s_reg.lower() not in students_map:
+                    students_map[s_reg.lower()] = {
+                        "reg_no": s_reg,
+                        "name": s_name or s_reg,
+                        "dept": s_dept or "",
+                        "registered_by": staff_reg_no,
+                        "created_at": "",
+                    }
+        except Exception as e_s:
+            print(f"[MY-STUDENTS] Error reading students table: {e_s}")
+
+        # 4. Fallback to ALL student face profiles & students if map is still empty
+        if not students_map:
+            try:
+                cursor.execute(
+                    """
+                    SELECT reg_no, name, dept, registered_by, created_at
+                    FROM student_face_profiles
+                    ORDER BY name ASC
+                    """
+                )
+                rows = cursor.fetchall()
+                for r in rows:
+                    if isinstance(r, dict):
+                        s_reg = r.get("reg_no")
+                        s_name = r.get("name")
+                        s_dept = r.get("dept")
+                        s_reg_by = r.get("registered_by")
+                        s_created = r.get("created_at")
+                    else:
+                        s_reg = r[0]
+                        s_name = r[1]
+                        s_dept = r[2]
+                        s_reg_by = r[3]
+                        s_created = r[4] if len(r) > 4 else ""
+                    if s_reg and s_reg.lower() not in students_map:
+                        students_map[s_reg.lower()] = {
+                            "reg_no": s_reg,
+                            "name": s_name or s_reg,
+                            "dept": s_dept or "",
+                            "registered_by": s_reg_by or "",
+                            "created_at": str(s_created) if s_created else "",
+                        }
+            except Exception as e_fb:
+                print(f"[MY-STUDENTS] Fallback error: {e_fb}")
+
+        students_list = list(students_map.values())
+        students_list.sort(key=lambda x: (x.get("name") or "").lower())
+        return {"students": students_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/departments")
+def get_staff_departments(request: Request):
+    """Fetch distinct department names across institution."""
+    try:
+        cursor.execute("SELECT name FROM departments ORDER BY name ASC")
+        rows = cursor.fetchall()
+        depts = [r[0] if isinstance(r, (list, tuple)) else r.get("name") for r in rows if r]
+        if not depts:
+            cursor.execute("SELECT DISTINCT dept FROM users WHERE dept IS NOT NULL AND dept != ''")
+            rows = cursor.fetchall()
+            depts = [r[0] if isinstance(r, (list, tuple)) else r.get("dept") for r in rows if r]
+        unique_depts = sorted(list(set([d for d in depts if d])))
+        return {"departments": unique_depts}
+    except Exception as e:
+        return {"departments": ["CSE", "ECE", "EEE", "MECH", "CIVIL", "IT", "AI & ML", "Data Science"]}
+
+@app.post("/staff/permissions/grant")
+def grant_student_permission(req: GrantPermissionRequest, request: Request):
+    """Staff grants student attendance permission to another staff member."""
+    grantor = verify_staff_token(request)
+    grantor_reg_no = grantor["reg_no"]
+    grantee_reg_no = req.grantee_staff_reg_no.strip()
+
+    if grantor_reg_no.lower() == grantee_reg_no.lower():
+        raise HTTPException(status_code=400, detail="Cannot delegate permissions to yourself")
+
+    student_reg = req.student_reg_no.strip() if req.student_reg_no else None
+    if student_reg:
+        cursor.execute("SELECT registered_by, name FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)", (student_reg,))
+        stu_row = cursor.fetchone()
+        if not stu_row:
+            raise HTTPException(status_code=404, detail=f"Student '{student_reg}' not found")
+        reg_by = stu_row.get("registered_by") if isinstance(stu_row, dict) else stu_row[0]
+        if reg_by and str(reg_by).lower() != grantor_reg_no.lower() and str(grantor.get("role", "")).lower() not in ("admin", "hod"):
+            raise HTTPException(status_code=403, detail="You can only delegate access for students registered under you")
+
+    valid_until = None
+    if req.duration_days and req.duration_days > 0:
+        valid_until = datetime.now() + timedelta(days=req.duration_days)
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO staff_student_permissions
+            (grantor_staff_reg_no, grantee_staff_reg_no, student_reg_no, permission_type, valid_until, status)
+            VALUES (?, ?, ?, ?, ?, 'ACTIVE')
+            """,
+            (grantor_reg_no, grantee_reg_no, student_reg, req.permission_type, valid_until)
+        )
+        conn.commit()
+        return {"message": f"Access granted successfully to {grantee_reg_no}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/staff/permissions/revoke/{permission_id}")
+def revoke_student_permission(permission_id: int, request: Request):
+    """Staff revokes a granted permission."""
+    caller = verify_staff_token(request)
+    caller_reg_no = caller["reg_no"]
+    try:
+        cursor.execute(
+            """
+            UPDATE staff_student_permissions 
+            SET status = 'REVOKED', updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ? AND (LOWER(grantor_staff_reg_no) = LOWER(?) OR LOWER(?) IN ('admin', 'hod'))
+            """,
+            (permission_id, caller_reg_no, str(caller.get("role", "")).lower())
+        )
+        conn.commit()
+        return {"message": "Permission revoked successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/permissions/granted-by-me")
+def get_permissions_granted_by_me(request: Request):
+    """Fetch all permissions granted by caller to other staff members."""
+    caller = verify_staff_token(request)
+    caller_reg_no = caller["reg_no"]
+    try:
+        cursor.execute(
+            """
+            SELECT p.id, p.grantee_staff_reg_no, u.name as grantee_name, p.student_reg_no, 
+                   s.name as student_name, p.permission_type, p.valid_from, p.valid_until, p.status
+            FROM staff_student_permissions p
+            LEFT JOIN users u ON LOWER(p.grantee_staff_reg_no) = LOWER(u.reg_no)
+            LEFT JOIN student_face_profiles s ON LOWER(p.student_reg_no) = LOWER(s.reg_no)
+            WHERE LOWER(p.grantor_staff_reg_no) = LOWER(?)
+            ORDER BY p.created_at DESC
+            """,
+            (caller_reg_no,)
+        )
+        rows = cursor.fetchall()
+        permissions = []
+        for r in rows:
+            if isinstance(r, dict):
+                p_id = r.get("id")
+                p_grantee_reg = r.get("grantee_staff_reg_no")
+                p_grantee_name = r.get("grantee_name") or p_grantee_reg
+                p_stu_reg = r.get("student_reg_no")
+                p_stu_name = r.get("student_name") or ("ALL STUDENTS" if not p_stu_reg else "")
+                p_type = r.get("permission_type")
+                p_from = r.get("valid_from")
+                p_until = r.get("valid_until")
+                p_status = r.get("status")
+            else:
+                p_id = r[0]
+                p_grantee_reg = r[1]
+                p_grantee_name = r[2] or r[1]
+                p_stu_reg = r[3]
+                p_stu_name = r[4] or ("ALL STUDENTS" if not r[3] else "")
+                p_type = r[5]
+                p_from = r[6]
+                p_until = r[7]
+                p_status = r[8]
+            permissions.append({
+                "id": p_id,
+                "grantee_reg_no": p_grantee_reg,
+                "grantee_name": p_grantee_name,
+                "student_reg_no": p_stu_reg,
+                "student_name": p_stu_name,
+                "permission_type": p_type,
+                "valid_from": str(p_from) if p_from else "",
+                "valid_until": str(p_until) if p_until else "Permanent",
+                "status": p_status,
+            })
+        return {"granted_permissions": permissions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/staff/permissions/granted-to-me")
+def get_permissions_granted_to_me(request: Request):
+    """Fetch all permissions granted to caller by other staff members."""
+    caller = verify_staff_token(request)
+    caller_reg_no = caller["reg_no"]
+    try:
+        cursor.execute(
+            """
+            SELECT p.id, p.grantor_staff_reg_no, u.name as grantor_name, p.student_reg_no, 
+                   s.name as student_name, p.permission_type, p.valid_from, p.valid_until, p.status
+            FROM staff_student_permissions p
+            LEFT JOIN users u ON LOWER(p.grantor_staff_reg_no) = LOWER(u.reg_no)
+            LEFT JOIN student_face_profiles s ON LOWER(p.student_reg_no) = LOWER(s.reg_no)
+            WHERE LOWER(p.grantee_staff_reg_no) = LOWER(?) AND p.status = 'ACTIVE'
+            ORDER BY p.created_at DESC
+            """,
+            (caller_reg_no,)
+        )
+        rows = cursor.fetchall()
+        permissions = []
+        for r in rows:
+            if isinstance(r, dict):
+                p_id = r.get("id")
+                p_grantor_reg = r.get("grantor_staff_reg_no")
+                p_grantor_name = r.get("grantor_name") or p_grantor_reg
+                p_stu_reg = r.get("student_reg_no")
+                p_stu_name = r.get("student_name") or ("ALL STUDENTS" if not p_stu_reg else "")
+                p_type = r.get("permission_type")
+                p_from = r.get("valid_from")
+                p_until = r.get("valid_until")
+                p_status = r.get("status")
+            else:
+                p_id = r[0]
+                p_grantor_reg = r[1]
+                p_grantor_name = r[2] or r[1]
+                p_stu_reg = r[3]
+                p_stu_name = r[4] or ("ALL STUDENTS" if not r[3] else "")
+                p_type = r[5]
+                p_from = r[6]
+                p_until = r[7]
+                p_status = r[8]
+            permissions.append({
+                "id": p_id,
+                "grantor_reg_no": p_grantor_reg,
+                "grantor_name": p_grantor_name,
+                "student_reg_no": p_stu_reg,
+                "student_name": p_stu_name,
+                "permission_type": p_type,
+                "valid_from": str(p_from) if p_from else "",
+                "valid_until": str(p_until) if p_until else "Permanent",
+                "status": p_status,
+            })
+        return {"received_permissions": permissions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+# -------------------------------------------------
+@app.get("/student/attendance/logs")
+@app.get("/admin/student-attendance-logs")
+@app.get("/hod/student-attendance-logs")
+@app.get("/staff/student-attendance-logs")
+def get_student_attendance_logs(
+    request: Request,
+    start_date: str = None,
+    end_date: str = None,
+    dept: str = None,
+    status: str = None,
+    search: str = None,
+):
+    """
+    Fetch student attendance logs with strict role hierarchy:
+    - Admin: Full access across all departments.
+    - HOD: Restricted to their department.
+    - Staff: Restricted to students in their department or registered by them.
+    """
+    try:
+        # Extract caller identity from Bearer token
+        caller = None
+        try:
+            caller = verify_any_user_token(request)
+        except Exception as e_tok:
+            print(f"[STUDENT-LOGS] Token verification info: {e_tok}")
+
+        user_role = (caller.get("role") or "").lower() if caller else ""
+        user_dept = (caller.get("dept") or "").strip() if caller else ""
+        user_reg_no = (caller.get("reg_no") or "").strip() if caller else ""
+
+        # Enforce Hierarchy Scoping:
+        # Admin -> Full access (can pass any dept or ALL)
+        # HOD -> Restricted to HOD's department
+        # Staff -> Restricted to Staff's department or registered students
+        if user_role == "hod" and user_dept:
+            dept = user_dept
+        elif user_role in ["staff", "faculty", "other_staff"] and user_dept:
+            if not dept or dept.upper() == "ALL":
+                dept = user_dept
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = today_str
+        if not start_date:
+            now = datetime.now()
+            start_date = datetime(now.year, now.month, 1).strftime("%Y-%m-%d")
+
+        students_map = {}
+        
+        # Query student_face_profiles
+        q_sfp = "SELECT reg_no, name, dept FROM student_face_profiles WHERE 1=1"
+        p_sfp = []
+        if dept and dept.upper() != "ALL":
+            q_sfp += " AND LOWER(dept) = LOWER(?)"
+            p_sfp.append(dept)
+        if search and search.strip():
+            s_term = f"%{search.strip().lower()}%"
+            q_sfp += " AND (LOWER(name) LIKE ? OR LOWER(reg_no) LIKE ?)"
+            p_sfp.extend([s_term, s_term])
+
+        cursor.execute(q_sfp, p_sfp)
+        for r in cursor.fetchall():
+            r_reg = r.get("reg_no") if isinstance(r, dict) else r[0]
+            r_name = r.get("name") if isinstance(r, dict) else r[1]
+            r_dept = r.get("dept") if isinstance(r, dict) else r[2]
+            if r_reg:
+                students_map[r_reg.lower()] = {
+                    "reg_no": r_reg,
+                    "name": r_name or r_reg,
+                    "dept": r_dept or "GENERAL",
+                }
+
+        # Query students table
+        q_stu = "SELECT reg_no, name, dept FROM students WHERE 1=1"
+        p_stu = []
+        if dept and dept.upper() != "ALL":
+            q_stu += " AND LOWER(dept) = LOWER(?)"
+            p_stu.append(dept)
+        if search and search.strip():
+            s_term = f"%{search.strip().lower()}%"
+            q_stu += " AND (LOWER(name) LIKE ? OR LOWER(reg_no) LIKE ?)"
+            p_stu.extend([s_term, s_term])
+
+        try:
+            cursor.execute(q_stu, p_stu)
+            for r in cursor.fetchall():
+                r_reg = r.get("reg_no") if isinstance(r, dict) else r[0]
+                r_name = r.get("name") if isinstance(r, dict) else r[1]
+                r_dept = r.get("dept") if isinstance(r, dict) else r[2]
+                if r_reg and r_reg.lower() not in students_map:
+                    students_map[r_reg.lower()] = {
+                        "reg_no": r_reg,
+                        "name": r_name or r_reg,
+                        "dept": r_dept or "GENERAL",
+                    }
+        except Exception as e_s:
+            print(f"[STUDENT-LOGS] Error reading students table: {e_s}")
+
+        logs = []
+
+        # From attendance table
+        try:
+            q_att = """
+                SELECT reg_no, name, dept, timestamp, status
+                FROM attendance
+                WHERE timestamp::date >= ?::date AND timestamp::date <= ?::date
+            """
+            p_att = [start_date, end_date]
+            if dept and dept.upper() != "ALL":
+                q_att += " AND LOWER(dept) = LOWER(?)"
+                p_att.append(dept)
+            if search and search.strip():
+                s_term = f"%{search.strip().lower()}%"
+                q_att += " AND (LOWER(name) LIKE ? OR LOWER(reg_no) LIKE ?)"
+                p_att.extend([s_term, s_term])
+            q_att += " ORDER BY timestamp DESC"
+
+            cursor.execute(q_att, p_att)
+            for r in cursor.fetchall():
+                r_reg = r.get("reg_no") if isinstance(r, dict) else r[0]
+                r_name = r.get("name") if isinstance(r, dict) else r[1]
+                r_dept = r.get("dept") if isinstance(r, dict) else r[2]
+                r_ts = r.get("timestamp") if isinstance(r, dict) else r[3]
+                r_st = r.get("status") if isinstance(r, dict) else (r[4] if len(r) > 4 else "Present")
+
+                ts_str = str(r_ts) if r_ts else ""
+                log_date = ts_str.split(" ")[0] if " " in ts_str else ts_str.split("T")[0]
+                log_time = ts_str.split(" ")[1] if " " in ts_str else (ts_str.split("T")[1] if "T" in ts_str else "")
+
+                s_info = students_map.get((r_reg or "").lower(), {})
+                final_name = r_name or s_info.get("name") or r_reg
+                final_dept = r_dept or s_info.get("dept") or "GENERAL"
+
+                logs.append({
+                    "id": f"att_{r_reg}_{log_date}",
+                    "date": log_date,
+                    "reg_no": r_reg,
+                    "name": final_name,
+                    "dept": final_dept,
+                    "status": r_st if r_st else "Present",
+                    "entry_time": log_time[:5] if len(log_time) >= 5 else "08:30 AM",
+                    "exit_time": "04:30 PM",
+                    "method": "Face Recognition",
+                    "remarks": "On Time",
+                })
+        except Exception as e_att:
+            print(f"[STUDENT-LOGS] Error reading attendance table: {e_att}")
+
+        # Normalize any legacy 'Late' status to 'Present'
+        for l in logs:
+            if l.get("status") == "Late":
+                l["status"] = "Present"
+
+        if status and status.upper() != "ALL":
+            logs = [l for l in logs if l.get("status", "").lower() == status.lower()]
+
+        if search and search.strip():
+            sterm = search.strip().lower()
+            logs = [
+                l for l in logs
+                if sterm in l.get("name", "").lower() or sterm in l.get("reg_no", "").lower()
+            ]
+
+        total_rec = len(logs)
+        present_cnt = sum(1 for l in logs if l.get("status") == "Present")
+        absent_cnt = sum(1 for l in logs if l.get("status") == "Absent")
+        leave_cnt = sum(1 for l in logs if l.get("status") == "On Leave")
+        pct = round((present_cnt / total_rec * 100), 1) if total_rec > 0 else 0.0
+
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "dept": dept or "ALL",
+            "summary": {
+                "total_records": total_rec,
+                "present_count": present_cnt,
+                "absent_count": absent_cnt,
+                "leave_count": leave_cnt,
+                "present_percentage": pct,
+            },
+            "logs": logs,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # SERVER STARTUP
 # -------------------------------------------------
 if __name__ == "__main__":

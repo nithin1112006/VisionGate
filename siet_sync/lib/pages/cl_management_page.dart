@@ -717,7 +717,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                     return ListView(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       children: [
-                        // Header with Title and Month Pill
+                        // Header with Title, Month Pill, and Responsive Actions
                         Container(
                           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                           child: Column(
@@ -733,7 +733,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                         Text(
                                           'Casual Leave Management',
                                           style: TextStyle(
-                                            fontSize: 20,
+                                            fontSize: isSmallScreen ? 18 : 20,
                                             fontWeight: FontWeight.bold,
                                             color: isDark ? Colors.white : Colors.indigo.shade900,
                                           ),
@@ -749,125 +749,133 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                       ],
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Row(
-                                    children: [
-                                      OutlinedButton.icon(
-                                        onPressed: () async {
-                                          final current = _clExpiryDate != null && _clExpiryDate!.isNotEmpty
-                                              ? DateTime.tryParse(_clExpiryDate!) ?? DateTime.now()
-                                              : DateTime.now();
-                                          final picked = await showDatePicker(
-                                            context: context,
-                                            initialDate: current,
-                                            firstDate: DateTime.now().subtract(const Duration(days: 30)),
-                                            lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
-                                            helpText: 'SELECT CL EXPIRY DATE',
-                                          );
-                                          if (picked != null) {
-                                            final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-                                            await _updateCLExpiryDate(dateStr);
-                                          }
-                                        },
-                                        icon: const Icon(Icons.event_rounded, size: 14, color: Colors.indigo),
-                                        label: Text(
-                                          _clExpiryDate != null && _clExpiryDate!.isNotEmpty
-                                              ? 'Expires: $_clExpiryDate'
-                                              : 'Set Expiry Date',
-                                          style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.bold),
+                                  if (_currentMonth.isNotEmpty) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        gradient: const LinearGradient(
+                                          colors: [Colors.indigo, Colors.deepPurple],
                                         ),
-                                        style: OutlinedButton.styleFrom(
-                                          side: const BorderSide(color: Colors.indigo),
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                        ),
-                                      ),
-                                      if (_clExpiryDate != null && _clExpiryDate!.isNotEmpty) ...[
-                                        const SizedBox(width: 4),
-                                        IconButton(
-                                          icon: const Icon(Icons.clear, size: 16, color: Colors.grey),
-                                          tooltip: 'Clear Expiry Date',
-                                          onPressed: () => _updateCLExpiryDate(''),
-                                        ),
-                                      ],
-                                      const SizedBox(width: 8),
-                                      OutlinedButton.icon(
-                                        onPressed: () async {
-                                          final confirm = await showDialog<bool>(
-                                            context: context,
-                                            builder: (ctx) => AlertDialog(
-                                              title: const Text('Expire All CL Balances?'),
-                                              content: const Text('This will set all available and accumulated Casual Leave balances to 0 immediately.'),
-                                              actions: [
-                                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                                                ElevatedButton(
-                                                  onPressed: () => Navigator.pop(ctx, true),
-                                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                                                  child: const Text('Expire All CL', style: TextStyle(color: Colors.white)),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                          if (confirm == true) {
-                                            try {
-                                              final res = await http.post(
-                                                Uri.parse('${CollegeIPConfig.defaultURL}/admin/cl/expire'),
-                                                headers: {'Authorization': 'Bearer ${widget.token}'},
-                                              );
-                                              if (mounted && res.statusCode == 200) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('All CL balances expired successfully'), backgroundColor: Colors.red),
-                                                );
-                                                _loadCLData();
-                                              }
-                                            } catch (e) {
-                                              if (mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  SnackBar(content: Text('Error expiring CL: $e'), backgroundColor: Colors.red),
-                                                );
-                                              }
-                                            }
-                                          }
-                                        },
-                                        icon: const Icon(Icons.timer_off_rounded, size: 14, color: Colors.red),
-                                        label: const Text('Expire CL Now', style: TextStyle(fontSize: 12, color: Colors.red)),
-                                        style: OutlinedButton.styleFrom(
-                                          side: const BorderSide(color: Colors.red),
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          gradient: const LinearGradient(
-                                            colors: [Colors.indigo, Colors.deepPurple],
+                                        borderRadius: BorderRadius.circular(20),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.indigo.withValues(alpha: 0.2),
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 3),
                                           ),
-                                          borderRadius: BorderRadius.circular(20),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.indigo.withOpacity(0.2),
-                                              blurRadius: 8,
-                                              offset: const Offset(0, 3),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(Icons.calendar_month_rounded, color: Colors.white, size: 14),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              _currentMonth,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.white,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                        ],
                                       ),
-                                    ],
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.calendar_month_rounded, color: Colors.white, size: 14),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            _currentMonth,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: () async {
+                                      final current = _clExpiryDate != null && _clExpiryDate!.isNotEmpty
+                                          ? DateTime.tryParse(_clExpiryDate!) ?? DateTime.now()
+                                          : DateTime.now();
+                                      final picked = await showDatePicker(
+                                        context: context,
+                                        initialDate: current,
+                                        firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                                        lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
+                                        helpText: 'SELECT CL EXPIRY DATE',
+                                      );
+                                      if (picked != null) {
+                                        final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                                        await _updateCLExpiryDate(dateStr);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.event_rounded, size: 14, color: Colors.indigo),
+                                    label: Text(
+                                      _clExpiryDate != null && _clExpiryDate!.isNotEmpty
+                                          ? 'Expires: $_clExpiryDate'
+                                          : 'Set Expiry Date',
+                                      style: const TextStyle(fontSize: 11, color: Colors.indigo, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: Colors.indigo),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                  ),
+                                  if (_clExpiryDate != null && _clExpiryDate!.isNotEmpty)
+                                    IconButton(
+                                      icon: const Icon(Icons.clear, size: 16, color: Colors.grey),
+                                      tooltip: 'Clear Expiry Date',
+                                      constraints: const BoxConstraints(),
+                                      padding: const EdgeInsets.all(6),
+                                      onPressed: () => _updateCLExpiryDate(''),
+                                    ),
+                                  OutlinedButton.icon(
+                                    onPressed: () async {
+                                      final confirm = await showDialog<bool>(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          title: const Text('Expire All CL Balances?'),
+                                          content: const Text('This will set all available and accumulated Casual Leave balances to 0 immediately.'),
+                                          actions: [
+                                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                            ElevatedButton(
+                                              onPressed: () => Navigator.pop(ctx, true),
+                                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                              child: const Text('Expire All CL', style: TextStyle(color: Colors.white)),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (confirm == true) {
+                                        try {
+                                          final res = await http.post(
+                                            Uri.parse('${CollegeIPConfig.defaultURL}/admin/cl/expire'),
+                                            headers: {'Authorization': 'Bearer ${widget.token}'},
+                                          );
+                                          if (mounted && res.statusCode == 200) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('All CL balances expired successfully'), backgroundColor: Colors.red),
+                                            );
+                                            _loadCLData();
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('Error expiring CL: $e'), backgroundColor: Colors.red),
+                                            );
+                                          }
+                                        }
+                                      }
+                                    },
+                                    icon: const Icon(Icons.timer_off_rounded, size: 14, color: Colors.red),
+                                    label: const Text('Expire CL Now', style: TextStyle(fontSize: 11, color: Colors.red, fontWeight: FontWeight.bold)),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: Colors.red),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -1267,10 +1275,10 @@ class _CLManagementPageState extends State<CLManagementPage> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
-        color: isDark ? color.withOpacity(0.08) : color.withOpacity(0.04),
+        color: color.withValues(alpha: isDark ? 0.08 : 0.04),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDark ? color.withOpacity(0.15) : color.withOpacity(0.1),
+          color: color.withValues(alpha: isDark ? 0.15 : 0.1),
         ),
       ),
       child: Column(
@@ -1278,7 +1286,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
           Text(
             value.toString(),
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: FontWeight.bold,
               color: color,
             ),
@@ -1292,6 +1300,8 @@ class _CLManagementPageState extends State<CLManagementPage> {
               color: isDark ? Colors.white60 : Colors.grey.shade700,
             ),
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),

@@ -1280,7 +1280,7 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
     Widget welcomeCard() {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
@@ -1289,12 +1289,12 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                 ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
                 : [accent, const Color(0xFF7986CB)],
           ),
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
               color: accent.withValues(alpha: 0.3),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
@@ -1305,52 +1305,102 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Icon(
                     Icons.waving_hand,
                     color: Colors.white,
-                    size: 28,
+                    size: 24,
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Welcome back,',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
-                          fontSize: 14,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Welcome back,',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.8),
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              'OTHER STAFF',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 2),
                       Text(
                         widget.user['name'] ?? 'Staff',
-                        style: const TextStyle(
-                          fontSize: 22,
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 18 : 22,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.work,
+                        color: Colors.white.withValues(alpha: 0.9),
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Role: ${widget.user['role']?.toUpperCase() ?? 'STAFF'}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1358,47 +1408,20 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                       Icon(
                         Icons.badge,
                         color: Colors.white.withValues(alpha: 0.9),
-                        size: 18,
+                        size: 16,
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Text(
-                        'Role: $roleDisplayName',
+                        'ID: ${widget.user['reg_no'] ?? ''}',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 13,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (widget.user['regNo'] != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.perm_identity,
-                          color: Colors.white.withValues(alpha: 0.9),
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'ID: ${widget.user['regNo']}',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ],
@@ -1574,15 +1597,44 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                     ),
                     itemBuilder: (context, index) {
                       final record = recentAttendance[index];
+                      final when = _formatTimestamp(record['timestamp']);
+                      final isAbsent = record['status'] == 'Absent' ||
+                          record['punch_type'] == 'absent' ||
+                          record['punch_type'] == 'system_marked_absent' ||
+                          record['is_absent'] == true;
+                      final punchType = record['punch_type'] as String? ?? (isAbsent ? 'absent' : 'check_in');
+                      final isCheckOut = punchType == 'check_out';
+
+                      final punchColor = isAbsent
+                          ? const Color(0xFFEF4444)
+                          : isCheckOut
+                              ? Colors.orange
+                              : const Color(0xFF10B981);
+
+                      final punchIcon = isAbsent
+                          ? Icons.cancel_rounded
+                          : isCheckOut
+                              ? Icons.logout_rounded
+                              : Icons.login_rounded;
+
+                      final punchLabel = isAbsent
+                          ? 'Absent'
+                          : isCheckOut
+                              ? 'Check Out'
+                              : 'Check In';
+
+                      final regNo = record['reg_no'] ?? record['regNo'] ?? '';
+                      final dept = record['dept'] ?? record['department'] ?? '';
+                      final regAndDept = [if (regNo.toString().isNotEmpty) regNo, if (dept.toString().isNotEmpty) dept].join(' • ');
+                      final reason = record['absent_reason'] ?? record['reason'] ?? (isAbsent ? 'System marked absent' : null);
+                      final session = record['session_label'] ?? record['session'] ?? record['session_type'];
+                      final timeText = (session != null && session.toString().isNotEmpty) ? '$session • $when' : when;
+
                       final avatarRadius = isSmallScreen ? 14.0 : 18.0;
                       final avatarIconSize = isSmallScreen ? 14.0 : 18.0;
                       final titleSize = isSmallScreen ? 13.0 : 14.0;
                       final subtitleSize = isSmallScreen ? 11.0 : 12.0;
-                      final punchType = record['punch_type'] as String? ?? 'check_in';
-                      final isCheckOut = punchType == 'check_out';
-                      final punchColor = isCheckOut ? Colors.orange : accent;
-                      final punchIcon = isCheckOut ? Icons.logout : Icons.login;
-                      final punchLabel = isCheckOut ? 'Check Out' : 'Check In';
+
                       return ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                         leading: CircleAvatar(
@@ -1601,13 +1653,18 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                             fontWeight: FontWeight.w600,
                             color: isDark ? Colors.white : Colors.black87,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
-                          record['reg_no'] ?? '',
+                          isAbsent
+                              ? '$regAndDept\nReason: $reason'
+                              : regAndDept,
                           style: TextStyle(
                             fontSize: subtitleSize,
                             color: isDark ? Colors.white60 : Colors.grey.shade600,
                           ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: isAbsent ? 2 : 1,
                         ),
                         trailing: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -1615,10 +1672,10 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: punchColor.withValues(alpha: isDark ? 0.22 : 0.10),
-                                borderRadius: BorderRadius.circular(5),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: punchColor.withValues(alpha: 0.35),
                                   width: 0.8,
@@ -1635,7 +1692,7 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                             ),
                             const SizedBox(height: 3),
                             Text(
-                              _formatTimestamp(record['timestamp']),
+                              timeText,
                               style: TextStyle(
                                 color: isDark ? Colors.white54 : Colors.grey[600],
                                 fontSize: 10,
@@ -1814,26 +1871,30 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
               crossAxisCount: 2,
               crossAxisSpacing: gridSpacing,
               mainAxisSpacing: gridSpacing,
-              childAspectRatio: 1.15,
+              childAspectRatio: 1.65,
               physics: const NeverScrollableScrollPhysics(),
               children: [
                 bentoCard(
                   accentColor: Colors.green,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Present',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Present',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.check_circle_rounded, color: Colors.green, size: 18),
+                        ],
                       ),
                       Text(
                         presentDays.toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1844,19 +1905,23 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                   accentColor: Colors.red,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.cancel_rounded, color: Colors.red, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Absent',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Absent',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.cancel_rounded, color: Colors.red, size: 18),
+                        ],
                       ),
                       Text(
                         absentDays.toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1867,19 +1932,23 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
                   accentColor: accent,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(Icons.calendar_month_rounded, color: accent, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Total Shifts',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Total Shifts',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          Icon(Icons.calendar_month_rounded, color: accent, size: 18),
+                        ],
                       ),
                       Text(
                         (presentDays + absentDays).toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),

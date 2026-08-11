@@ -12,6 +12,7 @@ class AppSettings {
   static bool enforceGeoFence = true;
   static bool enforceAppGeoFence = true;
   static bool enforceVpnBlocking = true;
+  static bool multiUserKioskMode = false;
   static bool _isLoaded = false;
   static DateTime? _lastLoaded;
   static const Duration _cacheExpiry = Duration(seconds: 10);
@@ -32,7 +33,7 @@ class AppSettings {
           .timeout(
             const Duration(seconds: 3),
             onTimeout: () => http.Response(
-              '{"allow_any_network": false, "college_ssid": "", "enforce_geo_fence": true, "enforce_app_geo_fence": true, "enforce_vpn_blocking": true}',
+              '{"allow_any_network": false, "college_ssid": "", "enforce_geo_fence": true, "enforce_app_geo_fence": true, "enforce_vpn_blocking": true, "multi_user_kiosk_mode": false}',
               200,
             ),
           );
@@ -46,6 +47,7 @@ class AppSettings {
         enforceGeoFence = data['enforce_geo_fence'] ?? true;
         enforceAppGeoFence = data['enforce_app_geo_fence'] ?? true;
         enforceVpnBlocking = data['enforce_vpn_blocking'] ?? true;
+        multiUserKioskMode = data['multi_user_kiosk_mode'] ?? false;
       }
     } catch (e) {
       if (!_isLoaded) {
@@ -53,6 +55,8 @@ class AppSettings {
         collegeSSID = '';
         enforceGeoFence = true;
         enforceAppGeoFence = true;
+        enforceVpnBlocking = true;
+        multiUserKioskMode = false;
       }
     }
     _isLoaded = true;

@@ -1,4 +1,4 @@
-"""Attenda - Automated Face Attendance System
+"""VisionGate - Automated Face Attendance System
 
 Main application entry point using modular async architecture.
 """
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan context manager for startup/shutdown events."""
     # Startup
-    logger.info("Starting Attenda application...")
+    logger.info("Starting VisionGate application...")
 
     # Initialize database pool
     await db_pool.init_pool()
@@ -33,14 +33,14 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down Attenda application...")
+    logger.info("Shutting down VisionGate application...")
     await db_pool.close()
     logger.info("Application shutdown complete")
 
 
 # Create FastAPI app with lifespan
 app = FastAPI(
-    title="Attenda - Automated Face Attendance System",
+    title="VisionGate - Automated Face Attendance System",
     description="Secure face recognition based attendance system with real-time verification",
     version="2.0.0",
     lifespan=lifespan,
@@ -69,7 +69,7 @@ async def health_check():
 async def root():
     """Root endpoint."""
     return {
-        "message": "Attenda - Automated Face Attendance System",
+        "message": "VisionGate - Automated Face Attendance System",
         "version": "2.0.0",
         "status": "running"
     }

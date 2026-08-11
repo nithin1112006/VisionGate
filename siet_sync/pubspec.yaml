@@ -1,5 +1,5 @@
-name: faculty_sphere
-description: "StaffSync - Automated Face Attendance System with Live Camera"
+name: vision_gate
+description: "VisionGate - Automated Face Attendance System with Live Camera"
 
 publish_to: 'none'
 
@@ -54,6 +54,10 @@ dependencies:
   # 📊 Charts for attendance pie charts on dashboards
   fl_chart: ^0.69.0
 
+  # 🔤 Google Fonts for modern typography
+  google_fonts: ^6.2.1
+  intl: ^0.20.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -62,17 +66,18 @@ dev_dependencies:
 
   flutter_launcher_icons: ^0.14.1
 
-flutter_icons:
+flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/logo.png"
+  image_path: "assets/images/icon.png"
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logo.png"
+  adaptive_icon_foreground: "assets/images/icon.png"
   remove_alpha_ios: true
 
 flutter:
   uses-material-design: true
 
   assets:
+    - assets/images/icon.png
     - assets/images/logo.png
     - assets/thirukkural.json

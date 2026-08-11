@@ -122,7 +122,7 @@ class _MyAppState extends State<MyApp> {
             return child!;
           },
           debugShowCheckedModeBanner: false,
-          title: 'StaffSync',
+          title: 'VisionGate',
           themeMode: themeService.themeMode,
           theme: ThemeData(
             useMaterial3: true,

@@ -22,6 +22,9 @@ import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
 import '../services/leave_balance_notifier.dart';
 import '../services/pre_verification_service.dart';
+import '../widgets/staff_multi_user_kiosk_tab.dart';
+import '../widgets/staff_student_permissions_widget.dart';
+import '../widgets/student_attendance_log_widget.dart';
 import 'attendance_log_page.dart';
 
 
@@ -427,23 +430,124 @@ class StaffDashboardPage extends StatefulWidget {
 
 class _StaffDashboardPageState extends State<StaffDashboardPage> {
   int _selectedIndex = 0;
+  bool _isKioskEnabled = true;
   StreamSubscription<String>? _warningSub;
 
   final List<Widget> _pages = [];
-  final List<String> _titles = [
-    'Dashboard',
-    'Mark My Attendance',
-    'My Face',
-    'Leave Requests',
-    'Attendance Log',
-    'Settings',
-  ];
+  final List<String> _titles = [];
+
+  List<NavDestination> get _navDestinations {
+    final list = <NavDestination>[
+      const NavDestination(
+        icon: Icons.dashboard_outlined,
+        selectedIcon: Icons.dashboard_rounded,
+        label: 'Dashboard',
+      ),
+      const NavDestination(
+        icon: Icons.qr_code_scanner_outlined,
+        selectedIcon: Icons.qr_code_scanner_rounded,
+        label: 'Attend',
+      ),
+      const NavDestination(
+        icon: Icons.face_outlined,
+        selectedIcon: Icons.face_rounded,
+        label: 'My Face',
+      ),
+      const NavDestination(
+        icon: Icons.verified_user_outlined,
+        selectedIcon: Icons.verified_user_rounded,
+        label: 'Permissions',
+      ),
+      const NavDestination(
+        icon: Icons.event_note_outlined,
+        selectedIcon: Icons.event_note_rounded,
+        label: 'Leave',
+      ),
+      const NavDestination(
+        icon: Icons.history_edu_outlined,
+        selectedIcon: Icons.history_edu_rounded,
+        label: 'Log',
+      ),
+      const NavDestination(
+        icon: Icons.person_search_outlined,
+        selectedIcon: Icons.person_search_rounded,
+        label: 'Student Log',
+      ),
+      const NavDestination(
+        icon: Icons.settings_outlined,
+        selectedIcon: Icons.settings_rounded,
+        label: 'Settings',
+      ),
+    ];
+    if (_isKioskEnabled) {
+      list.insert(
+        2,
+        const NavDestination(
+          icon: Icons.storefront_outlined,
+          selectedIcon: Icons.storefront,
+          label: 'Kiosk',
+        ),
+      );
+    }
+    return list;
+  }
+
+  void _rebuildPages() {
+    _titles.clear();
+    _pages.clear();
+
+    _titles.add('Dashboard');
+    _pages.add(
+      StaffDashboardTab(
+        token: widget.token,
+        user: widget.user,
+        isKioskEnabled: _isKioskEnabled,
+        onTabSelected: _onTabSelected,
+      ),
+    );
+
+    _titles.add('Mark My Attendance');
+    _pages.add(StaffMarkAttendanceTab(token: widget.token, user: widget.user));
+
+    if (_isKioskEnabled) {
+      _titles.add('Multi-User Kiosk');
+      _pages.add(StaffMultiUserKioskTab(token: widget.token, user: widget.user));
+    }
+
+    _titles.addAll([
+      'My Face',
+      'Student Permissions',
+      'Leave Requests',
+      'Attendance Log',
+      'Student Log',
+      'Settings',
+    ]);
+
+    _pages.addAll([
+      StaffFaceRegisterTab(token: widget.token, user: widget.user),
+      StaffStudentPermissionsWidget(
+        staffRegNo: (widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString(),
+        staffDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+        sessionToken: widget.token,
+      ),
+      StaffLeaveRequestTab(token: widget.token),
+      AttendanceLogTab(token: widget.token, user: widget.user),
+      StudentAttendanceLogWidget(
+        token: widget.token,
+        user: widget.user,
+        isHod: false,
+        isAdmin: false,
+        defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+      ),
+      UserSettingsTab(title: 'Staff Settings', token: widget.token),
+    ]);
+  }
 
   void _onTabSelected(int index) {
     setState(() {
       _selectedIndex = index;
     });
-    if (index == 3) {
+    if (_titles.length > index && _titles[index].toLowerCase().contains('leave')) {
       LeaveBalanceNotifier.instance.notifyBalanceChanged();
     }
   }
@@ -482,9 +586,36 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     }
   }
 
+  Future<void> _checkKioskPermission() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$API_URL/staff/kiosk/status'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) {
+          setState(() {
+            _isKioskEnabled = data['kiosk_enabled'] == true;
+            _rebuildPages();
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted && !_isKioskEnabled) {
+        setState(() {
+          _isKioskEnabled = true;
+          _rebuildPages();
+        });
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _rebuildPages();
+    _checkKioskPermission();
     _checkOfflineViolations();
     if (!kIsWeb) {
       LocationTrackingService.instance.startTracking(
@@ -501,18 +632,6 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         }
       });
     }
-    _pages.addAll([
-      StaffDashboardTab(
-        token: widget.token,
-        user: widget.user,
-        onTabSelected: _onTabSelected,
-      ),
-      StaffMarkAttendanceTab(token: widget.token, user: widget.user),
-      StaffFaceRegisterTab(token: widget.token, user: widget.user),
-      StaffLeaveRequestTab(token: widget.token),
-      AttendanceLogTab(token: widget.token, user: widget.user),
-      UserSettingsTab(title: 'Staff Settings', token: widget.token),
-    ]);
   }
 
   void _logout() async {
@@ -535,52 +654,18 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     super.dispose();
   }
 
-  static const List<NavDestination> _navDestinations = [
-    NavDestination(
-      icon: Icons.dashboard_outlined,
-      selectedIcon: Icons.dashboard_rounded,
-      label: 'Dashboard',
-    ),
-    NavDestination(
-      icon: Icons.qr_code_scanner_outlined,
-      selectedIcon: Icons.qr_code_scanner_rounded,
-      label: 'Attend',
-    ),
-    NavDestination(
-      icon: Icons.face_outlined,
-      selectedIcon: Icons.face_rounded,
-      label: 'My Face',
-    ),
-    NavDestination(
-      icon: Icons.event_note_outlined,
-      selectedIcon: Icons.event_note_rounded,
-      label: 'Leave',
-    ),
-    NavDestination(
-      icon: Icons.history_edu_outlined,
-      selectedIcon: Icons.history_edu_rounded,
-      label: 'Log',
-    ),
-    NavDestination(
-      icon: Icons.settings_outlined,
-      selectedIcon: Icons.settings_rounded,
-      label: 'Settings',
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final iOSBlue = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final scaffold = AdaptiveScaffold(
-      title: _titles[_selectedIndex],
-      selectedIndex: _selectedIndex,
+      title: _titles.isNotEmpty && _selectedIndex < _titles.length
+          ? _titles[_selectedIndex]
+          : 'Staff Panel',
+      selectedIndex: _selectedIndex < _navDestinations.length ? _selectedIndex : 0,
       onDestinationSelected: (index) {
-        setState(() => _selectedIndex = index);
-        if (index == 3) {
-          LeaveBalanceNotifier.instance.notifyBalanceChanged();
-        }
+        _onTabSelected(index);
       },
       destinations: _navDestinations,
       accentColor: iOSBlue,
@@ -658,27 +743,20 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
               ),
             ),
           ],
-          RefreshIndicator(
-            onRefresh: () async {
-              setState(() {
-                _pages.clear();
-                _pages.addAll([
-                  StaffDashboardTab(
-                    token: widget.token,
-                    user: widget.user,
-                    onTabSelected: _onTabSelected,
+          Positioned.fill(
+            child: (_pages[_selectedIndex] is StaffMultiUserKioskTab ||
+                    _pages[_selectedIndex] is StaffStudentPermissionsWidget)
+                ? _pages[_selectedIndex]
+                : RefreshIndicator(
+                    onRefresh: () async {
+                      setState(() {
+                        _rebuildPages();
+                      });
+                      await Future.delayed(const Duration(milliseconds: 100));
+                    },
+                    color: iOSBlue,
+                    child: _pages[_selectedIndex],
                   ),
-                  StaffMarkAttendanceTab(token: widget.token, user: widget.user),
-                  StaffFaceRegisterTab(token: widget.token, user: widget.user),
-                  StaffLeaveRequestTab(token: widget.token),
-                  AttendanceLogTab(token: widget.token, user: widget.user),
-                  UserSettingsTab(title: 'Staff Settings', token: widget.token),
-                ]);
-              });
-              await Future.delayed(const Duration(milliseconds: 100));
-            },
-            color: iOSBlue,
-            child: _pages[_selectedIndex],
           ),
         ],
       ),
@@ -766,42 +844,13 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
               ),
             ),
             const SizedBox(height: 12),
-            _buildDrawerItem(
-              0,
-              Icons.dashboard_rounded,
-              'Dashboard',
-              Icons.dashboard_outlined,
-            ),
-            _buildDrawerItem(
-              1,
-              Icons.qr_code_scanner_rounded,
-              'Mark Attendance',
-              Icons.qr_code_scanner_outlined,
-            ),
-            _buildDrawerItem(
-              2,
-              Icons.face_rounded,
-              'My Face',
-              Icons.face_outlined,
-            ),
-            _buildDrawerItem(
-              3,
-              Icons.event_note_rounded,
-              'Leave Requests',
-              Icons.event_note_outlined,
-            ),
-            _buildDrawerItem(
-              4,
-              Icons.history_edu_rounded,
-              'Attendance Log',
-              Icons.history_edu_outlined,
-            ),
-            _buildDrawerItem(
-              5,
-              Icons.settings_rounded,
-              'Settings',
-              Icons.settings_outlined,
-            ),
+            for (int i = 0; i < _navDestinations.length; i++)
+              _buildDrawerItem(
+                i,
+                _navDestinations[i].selectedIcon,
+                _navDestinations[i].label,
+                _navDestinations[i].icon,
+              ),
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -915,12 +964,14 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
 class StaffDashboardTab extends StatefulWidget {
   final String token;
   final Map<String, dynamic> user;
+  final bool isKioskEnabled;
   final Function(int)? onTabSelected;
 
   const StaffDashboardTab({
     super.key,
     required this.token,
     required this.user,
+    this.isKioskEnabled = true,
     this.onTabSelected,
   });
 
@@ -984,20 +1035,63 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
   }
 
   // Available drawer items for quick access
-  final List<DrawerItem> _drawerItems = const [
-    DrawerItem(
-      index: 1,
-      icon: Icons.qr_code_scanner_rounded,
-      title: 'Mark Attendance',
-    ),
-    DrawerItem(index: 2, icon: Icons.face_rounded, title: 'My Face'),
-    DrawerItem(
-      index: 3,
-      icon: Icons.event_note_rounded,
-      title: 'Leave Requests',
-    ),
-    DrawerItem(index: 4, icon: Icons.settings_rounded, title: 'Settings'),
-  ];
+  List<DrawerItem> get _drawerItems {
+    if (widget.isKioskEnabled) {
+      return const [
+        DrawerItem(
+          index: 1,
+          icon: Icons.qr_code_scanner_rounded,
+          title: 'Mark Attendance',
+        ),
+        DrawerItem(
+          index: 2,
+          icon: Icons.storefront_rounded,
+          title: 'Multi-User Kiosk',
+        ),
+        DrawerItem(index: 3, icon: Icons.face_rounded, title: 'My Face'),
+        DrawerItem(
+          index: 4,
+          icon: Icons.event_note_rounded,
+          title: 'Leave Requests',
+        ),
+        DrawerItem(
+          index: 5,
+          icon: Icons.history_edu_rounded,
+          title: 'Attendance Log',
+        ),
+        DrawerItem(
+          index: 6,
+          icon: Icons.person_search_rounded,
+          title: 'Student Log',
+        ),
+        DrawerItem(index: 7, icon: Icons.settings_rounded, title: 'Settings'),
+      ];
+    }
+    return const [
+      DrawerItem(
+        index: 1,
+        icon: Icons.qr_code_scanner_rounded,
+        title: 'Mark Attendance',
+      ),
+      DrawerItem(index: 2, icon: Icons.face_rounded, title: 'My Face'),
+      DrawerItem(
+        index: 3,
+        icon: Icons.event_note_rounded,
+        title: 'Leave Requests',
+      ),
+      DrawerItem(
+        index: 4,
+        icon: Icons.history_edu_rounded,
+        title: 'Attendance Log',
+      ),
+      DrawerItem(
+        index: 5,
+        icon: Icons.person_search_rounded,
+        title: 'Student Log',
+      ),
+      DrawerItem(index: 6, icon: Icons.settings_rounded, title: 'Settings'),
+    ];
+  }
 
   // Handle quick access widget tap - navigate to the selected tab
   void _onQuickAccessWidgetTap(int index) {
@@ -1099,6 +1193,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
     }
   }
 
+  // ignore: unused_element
   void _showMyAttendanceDetails() {
     showDialog(
       context: context,
@@ -1123,6 +1218,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
     final recentAttendance = data?['recent_attendance'] ?? [];
     final pagePadding = Breakpoints.pagePadding(screenWidth);
     final isWide = screenWidth >= 900;
+    final isSmallScreen = screenWidth < 400;
     final gridSpacing = Breakpoints.gridSpacing(screenWidth);
 
     // A beautiful Glass Bento Card helper
@@ -1192,223 +1288,6 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
       );
     }
 
-    Widget welcomeCard() {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isDark
-                ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
-                : [iOSBlue, const Color(0xFF5AC8FA)],
-          ),
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: iOSBlue.withValues(alpha: 0.3),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Icon(
-                    Icons.waving_hand,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Welcome back,',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
-                          fontSize: 14,
-                        ),
-                      ),
-                      Text(
-                        widget.user['name'] ?? 'Staff',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.school,
-                    color: Colors.white.withValues(alpha: 0.9),
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Department: ${widget.user['dept']?.toUpperCase() ?? 'FACULTY'}',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    Widget dynamicProgressBento() {
-      // Use historical breakdown from daily_attendance_status for pie chart
-      final double fullDay = (stats['hist_full_day_count'] as num? ?? presentDays).toDouble();
-      final double halfDay = (stats['hist_half_day_count'] as num? ?? 0.0).toDouble();
-      final double absent  = (stats['hist_absent_count']   as num? ?? absentDays).toDouble();
-      final double onLeave = (stats['hist_leave_count']    as num? ?? 0.0).toDouble();
-
-      // Today's status from server
-      final String? todayStatus      = stats['today_status'] as String?;
-      final String? todayFirstHalf   = stats['today_first_half'] as String?;
-      final String? todaySecondHalf  = stats['today_second_half'] as String?;
-
-      Color _statusColor(String? s) {
-        switch (s) {
-          case 'Present': return const Color(0xFF10B981);
-          case 'Half Day': return Colors.orange;
-          case 'Absent':  return const Color(0xFFEF4444);
-          case 'Leave':   return const Color(0xFF8B5CF6);
-          default:        return Colors.grey;
-        }
-      }
-
-      String displayTodayStatus = todayStatus ?? '';
-      if (todayStatus == 'Half Day') {
-        if (todayFirstHalf == 'Present') {
-          final anLabel = todaySecondHalf ?? 'Pending';
-          displayTodayStatus = '0.5 (FN Present • AN $anLabel)';
-        } else if (todaySecondHalf == 'Present') {
-          final fnLabel = todayFirstHalf ?? 'Pending';
-          displayTodayStatus = '0.5 (AN Present • FN $fnLabel)';
-        }
-      }
-
-      return bentoCard(
-        accentColor: Colors.teal,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Attendance Health',
-              style: TextStyle(
-                color: isDark ? Colors.white70 : Colors.black54,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            // Today's half-day status pills
-            if (todayFirstHalf != null || todaySecondHalf != null) ...[  
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  if (todayFirstHalf != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      margin: const EdgeInsets.only(right: 6),
-                      decoration: BoxDecoration(
-                        color: _statusColor(todayFirstHalf).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _statusColor(todayFirstHalf), width: 0.8),
-                      ),
-                      child: Text(
-                        '1st: $todayFirstHalf',
-                        style: TextStyle(
-                          color: _statusColor(todayFirstHalf),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  if (todaySecondHalf != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _statusColor(todaySecondHalf).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _statusColor(todaySecondHalf), width: 0.8),
-                      ),
-                      child: Text(
-                        '2nd: $todaySecondHalf',
-                        style: TextStyle(
-                          color: _statusColor(todaySecondHalf),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 4),
-            Expanded(
-              child: Center(
-                child: AttendancePieChart(
-                  fullDay: fullDay.toInt(),
-                  halfDay: halfDay.toInt(),
-                  absent: absent.toInt(),
-                  onLeave: onLeave.toInt(),
-                  centerLabel: 'Days',
-                  centerSpaceRadius: 36,
-                ),
-              ),
-            ),
-            if (todayStatus != null) ...[  
-              const SizedBox(height: 4),
-              Text(
-                'Today: $displayTodayStatus',
-                style: TextStyle(
-                  color: _statusColor(todayStatus),
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ],
-        ),
-      );
-    }
-
     Widget recentAttendancePanel() {
       return Container(
         decoration: BoxDecoration(
@@ -1472,26 +1351,50 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                     itemBuilder: (context, index) {
                       final record = recentAttendance[index];
                       final when = _formatTimestamp(record['timestamp']);
-                      final punchType = record['punch_type'] as String? ?? 'check_in';
+                      final isAbsent = record['status'] == 'Absent' ||
+                          record['punch_type'] == 'absent' ||
+                          record['punch_type'] == 'system_marked_absent' ||
+                          record['is_absent'] == true;
+                      final punchType = record['punch_type'] as String? ?? (isAbsent ? 'absent' : 'check_in');
                       final isCheckOut = punchType == 'check_out';
-                      final punchColor = isCheckOut ? Colors.orange : Colors.green;
-                      final punchIcon = isCheckOut ? Icons.logout : Icons.login;
-                      final punchLabel = isCheckOut ? 'Check Out' : 'Check In';
+
+                      final punchColor = isAbsent
+                          ? const Color(0xFFEF4444)
+                          : isCheckOut
+                              ? Colors.orange
+                              : const Color(0xFF10B981);
+
+                      final punchIcon = isAbsent
+                          ? Icons.cancel_rounded
+                          : isCheckOut
+                              ? Icons.logout_rounded
+                              : Icons.login_rounded;
+
+                      final punchLabel = isAbsent
+                          ? 'Absent'
+                          : isCheckOut
+                              ? 'Check Out'
+                              : 'Check In';
+
+                      final regNo = record['reg_no'] ?? record['regNo'] ?? '';
+                      final dept = record['dept'] ?? record['department'] ?? '';
+                      final regAndDept = [if (regNo.toString().isNotEmpty) regNo, if (dept.toString().isNotEmpty) dept].join(' • ');
+                      final reason = record['absent_reason'] ?? record['reason'] ?? (isAbsent ? 'System marked absent' : null);
+                      final session = record['session_label'] ?? record['session'] ?? record['session_type'];
+                      final timeText = (session != null && session.toString().isNotEmpty) ? '$session • $when' : when;
+
                       return ListTile(
                         leading: Container(
-                          padding: const EdgeInsets.all(8),
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: isCheckOut
-                                  ? [Colors.orange.shade600, Colors.deepOrange]
-                                  : [Colors.green, Colors.teal],
-                            ),
-                            borderRadius: BorderRadius.circular(10),
+                            color: punchColor.withValues(alpha: 0.12),
+                            shape: BoxShape.circle,
                           ),
                           child: Icon(
                             punchIcon,
                             size: 18,
-                            color: Colors.white,
+                            color: punchColor,
                           ),
                         ),
                         title: Text(
@@ -1501,13 +1404,18 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                             color: isDark ? Colors.white : Colors.black87,
                             fontSize: 14,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
-                          record['reg_no'] ?? '',
+                          isAbsent
+                              ? '$regAndDept\nReason: $reason'
+                              : regAndDept,
                           style: TextStyle(
                             color: isDark ? Colors.white60 : Colors.grey.shade600,
                             fontSize: 12,
                           ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: isAbsent ? 2 : 1,
                         ),
                         trailing: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -1515,10 +1423,10 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: punchColor.withValues(alpha: isDark ? 0.25 : 0.12),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: punchColor.withValues(alpha: 0.4),
                                   width: 0.8,
@@ -1535,7 +1443,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                             ),
                             const SizedBox(height: 3),
                             Text(
-                              when,
+                              timeText,
                               style: TextStyle(
                                 color: isDark ? Colors.white54 : Colors.grey.shade600,
                                 fontSize: 10,
@@ -1546,6 +1454,165 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                       );
                     },
                   ),
+          ],
+        ),
+      );
+    }
+
+    Widget welcomeCard() {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
+                : [iOSBlue, const Color(0xFF5AC8FA)],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: iOSBlue.withValues(alpha: 0.3),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.waving_hand,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Welcome back,',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.8),
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              'STAFF',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.user['name'] ?? 'Staff',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 18 : 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.school,
+                    color: Colors.white.withValues(alpha: 0.9),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Department: ${widget.user['dept']?.toUpperCase() ?? 'FACULTY'}',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget dynamicProgressBento() {
+      // Use historical breakdown from daily_attendance_status for pie chart
+      final double fullDay = (stats['hist_full_day_count'] as num? ?? presentDays).toDouble();
+      final double halfDay = (stats['hist_half_day_count'] as num? ?? 0.0).toDouble();
+      final double absent  = (stats['hist_absent_count']   as num? ?? absentDays).toDouble();
+      final double onLeave = (stats['hist_leave_count']    as num? ?? 0.0).toDouble();
+
+      return bentoCard(
+        accentColor: iOSBlue,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'My Attendance Distribution',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: AttendancePieChart(
+                fullDay: fullDay.toInt(),
+                halfDay: halfDay.toInt(),
+                absent: absent.toInt(),
+                onLeave: onLeave.toInt(),
+                centerLabel: 'Days',
+                centerSpaceRadius: screenWidth < 400 ? 32 : 44,
+              ),
+            ),
           ],
         ),
       );
@@ -1714,26 +1781,30 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
               crossAxisCount: 2,
               crossAxisSpacing: gridSpacing,
               mainAxisSpacing: gridSpacing,
-              childAspectRatio: 1.15,
+              childAspectRatio: 1.65,
               physics: const NeverScrollableScrollPhysics(),
               children: [
                 bentoCard(
                   accentColor: Colors.green,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Present',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Present',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.check_circle_rounded, color: Colors.green, size: 18),
+                        ],
                       ),
                       Text(
                         presentDays.toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1744,19 +1815,23 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                   accentColor: Colors.red,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.cancel_rounded, color: Colors.red, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Absent',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Absent',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const Icon(Icons.cancel_rounded, color: Colors.red, size: 18),
+                        ],
                       ),
                       Text(
                         absentDays.toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1767,19 +1842,23 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
                   accentColor: iOSBlue,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(Icons.calendar_month_rounded, color: iOSBlue, size: 28),
-                      const Spacer(),
-                      Text(
-                        'Total Days',
-                        style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Total Days',
+                            style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          Icon(Icons.calendar_month_rounded, color: iOSBlue, size: 18),
+                        ],
                       ),
                       Text(
                         (presentDays + absentDays).toString(),
                         style: TextStyle(
                           color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1819,61 +1898,6 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               bentoGrid(),
-              const SizedBox(height: 20),
-              // View detailed attendance button - iOS style
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: iOSBlue.withValues(alpha: isDark ? 0.15 : 0.08),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: iOSBlue.withValues(alpha: 0.3)),
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _showMyAttendanceDetails,
-                    borderRadius: BorderRadius.circular(16),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 16,
-                        horizontal: 20,
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: iOSBlue.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(
-                              Icons.calendar_month,
-                              color: iOSBlue,
-                              size: 22,
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Text(
-                            'View Detailed Attendance',
-                            style: TextStyle(
-                              color: iOSBlue,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.arrow_forward_ios,
-                            color: iOSBlue,
-                            size: 16,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
               const SizedBox(height: 24),
               recentAttendancePanel(),
             ],

@@ -76,7 +76,7 @@ class LocationTrackingService with WidgetsBindingObserver {
         htmlFormatBigText: false,
         contentTitle: '⚠ Boundary Breach Detected!',
         htmlFormatContentTitle: false,
-        summaryText: 'Attenda Geofence Alert',
+        summaryText: 'VisionGate Geofence Alert',
       ),
       color: const Color(0xFFFF3333),
       largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
@@ -371,7 +371,7 @@ class LocationTrackingService with WidgetsBindingObserver {
         intervalDuration: const Duration(minutes: 2),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationText: "Running in the background to verify location attendance.",
-          notificationTitle: "Attenda Location Sync",
+          notificationTitle: "VisionGate Location Sync",
           enableWakeLock: true,
         ),
       );
