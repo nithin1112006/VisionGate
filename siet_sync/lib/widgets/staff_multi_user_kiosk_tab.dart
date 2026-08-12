@@ -2909,8 +2909,8 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Delete Face Profile?', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Text('Are you sure you want to delete the face profile and 512-D embeddings for $name ($regNo)?'),
+        title: const Text('Delete Entire Student Data?', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('Are you sure you want to remove ALL data for $name ($regNo)?\n\nThis will permanently remove the student profile, face embeddings, attendance records, leave logs, and all related database records across the entire system. This action cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -2922,7 +2922,7 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text('Delete Entire Data', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -2941,7 +2941,64 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
       if (res.statusCode == 200) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('✓ Deleted face profile for $regNo'), backgroundColor: Colors.green),
+            SnackBar(content: Text('✓ Completely removed all data for $regNo from the entire database'), backgroundColor: Colors.green),
+          );
+        }
+        _fetchRegisteredStudents();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('❌ Error: ${_parseError(res.body)}'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Connection error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _clearStudentAttendance(String regNo, String name) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Clear Attendance Record Only?', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('Are you sure you want to clear all attendance records for $name ($regNo)?\n\nThis will remove their attendance logs while preserving their student profile and face registration.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade800,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final res = await http.delete(
+        Uri.parse('$_apiUrl/staff/kiosk/student/$regNo/attendance'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      if (res.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('✓ Cleared attendance records for $regNo'), backgroundColor: Colors.green),
           );
         }
         _fetchRegisteredStudents();
@@ -3047,6 +3104,14 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
                             ),
                         ],
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.cleaning_services_rounded, color: Colors.amber),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _clearStudentAttendance(regNo, name);
+                      },
+                      tooltip: 'Clear Attendance Record Only',
                     ),
                     IconButton(
                       icon: const Icon(Icons.close_rounded),
@@ -3629,11 +3694,23 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
                   ),
                   const SizedBox(width: 8),
 
-                  // Delete Button
+                  // Clear Attendance Button
+                  IconButton(
+                    onPressed: () => _clearStudentAttendance(regNo, name),
+                    icon: Icon(Icons.cleaning_services_rounded, color: Colors.amber.shade800, size: 20),
+                    tooltip: 'Clear Attendance Record Only',
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.amber.withValues(alpha: 0.12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
+                  // Delete Entire Data Button
                   IconButton(
                     onPressed: () => _deleteStudentProfile(regNo, name),
-                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
-                    tooltip: 'Delete Face Profile',
+                    icon: const Icon(Icons.delete_forever_rounded, color: Colors.redAccent, size: 20),
+                    tooltip: 'Delete Entire Student Data',
                     style: IconButton.styleFrom(
                       backgroundColor: Colors.red.withValues(alpha: 0.1),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

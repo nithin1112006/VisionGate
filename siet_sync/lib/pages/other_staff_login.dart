@@ -629,6 +629,11 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
           label: 'Leave',
         ),
         NavDestination(
+          icon: Icons.history_edu_outlined,
+          selectedIcon: Icons.history_edu_rounded,
+          label: 'Logs',
+        ),
+        NavDestination(
           icon: Icons.settings_outlined,
           selectedIcon: Icons.settings_rounded,
           label: 'Settings',

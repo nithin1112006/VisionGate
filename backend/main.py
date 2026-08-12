@@ -3445,39 +3445,83 @@ def get_user_by_reg_no(reg_no: str):
 
 
 def delete_user_data_by_reg_no(reg_no: str):
-    """Delete all attendance, leaves, location records, and face samples for a user"""
-    # Delete from audit logs & notifications referring to leave requests first
-    cursor.execute("""
-        DELETE FROM leave_request_audit_log 
-        WHERE leave_request_id IN (
-            SELECT id FROM leave_requests WHERE user_reg_no = ?
-        )
-    """, (reg_no,))
-    cursor.execute("""
-        DELETE FROM admin_notifications 
-        WHERE notification_type = 'leave_request' AND related_id IN (
-            SELECT id FROM leave_requests WHERE user_reg_no = ?
-        )
-    """, (reg_no,))
+    """Delete all attendance, leaves, location records, face samples, and profiles for a user across all DB tables"""
+    try:
+        cursor.execute("""
+            DELETE FROM leave_request_audit_log 
+            WHERE leave_request_id IN (
+                SELECT id FROM leave_requests WHERE user_reg_no = ?
+            )
+        """, (reg_no,))
+    except Exception:
+        pass
+    try:
+        cursor.execute("""
+            DELETE FROM admin_notifications 
+            WHERE notification_type = 'leave_request' AND related_id IN (
+                SELECT id FROM leave_requests WHERE user_reg_no = ?
+            )
+        """, (reg_no,))
+    except Exception:
+        pass
 
-    # Now delete primary records
-    cursor.execute("DELETE FROM attendance WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM daily_attendance_status WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM casual_leave WHERE reg_no = ?", (reg_no,))
-    # cursor.execute("DELETE FROM user_location_logs WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM other_staff_attendance WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM leave_requests WHERE user_reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM face_reregister_requests WHERE staff_reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM user_locations WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM attendance_locations WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM geofence_breach_monitoring WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM students WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM earned_leave WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM ccl_earned_history WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM users WHERE reg_no = ?", (reg_no,))
-    cursor.execute("DELETE FROM other_staff WHERE reg_no = ?", (reg_no,))
+    # Delete records from ALL database tables referring to this user/student reg_no
+    tables_to_purge = [
+        ("attendance", "reg_no"),
+        ("daily_attendance_status", "reg_no"),
+        ("morning_attendance", "reg_no"),
+        ("evening_attendance", "reg_no"),
+        ("kiosk_attendance_logs", "student_reg_no"),
+        ("student_face_profiles", "reg_no"),
+        ("face_embedding_samples", "reg_no"),
+        ("casual_leave", "reg_no"),
+        ("earned_leave", "reg_no"),
+        ("ccl_earned_history", "reg_no"),
+        ("expired_leaves", "reg_no"),
+        ("user_latest_locations", "reg_no"),
+        ("user_locations", "reg_no"),
+        ("user_location_logs", "reg_no"),
+        ("other_staff_attendance", "reg_no"),
+        ("leave_requests", "user_reg_no"),
+        ("face_reregister_requests", "staff_reg_no"),
+        ("attendance_locations", "reg_no"),
+        ("geofence_breach_monitoring", "reg_no"),
+        ("students", "reg_no"),
+        ("users", "reg_no"),
+        ("other_staff", "reg_no"),
+    ]
+
+    for tbl, col in tables_to_purge:
+        try:
+            cursor.execute(f"DELETE FROM {tbl} WHERE {col} = ?", (reg_no,))
+        except Exception:
+            pass
+
+    try:
+        cursor.execute("""
+            DELETE FROM staff_student_permissions 
+            WHERE student_reg_no = ? OR grantor_staff_reg_no = ? OR grantee_staff_reg_no = ?
+        """, (reg_no, reg_no, reg_no))
+    except Exception:
+        pass
+
+
+def clear_user_attendance_by_reg_no(reg_no: str):
+    """Clear all attendance records for a user across all attendance tables"""
+    attendance_tables = [
+        ("attendance", "reg_no"),
+        ("daily_attendance_status", "reg_no"),
+        ("morning_attendance", "reg_no"),
+        ("evening_attendance", "reg_no"),
+        ("kiosk_attendance_logs", "student_reg_no"),
+        ("other_staff_attendance", "reg_no"),
+        ("attendance_locations", "reg_no"),
+    ]
+    for tbl, col in attendance_tables:
+        try:
+            cursor.execute(f"DELETE FROM {tbl} WHERE {col} = ?", (reg_no,))
+        except Exception:
+            pass
 
 
 # -------------------------------------------------
@@ -20101,16 +20145,26 @@ def get_kiosk_registered_students(request: Request):
 
 @app.delete("/staff/kiosk/student/{reg_no}")
 def delete_kiosk_student_profile(reg_no: str, request: Request):
-    """Staff deletes a student's face profile and embeddings."""
+    """Staff deletes a student's profile and ALL associated data across the entire database."""
     staff_user = verify_staff_token(request)
     try:
-        cursor.execute("DELETE FROM student_face_profiles WHERE reg_no = ?", (reg_no,))
-        cursor.execute("DELETE FROM face_embedding_samples WHERE reg_no = ? AND source_table = 'student_face_profiles'", (reg_no,))
+        delete_user_data_by_reg_no(reg_no)
         conn.commit()
         load_student_face_profiles()
-        return {"message": f"Successfully deleted face profile for student {reg_no}"}
+        return {"message": f"Successfully deleted all data related to student {reg_no} from the entire database"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database deletion error: {str(e)}")
+
+@app.delete("/staff/kiosk/student/{reg_no}/attendance")
+def clear_kiosk_student_attendance(reg_no: str, request: Request):
+    """Staff clears ONLY the attendance records for a student."""
+    staff_user = verify_staff_token(request)
+    try:
+        clear_user_attendance_by_reg_no(reg_no)
+        conn.commit()
+        return {"message": f"Successfully cleared attendance records for student {reg_no}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database clearing error: {str(e)}")
 
 @app.get("/staff/kiosk/student/{reg_no}/history")
 def get_kiosk_student_attendance_history(reg_no: str, request: Request):

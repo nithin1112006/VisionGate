@@ -653,6 +653,12 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
               ),
               HODFaceRegisterTab(token: widget.token, user: widget.user),
               AttendanceLogTab(token: widget.token, user: widget.user),
+              StudentAttendanceLogWidget(
+                token: widget.token,
+                user: widget.user,
+                isHod: true,
+                defaultDept: widget.user['dept'],
+              ),
               UserSettingsTab(title: 'HOD Settings', token: widget.token),
             ]);
           });
@@ -798,6 +804,12 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
             ),
             _buildDrawerItem(
               7,
+              Icons.person_search_rounded,
+              'Student Log',
+              Icons.person_search_outlined,
+            ),
+            _buildDrawerItem(
+              8,
               Icons.settings_rounded,
               'Settings',
               Icons.settings_outlined,
