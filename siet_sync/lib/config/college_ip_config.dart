@@ -89,8 +89,10 @@ class CollegeIPConfig {
   /// Cached coordinates (loaded from API)
   static List<List<double>>? _cachedGeoFencePolygon;
   static List<List<double>>? _cachedGeoFenceInnerPolygon;
+  static List<List<double>>? _cachedGeoFenceLimitRangePolygon;
   static List<List<List<double>>>? _cachedGeoFencePolygons;
   static List<List<List<double>>>? _cachedGeoFenceInnerPolygons;
+  static List<List<List<double>>>? _cachedGeoFenceLimitRangePolygons;
 
   /// Get outer geo fence polygon (fetched from API or fallback to defaults)
   static List<List<double>> get geoFencePolygon {
@@ -112,49 +114,107 @@ class CollegeIPConfig {
     return _cachedGeoFenceInnerPolygons ?? [geoFenceInnerPolygon];
   }
 
+  /// Get limit range polygon (for movement tracking)
+  static List<List<double>> get geoFenceLimitRangePolygon {
+    return _cachedGeoFenceLimitRangePolygon ?? [];
+  }
+
+  /// Get all limit range polygons (for user movement range tracking)
+  static List<List<List<double>>> get geoFenceLimitRangePolygons {
+    return _cachedGeoFenceLimitRangePolygons ?? (_cachedGeoFenceLimitRangePolygon != null && _cachedGeoFenceLimitRangePolygon!.isNotEmpty ? [_cachedGeoFenceLimitRangePolygon!] : []);
+  }
+
+  static List<List<List<double>>> _parsePolygonList(dynamic rawList) {
+    if (rawList == null || rawList is! List) return [];
+    final result = <List<List<double>>>[];
+    for (final poly in rawList) {
+      if (poly is List) {
+        final polygon = <List<double>>[];
+        for (final pt in poly) {
+          if (pt is List && pt.length >= 2) {
+            try {
+              final lat = (pt[0] as num).toDouble();
+              final lng = (pt[1] as num).toDouble();
+              polygon.add([lat, lng]);
+            } catch (_) {}
+          }
+        }
+        if (polygon.length >= 3) {
+          result.add(polygon);
+        }
+      }
+    }
+    return result;
+  }
+
+  static List<List<double>> _parseSinglePolygon(dynamic rawPoly) {
+    if (rawPoly == null || rawPoly is! List) return [];
+    final polygon = <List<double>>[];
+    for (final pt in rawPoly) {
+      if (pt is List && pt.length >= 2) {
+        try {
+          final lat = (pt[0] as num).toDouble();
+          final lng = (pt[1] as num).toDouble();
+          polygon.add([lat, lng]);
+        } catch (_) {}
+      }
+    }
+    return polygon;
+  }
+
   /// Load geo fence coordinates from API
   static Future<bool> loadGeoFenceCoordinates() async {
     try {
       final apiClient = ApiClient();
-      final response = await apiClient.get('${defaultURL}/geo-fence/public');
+      final response = await apiClient.get(
+        '$defaultURL/geo-fence/public',
+        timeout: const Duration(seconds: 8),
+      );
       final data = json.decode(response.body);
 
       if (data['success'] == true) {
-        // Always load polygons first, fall back to single polygon only if needed
-        _cachedGeoFencePolygons = null;
-        _cachedGeoFenceInnerPolygons = null;
-        _cachedGeoFencePolygon = null;
-        _cachedGeoFenceInnerPolygon = null;
-        
-        if (data['outer_polygons'] != null && data['outer_polygons'].isNotEmpty) {
-          _cachedGeoFencePolygons = List<List<List<double>>>.from(
-            data['outer_polygons'].map((poly) => List<List<double>>.from(
-              poly.map((point) => List<double>.from(point))
-            ))
-          );
+        clearGeoFenceCache();
+
+        final parsedOuter = _parsePolygonList(data['outer_polygons']);
+        final parsedInner = _parsePolygonList(data['inner_polygons']);
+        final parsedLimit = _parsePolygonList(data['limit_range_polygons']);
+
+        if (parsedOuter.isNotEmpty) {
+          _cachedGeoFencePolygons = parsedOuter;
+          _cachedGeoFencePolygon = parsedOuter.first;
+        } else if (data['outer_polygon'] != null) {
+          final single = _parseSinglePolygon(data['outer_polygon']);
+          if (single.isNotEmpty) {
+            _cachedGeoFencePolygon = single;
+            _cachedGeoFencePolygons = [single];
+          }
         }
-        if (data['inner_polygons'] != null && data['inner_polygons'].isNotEmpty) {
-          _cachedGeoFenceInnerPolygons = List<List<List<double>>>.from(
-            data['inner_polygons'].map((poly) => List<List<double>>.from(
-              poly.map((point) => List<double>.from(point))
-            ))
-          );
+
+        if (parsedInner.isNotEmpty) {
+          _cachedGeoFenceInnerPolygons = parsedInner;
+          _cachedGeoFenceInnerPolygon = parsedInner.first;
+        } else if (data['inner_polygon'] != null) {
+          final single = _parseSinglePolygon(data['inner_polygon']);
+          if (single.isNotEmpty) {
+            _cachedGeoFenceInnerPolygon = single;
+            _cachedGeoFenceInnerPolygons = [single];
+          }
         }
-        // Fallback for backward compatibility
-        if (data['outer_polygon'] != null && _cachedGeoFencePolygons == null) {
-          _cachedGeoFencePolygon = List<List<double>>.from(
-            data['outer_polygon'].map((point) => List<double>.from(point))
-          );
-        }
-        if (data['inner_polygon'] != null && _cachedGeoFenceInnerPolygons == null) {
-          _cachedGeoFenceInnerPolygon = List<List<double>>.from(
-            data['inner_polygon'].map((point) => List<double>.from(point))
-          );
+
+        if (parsedLimit.isNotEmpty) {
+          _cachedGeoFenceLimitRangePolygons = parsedLimit;
+          _cachedGeoFenceLimitRangePolygon = parsedLimit.first;
+        } else if (data['limit_range_polygon'] != null) {
+          final single = _parseSinglePolygon(data['limit_range_polygon']);
+          if (single.isNotEmpty) {
+            _cachedGeoFenceLimitRangePolygon = single;
+            _cachedGeoFenceLimitRangePolygons = [single];
+          }
         }
         return true;
       }
     } catch (e) {
-      print('Failed to load geo fence coordinates: $e');
+      // Keep existing cached coordinates if available
     }
     return false;
   }
@@ -163,8 +223,10 @@ class CollegeIPConfig {
   static void clearGeoFenceCache() {
     _cachedGeoFencePolygon = null;
     _cachedGeoFenceInnerPolygon = null;
+    _cachedGeoFenceLimitRangePolygon = null;
     _cachedGeoFencePolygons = null;
     _cachedGeoFenceInnerPolygons = null;
+    _cachedGeoFenceLimitRangePolygons = null;
   }
 
   /// ============================================

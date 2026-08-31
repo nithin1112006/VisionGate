@@ -1,9 +1,10 @@
 """Settings repository for application configuration and key-value storage."""
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 import asyncpg
 from ..connection import db_pool
+from .base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 

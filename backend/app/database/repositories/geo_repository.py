@@ -16,7 +16,7 @@ class GeoRepository:
         """Get geo-fence polygons from v2 table.
         
         Returns:
-            Tuple of (outer_polygons, inner_polygons) where each is a list of
+            Tuple of (outer_polygons, inner_polygons, limit_range_polygons) where each is a list of
             lists of (lat, lng) tuples.
         """
         async with db_pool.pool.acquire() as conn:
@@ -28,7 +28,7 @@ class GeoRepository:
                 """
             )
         
-        grouped = {"outer": {}, "inner": {}}
+        grouped = {"outer": {}, "inner": {}, "limit_range": {}}
         for row in rows:
             ptype = row["polygon_type"]
             pgroup = int(row["polygon_group"])
@@ -46,4 +46,9 @@ class GeoRepository:
             for k in sorted(grouped["inner"].keys())
             if len(grouped["inner"][k]) >= 3
         ]
-        return outer, inner
+        limit_range = [
+            grouped.get("limit_range", {}).get(k, [])
+            for k in sorted(grouped.get("limit_range", {}).keys())
+            if len(grouped.get("limit_range", {}).get(k, [])) >= 3
+        ]
+        return outer, inner, limit_range

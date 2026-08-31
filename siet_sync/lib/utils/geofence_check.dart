@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import '../config/college_ip_config.dart';
 import 'wifi_check.dart';
+import 'platform_utils.dart';
 
 /// Geo-fence check result for attendance.
 class GeoFenceDecision {
@@ -101,25 +102,38 @@ class GeoFenceChecker {
 
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
+        String permError;
+        if (kIsWeb) {
+          permError = 'Location permission denied. Click the location icon in your browser address bar to allow access.';
+        } else if (AppPlatform.isWindows) {
+          permError = 'Location permission is required. Please enable Location in Windows Settings > Privacy & security > Location.';
+        } else if (AppPlatform.isMacOS) {
+          permError = 'Location permission is required. Please enable Location in macOS System Settings > Privacy & Security > Location Services.';
+        } else if (AppPlatform.isLinux) {
+          permError = 'Location permission is required. Please enable Location services in your system settings.';
+        } else {
+          permError = 'Location permission is required to mark attendance.';
+        }
+
         return GeoFenceDecision(
           enforced: true,
           insideOuter: false,
           insideInner: false,
-          error: kIsWeb 
-              ? 'Location permission denied. Click the location icon in your browser address bar to allow access.'
-              : 'Location permission is required to mark attendance.',
+          error: permError,
         );
       }
 
       late final Position position;
-      int retries = kIsWeb ? 7 : 1;
+      int retries = kIsWeb ? 4 : 1;
       
       for (int i = 0; i < retries; i++) {
         try {
-          // Web location is extremely unreliable - use most compatible settings
+          // Attempt high accuracy first (requests Wi-Fi / GPS triangulation from browser)
           position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: kIsWeb ? LocationAccuracy.low : LocationAccuracy.high,
-            timeLimit: Duration(seconds: kIsWeb ? 20 : 8),
+            desiredAccuracy: (i == 0)
+                ? LocationAccuracy.high
+                : ((i == 1) ? LocationAccuracy.medium : LocationAccuracy.low),
+            timeLimit: Duration(seconds: kIsWeb ? 12 : 8),
           );
           lastFetchedPosition = position; // Cache successful position
           break;
@@ -130,27 +144,15 @@ class GeoFenceChecker {
               final lastPos = await Geolocator.getLastKnownPosition();
               if (lastPos != null) {
                 position = lastPos;
-                lastFetchedPosition = position; // Cache successful position
+                lastFetchedPosition = position;
                 break;
               }
             } catch (_) {}
-            
-            // On web, try with even lower settings
-            if (i < 3) {
-              try {
-                position = await Geolocator.getCurrentPosition(
-                  desiredAccuracy: LocationAccuracy.reduced,
-                  timeLimit: const Duration(seconds: 10),
-                );
-                lastFetchedPosition = position; // Cache successful position
-                break;
-              } catch (_) {}
-            }
           }
           
           if (i == retries - 1) {
             if (kIsWeb) {
-              return GeoFenceDecision(
+              return const GeoFenceDecision(
                 enforced: true,
                 insideOuter: false,
                 insideInner: false,
@@ -160,11 +162,11 @@ class GeoFenceChecker {
             rethrow;
           }
           
-          // Exponential backoff for web
-          await Future.delayed(Duration(milliseconds: kIsWeb ? (500 * (i + 1)) : 500));
+          await Future.delayed(Duration(milliseconds: kIsWeb ? (400 * (i + 1)) : 400));
         }
       }
 
+      // ── Outer Boundary is MANDATORY for Attendance Marking ─────────────────
       final insideOuter = _isPointInAnyPolygon(
         position.latitude,
         position.longitude,

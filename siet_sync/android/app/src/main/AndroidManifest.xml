@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -19,6 +20,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- 🕐 Exact alarm permissions for Android 12/13 (fallback restart path) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
 
     <application
         android:label="VisionGate"
@@ -53,10 +58,12 @@
             android:value="2"/>
 
         <!-- Native Foreground Service for Location Attendance -->
+        <!-- stopWithTask=false: service lifecycle is independent of the task stack -->
         <service
             android:name=".AttendanceForegroundService"
             android:foregroundServiceType="location"
             android:process=":attendance_service"
+            android:stopWithTask="false"
             android:exported="false" />
 
         <!-- Geofence Broadcast Receiver -->
@@ -65,6 +72,20 @@
             android:process=":attendance_service"
             android:exported="true"
             android:enabled="true" />
+
+        <!-- Boot / App-update receiver: restarts service after device reboot or app update -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </receiver>
 
     </application>
 

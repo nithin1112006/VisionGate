@@ -10,9 +10,12 @@ import 'pages/login_page.dart';
 import 'pages/hod_panel.dart';
 import 'pages/staff_panel.dart';
 import 'pages/other_staff_login.dart';
+import 'pages/student_panel.dart';
 import 'services/theme_service.dart';
 import 'services/background_service_handler.dart';
 import 'services/pre_verification_service.dart';
+
+import 'utils/platform_utils.dart';
 
 // Use centralized IP configuration
 String get API_URL => CollegeIPConfig.defaultURL;
@@ -21,7 +24,7 @@ late List<CameraDescription> cameras;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (AppPlatform.isAndroid) {
     await BackgroundLocationService.initialize();
   }
 
@@ -171,13 +174,13 @@ class _MyAppState extends State<MyApp> {
             ),
             elevatedButtonTheme: ElevatedButtonThemeData(
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
                 backgroundColor: const Color(0xFF6366F1),
                 foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 54),
+                minimumSize: const Size(64, 48),
                 elevation: 0,
               ),
             ),
@@ -235,13 +238,13 @@ class _MyAppState extends State<MyApp> {
             ),
             elevatedButtonTheme: ElevatedButtonThemeData(
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
                 backgroundColor: const Color(0xFF6366F1),
                 foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 54),
+                minimumSize: const Size(64, 48),
                 elevation: 0,
               ),
             ),
@@ -313,6 +316,17 @@ class _MyAppState extends State<MyApp> {
               },
             ),
             '/other_staff': (context) => const OtherStaffLoginPage(),
+            '/student': (context) => const StudentDashboardPage(
+              token: '',
+              user: {
+                'id': 0,
+                'username': 'student',
+                'name': 'Student',
+                'role': 'student',
+                'dept': 'CSE',
+                'regNo': 'STUDENT001',
+              },
+            ),
           },
         );
       },

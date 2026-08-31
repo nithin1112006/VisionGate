@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:http/http.dart' as http;
@@ -13,9 +14,16 @@ class AppSettings {
   static bool enforceAppGeoFence = true;
   static bool enforceVpnBlocking = true;
   static bool multiUserKioskMode = false;
+  static bool enableThirukkural = true;
+  static final ValueNotifier<bool> thirukkuralNotifier = ValueNotifier<bool>(true);
   static bool _isLoaded = false;
   static DateTime? _lastLoaded;
   static const Duration _cacheExpiry = Duration(seconds: 10);
+
+  static void updateThirukkural(bool value) {
+    enableThirukkural = value;
+    thirukkuralNotifier.value = value;
+  }
 
   /// Fetch settings from server
   static Future<void> loadSettings({bool forceRefresh = false}) async {
@@ -33,7 +41,7 @@ class AppSettings {
           .timeout(
             const Duration(seconds: 3),
             onTimeout: () => http.Response(
-              '{"allow_any_network": false, "college_ssid": "", "enforce_geo_fence": true, "enforce_app_geo_fence": true, "enforce_vpn_blocking": true, "multi_user_kiosk_mode": false}',
+              '{"allow_any_network": false, "college_ssid": "", "enforce_geo_fence": true, "enforce_app_geo_fence": true, "enforce_vpn_blocking": true, "multi_user_kiosk_mode": false, "enable_thirukkural": true}',
               200,
             ),
           );
@@ -48,6 +56,8 @@ class AppSettings {
         enforceAppGeoFence = data['enforce_app_geo_fence'] ?? true;
         enforceVpnBlocking = data['enforce_vpn_blocking'] ?? true;
         multiUserKioskMode = data['multi_user_kiosk_mode'] ?? false;
+        enableThirukkural = data['enable_thirukkural'] ?? true;
+        thirukkuralNotifier.value = enableThirukkural;
       }
     } catch (e) {
       if (!_isLoaded) {
@@ -57,6 +67,8 @@ class AppSettings {
         enforceAppGeoFence = true;
         enforceVpnBlocking = true;
         multiUserKioskMode = false;
+        enableThirukkural = true;
+        thirukkuralNotifier.value = true;
       }
     }
     _isLoaded = true;
@@ -90,15 +102,17 @@ class AppSettings {
   }
 }
 
-/// WiFi Checker Utility
+/// WiFi & Local Network Checker Utility
 class WifiChecker {
   static final NetworkInfo _networkInfo = NetworkInfo();
 
-  /// Check if device is connected to WiFi
+  /// Check if device is connected to WiFi or wired Ethernet (for desktop)
   static Future<bool> isWifiConnected() async {
     try {
       final result = await Connectivity().checkConnectivity();
-      return result == ConnectivityResult.wifi;
+      return result.contains(ConnectivityResult.wifi) ||
+          result.contains(ConnectivityResult.ethernet) ||
+          (!kIsWeb && !result.contains(ConnectivityResult.none) && result.isNotEmpty);
     } catch (e) {
       return false;
     }
@@ -129,25 +143,30 @@ class WifiChecker {
       return true;
     }
 
+    // On Web, browsers cannot inspect Wi-Fi SSID by security design;
+    // Web location is validated strictly by Geofence.
+    if (kIsWeb) {
+      return true;
+    }
+
+    final isConnected = await isWifiConnected();
+    if (!isConnected) {
+      debugPrint('[WIFI] Not connected to any network');
+      return false;
+    }
+
     final requiredSSID = _getRequiredSSID();
-
-    final isWifi = await isWifiConnected();
-    if (!isWifi) {
-      print('[WIFI] Not connected to WiFi');
-      return false;
-    }
-
     final ssid = await getCurrentWifiSSID();
-    print('[WIFI] Current SSID: "$ssid"');
+    debugPrint('[WIFI] Current SSID: "$ssid" (Required: "$requiredSSID")');
 
-    if (ssid == null || ssid.isEmpty) {
-      return false;
+    if (ssid != null && ssid.isNotEmpty) {
+      // Case-insensitive comparison
+      final matches = ssid.toLowerCase() == requiredSSID.toLowerCase();
+      debugPrint('[WIFI] SSID match: $matches');
+      return matches;
     }
 
-    // Case-insensitive comparison
-    final matches = ssid.toLowerCase() == requiredSSID.toLowerCase();
-    print('[WIFI] SSID match: $matches (checking "$ssid" == "$requiredSSID")');
-    return matches;
+    return false;
   }
 
   /// Get WiFi status message for display
@@ -158,15 +177,19 @@ class WifiChecker {
       return 'Network check disabled. You can mark attendance from any network.';
     }
 
-    final requiredSSID = _getRequiredSSID();
-    final isWifi = await isWifiConnected();
+    if (kIsWeb) {
+      return 'Web Network: Location verified via GPS Geofence.';
+    }
 
-    if (!isWifi) {
-      return 'Not connected to WiFi. Please connect to $requiredSSID';
+    final requiredSSID = _getRequiredSSID();
+    final isConnected = await isWifiConnected();
+
+    if (!isConnected) {
+      return 'Not connected to network. Please connect to $requiredSSID';
     }
 
     final ssid = await getCurrentWifiSSID();
-    if (ssid != null) {
+    if (ssid != null && ssid.isNotEmpty) {
       if (ssid.toLowerCase() == requiredSSID.toLowerCase()) {
         return 'Connected to $ssid (Allowed network)';
       } else {
@@ -174,10 +197,10 @@ class WifiChecker {
       }
     }
 
-    return 'Connected to WiFi, but SSID detection is unavailable. Please enable location and try again.';
+    return 'Please connect to $requiredSSID Wi-Fi network.';
   }
 
-  /// Validate and return error message if not on college WiFi
+  /// Validate and return error message if not on college WiFi/network
   static Future<String?> validateCollegeWifi() async {
     await AppSettings.loadSettings();
 
@@ -187,7 +210,7 @@ class WifiChecker {
       return vpnError;
     }
 
-    if (AppSettings.allowAnyNetwork) {
+    if (AppSettings.allowAnyNetwork || kIsWeb) {
       return null;
     }
 
@@ -195,19 +218,16 @@ class WifiChecker {
 
     if (!isOnCollege) {
       if (!await isWifiConnected()) {
-        return 'Please connect to a WiFi network to mark attendance.';
+        return 'Please connect to a Wi-Fi network to mark attendance.';
       }
 
       final ssid = await getCurrentWifiSSID();
-      if (ssid == null || ssid.isEmpty) {
-        return 'Unable to detect WiFi SSID. Please enable location and try again.';
-      }
       final requiredSSID = _getRequiredSSID();
-      if (ssid.toLowerCase() != requiredSSID.toLowerCase()) {
+      if (ssid != null && ssid.isNotEmpty && ssid.toLowerCase() != requiredSSID.toLowerCase()) {
         return 'You are connected to "$ssid". Please connect to "$requiredSSID" to mark attendance.';
       }
 
-      return 'Unable to verify WiFi connection. Please try again.';
+      return 'Please connect to "$requiredSSID" Wi-Fi network to mark attendance.';
     }
 
     return null;

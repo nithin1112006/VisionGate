@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, List
 import asyncpg
 from datetime import date
 from ..connection import db_pool
+from .base_repository import BaseRepository
 from ..models import CasualLeave, LeaveRequest, LeaveRequestAuditLog
 
 logger = logging.getLogger(__name__)

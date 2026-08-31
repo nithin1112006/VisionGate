@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import '../utils/wifi_check.dart';
 
 class ThirukkuralBanner extends StatefulWidget {
   const ThirukkuralBanner({super.key});
@@ -16,7 +17,14 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
   @override
   void initState() {
     super.initState();
-    _loadDailyKural();
+    _initAndLoad();
+  }
+
+  Future<void> _initAndLoad() async {
+    await AppSettings.loadSettings();
+    if (mounted) {
+      await _loadDailyKural();
+    }
   }
 
   Future<void> _loadDailyKural() async {
@@ -48,12 +56,19 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const SizedBox(
-        height: 100,
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: AppSettings.thirukkuralNotifier,
+      builder: (context, enabled, child) {
+        if (!enabled) {
+          return const SizedBox.shrink();
+        }
+
+        if (_isLoading) {
+          return const SizedBox(
+            height: 100,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
 
     if (_dailyKural == null) {
       return const SizedBox.shrink(); // Hide if error
@@ -149,6 +164,8 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
           ),
         ],
       ),
+    );
+      },
     );
   }
 }

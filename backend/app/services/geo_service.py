@@ -15,19 +15,22 @@ class GeoService:
         self.geo_repo = geo_repo
         self._outer_polygons: List[List[Tuple[float, float]]] = []
         self._inner_polygons: List[List[Tuple[float, float]]] = []
+        self._limit_range_polygons: List[List[Tuple[float, float]]] = []
         self._lock = asyncio.Lock()
 
-    async def load_geo_fence(self) -> None:
+    async def load_geo_fence(self, force_reload: bool = False) -> None:
         """Load geo-fence polygons from DB or defaults."""
         async with self._lock:
-            if not self._outer_polygons:
-                outer, inner = await self.geo_repo.get_geo_fence_polygons()
+            if not self._outer_polygons or force_reload:
+                outer, inner, limit_range = await self.geo_repo.get_geo_fence_polygons()
                 if not outer:
                     outer = [geo_config.get_default_outer()]
                     inner = [geo_config.get_default_inner()]
+                    limit_range = []
                 self._outer_polygons = outer
                 self._inner_polygons = inner
-                self.logger.info(f"Loaded geo-fence: {len(outer)} outer, {len(inner)} inner polygons")
+                self._limit_range_polygons = limit_range
+                logger.info(f"Loaded geo-fence: {len(outer)} outer, {len(inner)} inner, {len(limit_range)} limit range polygons")
 
     def is_point_in_polygon(self, lat: float, lng: float, polygon: List[Tuple[float, float]]) -> bool:
         """
@@ -184,16 +187,23 @@ class GeoService:
             [[float(p[0]), float(p[1])] for p in poly]
             for poly in (self._inner_polygons or [])
         ]
+        limit_range_polygons_json = [
+            [[float(p[0]), float(p[1])] for p in poly]
+            for poly in (self._limit_range_polygons or [])
+        ]
         
         outer_coords = outer_polygons_json[0] if outer_polygons_json else []
         inner_coords = inner_polygons_json[0] if inner_polygons_json else []
+        limit_range_coords = limit_range_polygons_json[0] if limit_range_polygons_json else []
         
         return {
             "success": True,
             "outer_polygon": outer_coords,
             "inner_polygon": inner_coords,
+            "limit_range_polygon": limit_range_coords,
             "outer_polygons": outer_polygons_json,
             "inner_polygons": inner_polygons_json,
+            "limit_range_polygons": limit_range_polygons_json,
         }
 
     def calculate_distance(

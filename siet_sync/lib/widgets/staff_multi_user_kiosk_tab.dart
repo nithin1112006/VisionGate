@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:camera/camera.dart';
 
 import '../config/college_ip_config.dart';
+import '../services/client_face_prefilter.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StaffMultiUserKioskTab
@@ -299,6 +300,31 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
     });
     try {
       final file = await _cameraController!.takePicture();
+
+      // On-device Google ML Kit pre-filter
+      final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+        file.path,
+        targetPose: FaceTargetPose.any,
+        allowMultipleFaces: false,
+      );
+
+      if (!prefilter.isValid) {
+        _overlayTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            _lastScannedStudent = null;
+            _showVerificationOverlay = true;
+            _scanMessage = '❌ ${prefilter.message ?? "Face not detected clearly. Position your face in center."}';
+            _scanSuccess = false;
+            _isScanning = false;
+          });
+        }
+        _overlayTimer = Timer(const Duration(seconds: 4), () {
+          if (mounted) setState(() => _showVerificationOverlay = false);
+        });
+        return;
+      }
+
       final bytes = await file.readAsBytes();
       final b64 = base64Encode(bytes);
 
@@ -473,6 +499,27 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
 
     try {
       final file = await _regCameraController!.takePicture();
+
+      final FaceTargetPose targetPose = _regStep == _RegStep.capturingFront
+          ? FaceTargetPose.front
+          : (_regStep == _RegStep.capturingLeft ? FaceTargetPose.left : FaceTargetPose.right);
+
+      final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+        file.path,
+        targetPose: targetPose,
+        allowMultipleFaces: false,
+      );
+
+      if (!prefilter.isValid) {
+        if (mounted) {
+          setState(() {
+            _regMessage = '❌ ${prefilter.message ?? "Invalid pose alignment."}';
+            _isPoseSatisfying = false;
+          });
+        }
+        return;
+      }
+
       final bytes = await file.readAsBytes();
       final b64 = base64Encode(bytes);
 
@@ -3408,7 +3455,7 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
                       const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
-                          'Registered Students',
+                          'My Registered Students',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -3498,13 +3545,13 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
                     Icon(Icons.person_search_rounded, size: 48, color: Colors.grey[400]),
                     const SizedBox(height: 12),
                     Text(
-                      _registeredStudents.isEmpty ? 'No Registered Students Found' : 'No Students Match Search Filter',
+                      _registeredStudents.isEmpty ? 'No Students Registered Under You' : 'No Students Match Search Filter',
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       _registeredStudents.isEmpty
-                          ? 'Register new student face profiles using the Register tab.'
+                          ? 'Register new student face profiles under your account using the Register tab.'
                           : 'Try adjusting your search keyword or filter toggle.',
                       style: TextStyle(color: isDark ? Colors.white60 : Colors.grey[600], fontSize: 12),
                       textAlign: TextAlign.center,

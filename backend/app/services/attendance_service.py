@@ -162,36 +162,49 @@ class AttendanceService:
 
     def _calculate_attendance_value(self, first_half_status: Optional[str], second_half_status: Optional[str], 
                                    status: str, leave_type: Optional[str] = None) -> Decimal:
-        """Calculate attendance value based on half-day statuses.
+        """Calculate attendance value based on half-day statuses and scenario types.
         
         Args:
-            first_half_status: Status of first half ('Present', 'Absent', etc.)
-            second_half_status: Status of second half ('Present', 'Absent', etc.)
-            status: Overall status ('present', 'absent', 'leave', 'holiday')
-            leave_type: Type of leave if applicable
+            first_half_status: Status of first half ('Present', 'Absent', 'Leave', 'OD', 'Permission')
+            second_half_status: Status of second half ('Present', 'Absent', 'Leave', 'OD', 'Permission')
+            status: Overall status ('present', 'absent', 'leave', 'od', 'holiday', 'permission')
+            leave_type: Type of leave/od if applicable
             
         Returns:
             Decimal attendance value (0.0, 0.5, or 1.0)
         """
-        attendance_value = Decimal("0.0")
-        
+        st_lower = (status or "").lower()
+        lt_lower = (leave_type or "").lower()
+
+        # Direct overall statuses
+        if st_lower in ('od', 'on duty', 'on_duty', 'permission', 'holiday') or lt_lower in ('od', 'on duty', 'on_duty'):
+            return Decimal("1.0")
+
         # Calculate based on half-day statuses if available
         if first_half_status and second_half_status:
-            if first_half_status.lower() == 'present':
+            attendance_value = Decimal("0.0")
+            fh_lower = first_half_status.lower()
+            sh_lower = second_half_status.lower()
+
+            # First half evaluation
+            if fh_lower in ('present', 'od', 'on duty', 'permission'):
                 attendance_value += Decimal("0.5")
-            if second_half_status.lower() == 'present':
+            
+            # Second half evaluation
+            if sh_lower in ('present', 'od', 'on duty', 'permission'):
                 attendance_value += Decimal("0.5")
+                
+            return attendance_value
         else:
             # Fallback to overall status
-            if status.lower() == 'present':
-                attendance_value = Decimal("1.0")
-            elif status.lower() == 'half_day':
-                attendance_value = Decimal("0.5")
-            elif status.lower() == 'holiday':
-                attendance_value = Decimal("1.0")  # Holidays count as full day
-            # absent and leave remain 0.0
-        
-        return attendance_value
+            if st_lower in ('present',):
+                return Decimal("1.0")
+            elif st_lower in ('half_day', 'half day', 'half day present (fn)', 'half day present (an)'):
+                return Decimal("0.5")
+            elif st_lower in ('holiday',):
+                return Decimal("1.0")  # Holidays count as full credit
+            # Absent, Leave (CL/ML/LOP) without present half are 0.0 attendance value
+            return Decimal("0.0")
 
     async def _sync_daily_status(self, reg_no: str, for_date: date) -> None:
         """Sync daily attendance status for user."""
@@ -207,6 +220,15 @@ class AttendanceService:
             settings_rows = await conn.fetch("SELECT key, value FROM leave_settings")
             s_dict = {r['key']: r['value'] for r in settings_rows} if settings_rows else {}
             hd_enabled = str(s_dict.get("half_day_enabled", "false")).lower() == "true"
+
+            # Check if there is an existing record to preserve approved leaves/ODs or manual adjustments
+            existing = await conn.fetchrow(
+                "SELECT status, leave_type, absent_reason, first_half_status, second_half_status, attendance_value FROM daily_attendance_status WHERE reg_no = $1 AND date = $2",
+                reg_no, for_date
+            )
+            
+            existing_st = (existing['status'] if existing else '') or ''
+            existing_lt = (existing['leave_type'] if existing else '') or ''
 
             # Check if there are any scans on this date
             scans = await conn.fetch(
@@ -226,45 +248,47 @@ class AttendanceService:
                 else:
                     sh_present = True
 
-            # If half day mode is disabled, we treat any scan as full day present
-            if not hd_enabled:
-                first_half_status = None
-                second_half_status = None
-                overall_status = "Present" if scans else "Absent"
-                attendance_value = Decimal("1.0") if scans else Decimal("0.0")
+            # If user already has an approved OD for the day, preserve it
+            if existing_st in ('OD', 'On Duty') or existing_lt.lower() == 'od':
+                first_half_status = existing['first_half_status'] or 'OD'
+                second_half_status = existing['second_half_status'] or 'OD'
+                overall_status = 'On Duty (OD)'
+                attendance_value = Decimal("1.0")
+            elif existing_st in ('Leave', 'On Leave') and not scans:
+                first_half_status = existing['first_half_status'] or 'Leave'
+                second_half_status = existing['second_half_status'] or 'Leave'
+                overall_status = 'On Leave'
+                attendance_value = Decimal("0.0")
+            elif not hd_enabled:
+                first_half_status = "Present" if scans else (existing['first_half_status'] if existing else "Absent")
+                second_half_status = "Present" if scans else (existing['second_half_status'] if existing else "Absent")
+                overall_status = "Present" if scans else (existing_st or "Absent")
+                attendance_value = Decimal("1.0") if scans else (Decimal(str(existing['attendance_value'])) if existing and existing['attendance_value'] is not None else Decimal("0.0"))
             else:
-                first_half_status = "Present" if fh_present else None
-                second_half_status = "Present" if sh_present else None
+                first_half_status = "Present" if fh_present else (existing['first_half_status'] if existing and existing['first_half_status'] in ('Leave', 'OD') else None)
+                second_half_status = "Present" if sh_present else (existing['second_half_status'] if existing and existing['second_half_status'] in ('Leave', 'OD') else None)
                 
-                # Check if there is an existing record to preserve manual edits/leaves
-                existing = await conn.fetchrow(
-                    "SELECT status, leave_type, first_half_status, second_half_status FROM daily_attendance_status WHERE reg_no = $1 AND date = $2",
-                    reg_no, for_date
-                )
-                
-                if existing:
-                    # Keep existing leave or manual adjustments if no scans occurred for that half
-                    if existing['first_half_status'] in ('Leave', 'Absent') and not fh_present:
-                        first_half_status = existing['first_half_status']
-                    if existing['second_half_status'] in ('Leave', 'Absent') and not sh_present:
-                        second_half_status = existing['second_half_status']
-                
-                # Compute status
                 fh = first_half_status or "Absent"
                 sh = second_half_status or "Absent"
                 
                 if fh == "Present" and sh == "Present":
                     overall_status = "Present"
                     attendance_value = Decimal("1.0")
-                elif fh == "Present" or sh == "Present":
-                    overall_status = "Half Day"
+                elif (fh in ("Present", "OD") and sh in ("Present", "OD")):
+                    overall_status = "Present"
+                    attendance_value = Decimal("1.0")
+                elif fh == "Present" and sh != "Present":
+                    overall_status = "Half Day Present (FN)"
+                    attendance_value = Decimal("0.5")
+                elif fh != "Present" and sh == "Present":
+                    overall_status = "Half Day Present (AN)"
                     attendance_value = Decimal("0.5")
                 elif fh == "Leave" and sh == "Leave":
-                    overall_status = "Leave"
+                    overall_status = "On Leave"
                     attendance_value = Decimal("0.0")
-                elif fh == "Leave" or sh == "Leave":
-                    overall_status = "Half Day"
-                    attendance_value = Decimal("0.0")
+                elif fh == "OD" and sh == "OD":
+                    overall_status = "On Duty (OD)"
+                    attendance_value = Decimal("1.0")
                 else:
                     overall_status = "Absent"
                     attendance_value = Decimal("0.0")

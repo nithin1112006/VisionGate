@@ -1,7 +1,10 @@
 package com.example.faculty_sphere
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -13,6 +16,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+
+                // ── Start the foreground location service ──────────────────────
                 "startService" -> {
                     val baseUrl = call.argument<String>("baseUrl") ?: "https://attenda.srishakthicgpa.in"
                     val lat = call.argument<Double>("geofenceLat") ?: 11.0396
@@ -40,6 +45,8 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(true)
                 }
+
+                // ── Stop the foreground location service ───────────────────────
                 "stopService" -> {
                     val serviceIntent = Intent(this, AttendanceForegroundService::class.java).apply {
                         action = AttendanceForegroundService.ACTION_STOP
@@ -47,9 +54,59 @@ class MainActivity : FlutterActivity() {
                     startService(serviceIntent)
                     result.success(true)
                 }
-                else -> {
-                    result.notImplemented()
+
+                // ── Query whether battery optimisation is exempted ─────────────
+                "isIgnoringBatteryOptimisations" -> {
+                    val pm = getSystemService(POWER_SERVICE) as PowerManager
+                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
                 }
+
+                // ── Open the system dialog to request battery exemption ─────────
+                // Must be called from a user-initiated action (settings button tap).
+                "requestBatteryOptimisationExemption" -> {
+                    try {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        // Fallback: open general battery optimisation settings
+                        try {
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            result.success(true)
+                        } catch (ex: Exception) {
+                            result.error("BATTERY_SETTINGS_UNAVAILABLE", ex.message, null)
+                        }
+                    }
+                }
+
+                // ── Check if service process is running ────────────────────────
+                "getServiceStatus" -> {
+                    val pm = getSystemService(POWER_SERVICE) as PowerManager
+                    val batteryExempt = pm.isIgnoringBatteryOptimizations(packageName)
+
+                    // Check if AttendanceForegroundService is in the running services list
+                    @Suppress("DEPRECATION")
+                    val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+                    @Suppress("DEPRECATION")
+                    val running = activityManager.getRunningServices(50).any {
+                        it.service.className == AttendanceForegroundService::class.java.name
+                    }
+
+                    result.success(mapOf(
+                        "running" to running,
+                        "batteryExempt" to batteryExempt
+                    ))
+                }
+
+                // ── OEM battery / autostart deeplink ──────────────────────────
+                "launchOemBatterySettings" -> {
+                    val launched = OemAutostartLauncher.launch(this)
+                    result.success(launched)
+                }
+
+                else -> result.notImplemented()
             }
         }
     }

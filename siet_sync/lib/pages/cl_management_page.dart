@@ -906,6 +906,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                 // Department Filter
                                 if (_departments.isNotEmpty) ...[
                                   DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     value: _departments.contains(_selectedDepartment) ? _selectedDepartment : 'All',
                                     decoration: InputDecoration(
                                       labelText: 'Department',
@@ -924,7 +925,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                     items: _departments.map((dept) {
                                       return DropdownMenuItem(
                                         value: dept,
-                                        child: Text(dept, overflow: TextOverflow.ellipsis),
+                                        child: Text(dept, overflow: TextOverflow.ellipsis, maxLines: 1),
                                       );
                                     }).toList(),
                                     onChanged: _filterByDepartment,
@@ -934,6 +935,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                 
                                 // Role Filter
                                 DropdownButtonFormField<String>(
+                                  isExpanded: true,
                                   value: _roles.contains(_selectedRole) ? _selectedRole : 'All',
                                   decoration: InputDecoration(
                                     labelText: 'Role',
@@ -952,7 +954,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                   items: _roles.map((role) {
                                     return DropdownMenuItem(
                                       value: role,
-                                      child: Text(role),
+                                      child: Text(role, overflow: TextOverflow.ellipsis, maxLines: 1),
                                     );
                                   }).toList(),
                                   onChanged: _filterByRole,
@@ -961,6 +963,7 @@ class _CLManagementPageState extends State<CLManagementPage> {
                                 
                                 // User Filter
                                 DropdownButtonFormField<String>(
+                                  isExpanded: true,
                                   value: _users.contains(_selectedUser) ? _selectedUser : 'All',
                                   decoration: InputDecoration(
                                     labelText: 'Staff Member',

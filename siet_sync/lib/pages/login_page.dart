@@ -13,6 +13,7 @@ import 'admin_panel.dart';
 import 'hod_panel.dart';
 import 'staff_panel.dart';
 import 'other_staff_login.dart';
+import 'student_panel.dart';
 import '../widgets/face_registration_widget.dart';
 
 String get API_URL => CollegeIPConfig.defaultURL;
@@ -257,7 +258,14 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     Map<String, dynamic> user,
     String role,
   ) {
-    if (role == 'admin') {
+    if (role == 'student') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => StudentDashboardPage(token: token, user: user),
+        ),
+      );
+    } else if (role == 'admin') {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -681,6 +689,10 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             textInputAction: TextInputAction.next,
             autocorrect: false,
             enableSuggestions: false,
+            style: TextStyle(
+              fontSize: 16,
+              color: textColor,
+            ),
             inputFormatters: [
               LengthLimitingTextInputFormatter(Validators.maxUsernameLength),
               FilteringTextInputFormatter.deny(RegExp(r'\s')),
@@ -696,10 +708,10 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             },
             decoration: InputDecoration(
               labelText: 'Username / Reg No',
-              prefixIcon: const Icon(Icons.person_outline_rounded, size: 20, color: Color(0xFF6366F1)),
+              prefixIcon: const Icon(Icons.person_outline_rounded, size: 22, color: Color(0xFF6366F1)),
               filled: true,
               fillColor: fieldBg,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 17),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(color: fieldBorder),
@@ -712,7 +724,8 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(color: Color(0xFF6366F1), width: 1.5),
               ),
-              labelStyle: TextStyle(color: textSecondaryColor, fontSize: 13),
+              labelStyle: TextStyle(color: textSecondaryColor, fontSize: 16),
+              floatingLabelStyle: const TextStyle(color: Color(0xFF6366F1), fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(height: 16),
@@ -721,6 +734,10 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             controller: passwordCtrl,
             obscureText: _obscurePassword,
             textInputAction: TextInputAction.done,
+            style: TextStyle(
+              fontSize: 16,
+              color: textColor,
+            ),
             inputFormatters: [
               LengthLimitingTextInputFormatter(Validators.maxPasswordLength),
             ],
@@ -736,18 +753,18 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
             onFieldSubmitted: (_) => _login(),
             decoration: InputDecoration(
               labelText: 'Password',
-              prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20, color: Color(0xFF6366F1)),
+              prefixIcon: const Icon(Icons.lock_outline_rounded, size: 22, color: Color(0xFF6366F1)),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                  size: 20,
+                  size: 22,
                   color: Colors.grey[500],
                 ),
                 onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
               ),
               filled: true,
               fillColor: fieldBg,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 17),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(color: fieldBorder),
@@ -760,7 +777,8 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(color: Color(0xFF6366F1), width: 1.5),
               ),
-              labelStyle: TextStyle(color: textSecondaryColor, fontSize: 13),
+              labelStyle: TextStyle(color: textSecondaryColor, fontSize: 16),
+              floatingLabelStyle: const TextStyle(color: Color(0xFF6366F1), fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(height: 12),

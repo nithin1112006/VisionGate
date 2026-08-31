@@ -26,14 +26,21 @@ class VpnChecker {
         return await _detectVpnIos();
       } else if (Platform.isWindows) {
         return await _detectVpnWindows();
+      } else if (Platform.isLinux) {
+        return await _detectVpnLinux();
+      } else if (Platform.isMacOS) {
+        return await _detectVpnMacos();
       }
       
-      // Unknown platform - block by default (fail secure)
-      return true;
+      // Other platforms: default to false (allow access unless detected)
+      return false;
     } catch (e) {
-      print('[VPN] Detection error: $e');
-      // Fail-closed: if any error occurs, assume VPN is active for security
-      return true;
+      debugPrint('[VPN] Detection error: $e');
+      final isLocalDev = CollegeIPConfig.defaultURL.contains('localhost') ||
+          CollegeIPConfig.defaultURL.contains('127.0.0.1') ||
+          CollegeIPConfig.defaultURL.contains('192.168.');
+      if (isLocalDev) return false;
+      return false;
     }
   }
 
@@ -43,7 +50,7 @@ class VpnChecker {
     final result = await connectivity.checkConnectivity();
     
     // Check if VPN is active connection
-    if (result == ConnectivityResult.vpn) {
+    if (result.contains(ConnectivityResult.vpn)) {
       return true;
     }
     
@@ -71,8 +78,9 @@ class VpnChecker {
   static Future<bool> _detectVpnIos() async {
     try {
       for (final interface in await NetworkInterface.list()) {
+        final name = interface.name.toLowerCase();
         // All iOS VPNs use utun* interfaces
-        if (interface.name.startsWith('utun')) {
+        if (name.startsWith('utun') || name.contains('ppp') || name.contains('ipsec')) {
           return true;
         }
       }
@@ -92,7 +100,54 @@ class VpnChecker {
             name.contains('wireguard') || 
             name.contains('openvpn') ||
             name.contains('tun') ||
-            name.contains('tap')) {
+            name.contains('tap') ||
+            name.contains('tailscale') ||
+            name.contains('wintun')) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Linux VPN detection
+  static Future<bool> _detectVpnLinux() async {
+    try {
+      for (final interface in await NetworkInterface.list()) {
+        final name = interface.name.toLowerCase();
+        // Common VPN interface names on Linux
+        if (name.startsWith('tun') ||
+            name.startsWith('tap') ||
+            name.startsWith('wg') ||
+            name.startsWith('ppp') ||
+            name.contains('vpn') ||
+            name.contains('tailscale') ||
+            name.contains('wireguard')) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// macOS VPN detection
+  static Future<bool> _detectVpnMacos() async {
+    try {
+      for (final interface in await NetworkInterface.list()) {
+        final name = interface.name.toLowerCase();
+        // Common VPN interface names on macOS
+        if (name.startsWith('utun') ||
+            name.startsWith('tun') ||
+            name.startsWith('tap') ||
+            name.startsWith('ppp') ||
+            name.contains('ipsec') ||
+            name.contains('vpn') ||
+            name.contains('tailscale') ||
+            name.contains('wireguard')) {
           return true;
         }
       }

@@ -3,6 +3,7 @@ import logging
 import bcrypt
 from typing import Optional, List
 import asyncpg
+from .base_repository import BaseRepository
 from ..connection import db_pool
 from ..models import User, OtherStaff
 

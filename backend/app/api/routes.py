@@ -10,6 +10,7 @@ from .v1.face import router as face_router
 from .v1.location import router as location_router
 from .v1.settings import router as settings_router
 from .v1.leave import router as leave_router
+from .v1.staff_schedule import router as staff_schedule_router
 
 # Main API router
 api_router = APIRouter()
@@ -24,3 +25,4 @@ api_router.include_router(face_router, tags=["Face Recognition"])
 api_router.include_router(location_router, tags=["Location Tracking"])
 api_router.include_router(settings_router, tags=["Settings"])
 api_router.include_router(leave_router, tags=["Leave Management"])
+api_router.include_router(staff_schedule_router, tags=["Staff Academic Schedule & Calendar"])

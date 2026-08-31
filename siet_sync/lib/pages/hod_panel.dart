@@ -19,6 +19,7 @@ import '../widgets/quick_access_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
 import '../widgets/attendance_pie_chart.dart';
 import '../widgets/thirukkural_banner.dart';
+import '../widgets/service_health_card.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
@@ -26,6 +27,21 @@ import '../services/pre_verification_service.dart';
 import '../services/leave_balance_notifier.dart';
 import 'attendance_log_page.dart';
 import '../widgets/student_attendance_log_widget.dart';
+import '../widgets/student_management/student_management_tab.dart';
+import '../widgets/academic_schedule/academic_schedule_tab.dart';
+import '../widgets/academic_schedule/venue_management_view.dart';
+import '../widgets/student_leave_od_management_tab.dart';
+import '../widgets/student_face_requests_management_tab.dart';
+import '../widgets/staff_schedule_working_list_tab.dart';
+import '../widgets/class_session_history_widget.dart';
+
+import 'attendance_corrections_page.dart';
+import 'system_reports_page.dart';
+import 'substitute_management_page.dart';
+import 'holiday_calendar_page.dart';
+import 'student_grievance_page.dart';
+import 'security_hub_page.dart';
+
 
 
 // Quick select chip widget
@@ -452,20 +468,34 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
   final List<String> _titles = [
     'Dashboard',
     'Staff',
+    'Students',
+    'Schedule & Sessions',
+    'Timetable & Advisors',
+    'Halls & Labs',
     'Mark Attend',
-    'Leave Requests',
+    'Staff Leave',
+    'Student Leave & OD',
+    'Student Face Requests',
     'Analytics',
     'My Face',
     'Attendance Log',
     'Student Log',
+    'Class Sessions',
+    'Attendance Regularisation & Disputes',
+    'Department Reports & Analytics',
+    'Substitute Faculty Allocator',
+    'Academic Holiday Calendar',
+    'Student Feedback & Grievances',
+    'Security, Sessions & 2FA',
     'Settings',
   ];
+
 
   void _onTabSelected(int index) {
     setState(() {
       _selectedIndex = index;
     });
-    if (index == 3) {
+    if (index == 7) {
       LeaveBalanceNotifier.instance.notifyBalanceChanged();
     }
   }
@@ -530,8 +560,43 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
         onTabSelected: _onTabSelected,
       ),
       HODStaffTab(token: widget.token, dept: widget.user['dept']),
+      StudentManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isHod: true,
+        defaultDept: widget.user['dept'],
+      ),
+      StaffScheduleWorkingListTab(
+        token: widget.token,
+        user: widget.user,
+      ),
+      AcademicScheduleTab(
+        token: widget.token,
+        userRole: 'hod',
+        userDept: widget.user['dept'] ?? 'CSE',
+      ),
+      VenueManagementView(
+        token: widget.token,
+        userRole: 'hod',
+        userDept: widget.user['dept'] ?? 'CSE',
+        currentSelectedDept: widget.user['dept'] ?? 'CSE',
+      ),
       HODMarkAttendanceTab(token: widget.token, user: widget.user),
-      StaffLeaveRequestTab(token: widget.token),
+      StaffLeaveRequestTab(token: widget.token, isHod: true),
+      StudentLeaveODManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isHod: true,
+        defaultDept: widget.user['dept'],
+      ),
+      StudentFaceRequestsManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isStaff: false,
+        isHod: true,
+        isAdmin: false,
+        defaultDept: widget.user['dept'],
+      ),
       HODMergedAnalyticsTab(
         token: widget.token,
         user: widget.user,
@@ -545,9 +610,42 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
         isHod: true,
         defaultDept: widget.user['dept'],
       ),
+      ClassSessionHistoryWidget(
+        token: widget.token,
+        user: widget.user,
+        isHod: true,
+      ),
+      AttendanceCorrectionsPage(
+        token: widget.token,
+        user: widget.user,
+        isAdminOrHod: true,
+      ),
+      SystemReportsPage(
+        token: widget.token,
+        user: widget.user,
+      ),
+      SubstituteManagementPage(
+        token: widget.token,
+        user: widget.user,
+        isAdminOrHod: true,
+      ),
+      HolidayCalendarPage(
+        token: widget.token,
+        isAdmin: false,
+      ),
+      StudentGrievancePage(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: false,
+      ),
+      SecurityHubPage(
+        token: widget.token,
+        user: widget.user,
+      ),
       UserSettingsTab(title: 'HOD Settings', token: widget.token),
     ]);
   }
+
 
   void _logout() async {
     if (!kIsWeb) {
@@ -573,11 +671,33 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       icon: Icons.dashboard_outlined,
       selectedIcon: Icons.dashboard_rounded,
       label: 'Dashboard',
+      sectionHeader: 'Main',
     ),
     NavDestination(
       icon: Icons.people_outline,
       selectedIcon: Icons.people_rounded,
       label: 'Staff',
+      sectionHeader: 'Academic Control',
+    ),
+    NavDestination(
+      icon: Icons.school_outlined,
+      selectedIcon: Icons.school_rounded,
+      label: 'Students',
+    ),
+    NavDestination(
+      icon: Icons.event_available_outlined,
+      selectedIcon: Icons.event_available_rounded,
+      label: 'Schedule & Sessions',
+    ),
+    NavDestination(
+      icon: Icons.calendar_month_outlined,
+      selectedIcon: Icons.calendar_month_rounded,
+      label: 'Timetable',
+    ),
+    NavDestination(
+      icon: Icons.domain_outlined,
+      selectedIcon: Icons.domain_rounded,
+      label: 'Halls & Labs',
     ),
     NavDestination(
       icon: Icons.badge_outlined,
@@ -587,12 +707,24 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
     NavDestination(
       icon: Icons.event_note_outlined,
       selectedIcon: Icons.event_note_rounded,
-      label: 'Leave',
+      label: 'Staff Leave',
+      sectionHeader: 'Leave & Biometrics',
+    ),
+    NavDestination(
+      icon: Icons.assignment_turned_in_outlined,
+      selectedIcon: Icons.assignment_turned_in_rounded,
+      label: 'Student Leave & OD',
+    ),
+    NavDestination(
+      icon: Icons.face_retouching_natural_outlined,
+      selectedIcon: Icons.face_retouching_natural_rounded,
+      label: 'Face Requests',
     ),
     NavDestination(
       icon: Icons.analytics_outlined,
       selectedIcon: Icons.analytics_rounded,
       label: 'Analytics',
+      sectionHeader: 'Reports & Logs',
     ),
     NavDestination(
       icon: Icons.face_outlined,
@@ -610,22 +742,62 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
       label: 'Student Log',
     ),
     NavDestination(
+      icon: Icons.playlist_add_check_circle_outlined,
+      selectedIcon: Icons.playlist_add_check_circle_rounded,
+      label: 'Sessions',
+    ),
+    NavDestination(
+      icon: Icons.edit_calendar_outlined,
+      selectedIcon: Icons.edit_calendar_rounded,
+      label: 'Disputes',
+      sectionHeader: 'Institutional Operations',
+    ),
+    NavDestination(
+      icon: Icons.analytics_outlined,
+      selectedIcon: Icons.analytics_rounded,
+      label: 'Reports',
+    ),
+    NavDestination(
+      icon: Icons.swap_horiz_outlined,
+      selectedIcon: Icons.swap_horiz_rounded,
+      label: 'Substitutes',
+    ),
+    NavDestination(
+      icon: Icons.celebration_outlined,
+      selectedIcon: Icons.celebration_rounded,
+      label: 'Holidays',
+    ),
+    NavDestination(
+      icon: Icons.feedback_outlined,
+      selectedIcon: Icons.feedback_rounded,
+      label: 'Grievances',
+    ),
+    NavDestination(
+      icon: Icons.security_outlined,
+      selectedIcon: Icons.security_rounded,
+      label: 'Security',
+    ),
+    NavDestination(
       icon: Icons.settings_outlined,
       selectedIcon: Icons.settings_rounded,
       label: 'Settings',
+      sectionHeader: 'System',
     ),
   ];
+
 
   @override
   Widget build(BuildContext context) {
     final hodAccent = Theme.of(context).colorScheme.primary;
 
     final scaffold = AdaptiveScaffold(
-      title: _titles[_selectedIndex],
+      title: (_selectedIndex >= 0 && _selectedIndex < _titles.length)
+          ? _titles[_selectedIndex]
+          : 'HOD Dashboard',
       selectedIndex: _selectedIndex,
       onDestinationSelected: (index) {
         setState(() => _selectedIndex = index);
-        if (index == 3) {
+        if (index == 7) {
           LeaveBalanceNotifier.instance.notifyBalanceChanged();
         }
       },
@@ -644,9 +816,45 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
                 onTabSelected: _onTabSelected,
               ),
               HODStaffTab(token: widget.token, dept: widget.user['dept']),
+              StudentManagementTab(
+                token: widget.token,
+                user: widget.user,
+                isHod: true,
+                defaultDept: widget.user['dept'],
+              ),
+              StaffScheduleWorkingListTab(
+                token: widget.token,
+                user: widget.user,
+              ),
+              AcademicScheduleTab(
+                token: widget.token,
+                userRole: 'hod',
+                userDept: widget.user['dept'] ?? 'CSE',
+              ),
+              VenueManagementView(
+                token: widget.token,
+                userRole: 'hod',
+                userDept: widget.user['dept'] ?? 'CSE',
+                currentSelectedDept: widget.user['dept'] ?? 'CSE',
+              ),
               HODMarkAttendanceTab(token: widget.token, user: widget.user),
-              StaffLeaveRequestTab(token: widget.token),
+              StaffLeaveRequestTab(token: widget.token, isHod: true),
+              StudentLeaveODManagementTab(
+                token: widget.token,
+                user: widget.user,
+                isHod: true,
+                defaultDept: widget.user['dept'],
+              ),
+              StudentFaceRequestsManagementTab(
+                token: widget.token,
+                user: widget.user,
+                isStaff: false,
+                isHod: true,
+                isAdmin: false,
+                defaultDept: widget.user['dept'],
+              ),
               HODMergedAnalyticsTab(
+
                 token: widget.token,
                 user: widget.user,
                 dept: widget.user['dept'],
@@ -659,13 +867,48 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
                 isHod: true,
                 defaultDept: widget.user['dept'],
               ),
+              ClassSessionHistoryWidget(
+                token: widget.token,
+                user: widget.user,
+                isHod: true,
+              ),
+              AttendanceCorrectionsPage(
+                token: widget.token,
+                user: widget.user,
+                isAdminOrHod: true,
+              ),
+              SystemReportsPage(
+                token: widget.token,
+                user: widget.user,
+              ),
+              SubstituteManagementPage(
+                token: widget.token,
+                user: widget.user,
+                isAdminOrHod: true,
+              ),
+              HolidayCalendarPage(
+                token: widget.token,
+                isAdmin: false,
+              ),
+              StudentGrievancePage(
+                token: widget.token,
+                user: widget.user,
+                isAdmin: false,
+              ),
+              SecurityHubPage(
+                token: widget.token,
+                user: widget.user,
+              ),
               UserSettingsTab(title: 'HOD Settings', token: widget.token),
             ]);
+
           });
           await Future.delayed(const Duration(milliseconds: 100));
         },
         color: hodAccent,
-        child: _pages[_selectedIndex],
+        child: (_selectedIndex >= 0 && _selectedIndex < _pages.length)
+            ? _pages[_selectedIndex]
+            : (_pages.isNotEmpty ? _pages.first : const SizedBox.shrink()),
       ),
     );
 
@@ -760,70 +1003,39 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
               ),
             ),
             const SizedBox(height: 12),
-            _buildDrawerItem(
-              0,
-              Icons.dashboard_rounded,
-              'Dashboard',
-              Icons.dashboard_outlined,
-            ),
-            _buildDrawerItem(
-              1,
-              Icons.people_rounded,
-              'Staff',
-              Icons.people_outline,
-            ),
-            _buildDrawerItem(
-              2,
-              Icons.badge_rounded,
-              'Mark Attendance',
-              Icons.badge_outlined,
-            ),
-            _buildDrawerItem(
-              3,
-              Icons.event_note_rounded,
-              'Leave Requests',
-              Icons.event_note_outlined,
-            ),
-            _buildDrawerItem(
-              4,
-              Icons.analytics_rounded,
-              'Analytics',
-              Icons.analytics_outlined,
-            ),
-            _buildDrawerItem(
-              5,
-              Icons.face_rounded,
-              'My Face',
-              Icons.face_outlined,
-            ),
-            _buildDrawerItem(
-              6,
-              Icons.history_edu_rounded,
-              'Attendance Log',
-              Icons.history_edu_outlined,
-            ),
-            _buildDrawerItem(
-              7,
-              Icons.person_search_rounded,
-              'Student Log',
-              Icons.person_search_outlined,
-            ),
-            _buildDrawerItem(
-              8,
-              Icons.settings_rounded,
-              'Settings',
-              Icons.settings_outlined,
-            ),
-            const SizedBox(height: 16),
+            // Drawer Nav Options with Categorized Section Sub-Headings
+            for (int i = 0; i < _navDestinations.length; i++) ...[
+              if (_navDestinations[i].sectionHeader != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+                  child: Text(
+                    _navDestinations[i].sectionHeader!.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      color: isDark ? Colors.white38 : Colors.grey.shade500,
+                    ),
+                  ),
+                ),
+              _buildDrawerItem(
+                i,
+                _navDestinations[i].selectedIcon,
+                _titles.length > i ? _titles[i] : _navDestinations[i].label,
+                _navDestinations[i].icon,
+              ),
+            ],
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Divider(
                 color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
               ),
             ),
+
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
+
               child: ListTile(
                 leading: Container(
                   padding: const EdgeInsets.all(8),
@@ -1023,15 +1235,15 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
   // Available drawer items for quick access
   final List<DrawerItem> _drawerItems = const [
     DrawerItem(index: 1, icon: Icons.people_rounded, title: 'Staff'),
-    DrawerItem(index: 2, icon: Icons.badge_rounded, title: 'Mark Attendance'),
+    DrawerItem(index: 6, icon: Icons.badge_rounded, title: 'Mark Attendance'),
     DrawerItem(
-      index: 3,
+      index: 7,
       icon: Icons.event_note_rounded,
-      title: 'Leave Requests',
+      title: 'Staff Leave',
     ),
-    DrawerItem(index: 4, icon: Icons.analytics_rounded, title: 'Analytics'),
-    DrawerItem(index: 5, icon: Icons.face_rounded, title: 'My Face'),
-    DrawerItem(index: 6, icon: Icons.settings_rounded, title: 'Settings'),
+    DrawerItem(index: 10, icon: Icons.analytics_rounded, title: 'Analytics'),
+    DrawerItem(index: 11, icon: Icons.face_rounded, title: 'My Face'),
+    DrawerItem(index: 21, icon: Icons.settings_rounded, title: 'Settings'),
   ];
 
   // Handle quick access widget tap - navigate to the selected tab
@@ -1631,6 +1843,7 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
             welcomeCard(),
             const SizedBox(height: 16),
             const ThirukkuralBanner(),
+            const ServiceHealthCard(),
             const SizedBox(height: 16),
             SizedBox(
               height: 270,
@@ -1747,6 +1960,342 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
       }
     }
 
+    Widget _buildAcademicActionTile({
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      required Color color,
+      required VoidCallback onTap,
+      required bool isDark,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 200, maxWidth: 280),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: color.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: isDark ? Colors.white54 : Colors.grey.shade600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, size: 16, color: color),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget departmentAcademicHub() {
+      final deptName = (widget.user['dept'] ?? 'CSE').toString().toUpperCase();
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.school_rounded, color: Color(0xFF2563EB), size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Department Academic Control Center',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Autonomous Student Operations • Scoped Strictly to $deptName',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white60 : Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.lock_rounded, size: 12, color: Color(0xFF10B981)),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$deptName Sandboxed',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // Sub-Heading 1: Academic & Session Management
+            Row(
+              children: [
+                Icon(
+                  Icons.menu_book_rounded,
+                  size: 16,
+                  color: isDark ? Colors.white70 : Colors.black87,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Academic & Session Management',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _buildAcademicActionTile(
+                  icon: Icons.event_available_rounded,
+                  title: 'My Teaching Schedule',
+                  subtitle: 'Upcoming Sessions, Working List & Attendance',
+                  color: const Color(0xFF4F46E5),
+                  onTap: () => widget.onTabSelected?.call(3),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.groups_rounded,
+                  title: 'Student Directory',
+                  subtitle: 'Batches, Sections & Biometrics',
+                  color: const Color(0xFF2563EB),
+                  onTap: () => widget.onTabSelected?.call(2),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.calendar_month_rounded,
+                  title: 'Timetable & Advisors',
+                  subtitle: 'Slots, Rooms & Cross-Dept Faculty',
+                  color: const Color(0xFF8B5CF6),
+                  onTap: () => widget.onTabSelected?.call(4),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.domain_rounded,
+                  title: 'Halls & Labs',
+                  subtitle: 'Campus Venues, CRUD & Capacities',
+                  color: const Color(0xFF0D9488),
+                  onTap: () => widget.onTabSelected?.call(5),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.approval_rounded,
+                  title: 'Student Leave & OD',
+                  subtitle: 'Level-2 Department Approvals',
+                  color: const Color(0xFFF59E0B),
+                  onTap: () => widget.onTabSelected?.call(8),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.fact_check_rounded,
+                  title: 'Student Attendance Logs',
+                  subtitle: 'Session Check-Ins & Defaulters',
+                  color: const Color(0xFF10B981),
+                  onTap: () => widget.onTabSelected?.call(13),
+                  isDark: isDark,
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+            Divider(color: isDark ? Colors.white10 : Colors.grey.shade200),
+            const SizedBox(height: 12),
+
+            // Sub-Heading 2: Institutional Operations & Reporting Hub
+            Row(
+              children: [
+                Icon(
+                  Icons.apps_rounded,
+                  size: 16,
+                  color: isDark ? Colors.white70 : Colors.black87,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Institutional Operations & Reporting Hub',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _buildAcademicActionTile(
+                  icon: Icons.edit_calendar_rounded,
+                  title: 'Attendance Regularisation',
+                  subtitle: 'Dispute Approvals & Punch Overrides',
+                  color: const Color(0xFF3B82F6),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => AttendanceCorrectionsPage(
+                        token: widget.token,
+                        user: widget.user,
+                        isAdminOrHod: true,
+                      ),
+                    ),
+                  ),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.analytics_rounded,
+                  title: 'Department Reports',
+                  subtitle: 'Export Daily Register & Leaves to Excel/PDF',
+                  color: const Color(0xFF0D9488),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => SystemReportsPage(
+                        token: widget.token,
+                        user: widget.user,
+                      ),
+                    ),
+                  ),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.swap_horiz_rounded,
+                  title: 'Substitute Allocator',
+                  subtitle: 'Assign Substitute Faculty Timetable Periods',
+                  color: const Color(0xFFD97706),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => SubstituteManagementPage(
+                        token: widget.token,
+                        user: widget.user,
+                        isAdminOrHod: true,
+                      ),
+                    ),
+                  ),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.celebration_rounded,
+                  title: 'Academic Holidays',
+                  subtitle: 'View College Holiday Calendar',
+                  color: const Color(0xFF8B5CF6),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => HolidayCalendarPage(
+                        token: widget.token,
+                        isAdmin: false,
+                      ),
+                    ),
+                  ),
+                  isDark: isDark,
+                ),
+                _buildAcademicActionTile(
+                  icon: Icons.feedback_rounded,
+                  title: 'Student Grievances',
+                  subtitle: 'Review & Resolve Student Tickets',
+                  color: const Color(0xFFEA580C),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => StudentGrievancePage(
+                        token: widget.token,
+                        user: widget.user,
+                        isAdmin: true,
+                      ),
+                    ),
+                  ),
+                  isDark: isDark,
+                ),
+              ],
+            ),
+
+          ],
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.all(pagePadding),
@@ -1759,6 +2308,8 @@ class _HODDashboardTabState extends State<HODDashboardTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               bentoGrid(),
+              const SizedBox(height: 20),
+              departmentAcademicHub(),
               const SizedBox(height: 24),
               recentAttendancePanel(),
             ],
@@ -2690,19 +3241,32 @@ class _HODStaffTabState extends State<HODStaffTab> {
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Staff deleted successfully')),
-        );
-        fetchStaff();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Staff deleted successfully')),
+          );
+          fetchStaff();
+        }
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to delete staff')));
+        String msg = 'Failed to delete staff';
+        try {
+          final data = jsonDecode(response.body);
+          if (data is Map && data['detail'] != null) {
+            msg = data['detail'].toString();
+          }
+        } catch (_) {}
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(msg)),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     }
   }
 
@@ -3411,9 +3975,18 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
   String _message = '';
 
   bool _isWindowAllowed = false;
+  bool _isHoliday = false;
+  bool _isSpecialOccasion = false;
+  String? _holidayTitle;
+  String? _holidayReason;
   String _activeSlotType = 'check_in';
   String _activeSlotHalf = 'full_day';
   bool _alreadyMarkedCurrentSlot = false;
+  String? _checkInTime;
+  String? _checkOutTime;
+  bool _isCheckedIn = false;
+  bool _isCheckedOut = false;
+  String _todayAttendanceStatus = '';
 
   @override
   void initState() {
@@ -3453,16 +4026,29 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
       bool allowed = false;
       String slotType = 'check_in';
       String slotHalf = 'full_day';
+      bool isHol = false;
+      bool isSpecial = false;
+      String? holTitle;
+      String? holReason;
       
       if (slotResponse.statusCode == 200) {
         final slotData = jsonDecode(slotResponse.body);
         allowed = slotData['allowed'] ?? false;
         slotType = slotData['slot_type'] ?? 'check_in';
         slotHalf = slotData['slot_half'] ?? 'full_day';
+        isHol = slotData['is_holiday'] == true;
+        isSpecial = slotData['is_special_occasion'] == true;
+        holTitle = slotData['holiday_title']?.toString() ?? slotData['occasion_title']?.toString();
+        holReason = slotData['holiday_reason']?.toString() ?? slotData['reason']?.toString() ?? slotData['message']?.toString();
       }
 
       // Check if already marked for the current session (slotType & slotHalf)
       bool alreadyMarked = false;
+      String? inTime;
+      String? outTime;
+      bool checkedIn = false;
+      bool checkedOut = false;
+      String statusStr = '';
       final today = DateTime.now().toString().split(' ')[0];
 
       if (slotHalf == 'first_half' || slotHalf == 'second_half') {
@@ -3479,6 +4065,12 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
           );
 
           if (todayRecord != null) {
+            statusStr = todayRecord['status']?.toString() ?? 'Present';
+            inTime = todayRecord['first_half_in_time']?.toString() ?? todayRecord['second_half_in_time']?.toString() ?? todayRecord['in_time']?.toString();
+            outTime = todayRecord['first_half_out_time']?.toString() ?? todayRecord['second_half_out_time']?.toString() ?? todayRecord['out_time']?.toString();
+            checkedIn = inTime != null || todayRecord['first_half_status'] == 'Present' || todayRecord['second_half_status'] == 'Present';
+            checkedOut = outTime != null;
+
             if (slotHalf == 'first_half') {
               if (slotType == 'check_in') {
                 alreadyMarked = todayRecord['first_half_in_time'] != null || todayRecord['first_half_status'] == 'Present';
@@ -3505,7 +4097,20 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
           final regNo = widget.user['regNo'] ?? widget.user['reg_no'] ?? '';
           final userRecords = attendance.where((record) => record['reg_no'] == regNo).toList();
           if (userRecords.isNotEmpty) {
+            for (var r in userRecords) {
+              final st = r['status']?.toString().toLowerCase();
+              final ts = r['timestamp']?.toString() ?? '';
+              final timePart = ts.contains(' ') ? ts.split(' ')[1] : (ts.contains('T') ? ts.split('T')[1] : ts);
+              if (st == 'check_in' || st == 'present') {
+                checkedIn = true;
+                inTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
+              } else if (st == 'check_out') {
+                checkedOut = true;
+                outTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
+              }
+            }
             alreadyMarked = userRecords.any((record) => record['status'] == slotType);
+            statusStr = checkedIn ? 'Present' : '';
           }
         }
       }
@@ -3513,9 +4118,18 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
 
       setState(() {
         _isWindowAllowed = allowed;
+        _isHoliday = isHol;
+        _isSpecialOccasion = isSpecial;
+        _holidayTitle = holTitle;
+        _holidayReason = holReason;
         _activeSlotType = slotType;
         _activeSlotHalf = slotHalf;
         _alreadyMarkedCurrentSlot = alreadyMarked;
+        _checkInTime = inTime;
+        _checkOutTime = outTime;
+        _isCheckedIn = checkedIn;
+        _isCheckedOut = checkedOut;
+        _todayAttendanceStatus = statusStr;
         _isLoading = false;
       });
     } catch (e) {
@@ -3523,6 +4137,19 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
         _isLoading = false;
       });
     }
+  }
+
+  String _getButtonText(bool isCheckOutDone) {
+    if (isCheckOutDone) {
+      return "Checked Out Successfully";
+    }
+    if (!_isWindowAllowed) {
+      return "Outside Window";
+    }
+    if (_alreadyMarkedCurrentSlot) {
+      return "Already marked ${_activeSlotHalf == 'first_half' ? 'FN' : _activeSlotHalf == 'second_half' ? 'AN' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}";
+    }
+    return "Mark ${_activeSlotHalf == 'first_half' ? 'FN Attendance' : _activeSlotHalf == 'second_half' ? 'AN Attendance' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}";
   }
 
   void _navigateToMarkAttendance() {
@@ -3542,10 +4169,26 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
           regNo: widget.user['regNo'],
           name: widget.user['name'],
           dept: widget.user['dept'],
-          onVerified: () {
+          onVerifiedData: (data) {
+            final isCheckout = data['action'] == 'check_out' || data['slot_type'] == 'check_out' || _activeSlotType == 'check_out';
+            final msg = data['message']?.toString() ?? (isCheckout ? 'Check-Out marked successfully!' : 'Attendance marked successfully!');
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Attendance marked successfully!')),
+              SnackBar(
+                content: Row(
+                  children: [
+                    Icon(isCheckout ? Icons.check_circle_outline : Icons.task_alt, color: Colors.white),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(msg)),
+                  ],
+                ),
+                backgroundColor: isCheckout ? const Color(0xFF059669) : const Color(0xFF0D9488),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             );
+            _checkTodayAttendance();
+          },
+          onVerified: () {
             _checkTodayAttendance();
           },
           onCancel: () => Navigator.pop(context),
@@ -3578,8 +4221,11 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
 
   @override
   Widget build(BuildContext context) {
+    final isCheckOutSlot = _activeSlotType == 'check_out';
+    final isCheckOutDone = _isCheckedOut || (_alreadyMarkedCurrentSlot && isCheckOutSlot);
+
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator(color: Colors.teal));
     }
 
     return SingleChildScrollView(
@@ -3588,25 +4234,39 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Card(
-            color: Colors.teal,
+            color: isCheckOutDone ? const Color(0xFF059669) : Colors.teal,
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.qr_code_scanner,
+                  Icon(
+                    isCheckOutDone ? Icons.check_circle_rounded : Icons.qr_code_scanner,
                     color: Colors.white,
-                    size: 28,
+                    size: 32,
                   ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Mark Your Attendance',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isCheckOutDone ? 'Check-Out Done Successfully' : 'Mark Your Attendance',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        if (isCheckOutDone && _checkOutTime != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            "Checked out at $_checkOutTime. Attendance recorded.",
+                            style: const TextStyle(fontSize: 12, color: Colors.white70),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ],
@@ -3615,6 +4275,8 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
           ),
           const SizedBox(height: 16),
           Card(
+            elevation: 1,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -3624,8 +4286,12 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
-                        _isRegistered ? Icons.check_circle : Icons.warning,
-                        color: _isRegistered ? Colors.green : Colors.orange,
+                        isCheckOutDone
+                            ? Icons.verified_user
+                            : (_isRegistered ? Icons.check_circle : Icons.warning),
+                        color: isCheckOutDone
+                            ? Colors.green
+                            : (_isRegistered ? Colors.green : Colors.orange),
                         size: 28,
                       ),
                       const SizedBox(width: 12),
@@ -3634,21 +4300,20 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              _isRegistered
-                                  ? "Face Registered"
-                                  : "Face Not Registered",
+                              isCheckOutDone
+                                  ? "Attendance Completed for Today"
+                                  : (_isRegistered
+                                      ? "Face Registered"
+                                      : "Face Not Registered"),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            if (!_isRegistered)
+                            if (!_isRegistered && !isCheckOutDone)
                               const Text(
                                 "Please register your face to mark attendance",
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.orange,
-                                ),
+                                style: TextStyle(fontSize: 12, color: Colors.grey),
                               ),
                           ],
                         ),
@@ -3658,53 +4323,151 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
                   const SizedBox(height: 16),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: !_isWindowAllowed
-                          ? Colors.red.withValues(alpha: 0.1)
-                          : (_alreadyMarkedCurrentSlot
-                              ? Colors.green.withValues(alpha: 0.1)
-                              : Colors.orange.withValues(alpha: 0.1)),
-                      borderRadius: BorderRadius.circular(8),
+                      color: isCheckOutDone
+                          ? Colors.green.withValues(alpha: 0.1)
+                          : (_isHoliday
+                              ? const Color(0xFF2563EB).withValues(alpha: 0.08)
+                              : (_isSpecialOccasion
+                                  ? const Color(0xFF8B5CF6).withValues(alpha: 0.08)
+                                  : (!_isWindowAllowed
+                                      ? Colors.red.withValues(alpha: 0.1)
+                                      : (_alreadyMarkedCurrentSlot
+                                          ? Colors.green.withValues(alpha: 0.1)
+                                          : Colors.orange.withValues(alpha: 0.1))))),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: !_isWindowAllowed
-                            ? Colors.red
-                            : (_alreadyMarkedCurrentSlot ? Colors.green : Colors.orange),
+                        color: isCheckOutDone
+                            ? Colors.green
+                            : (_isHoliday
+                                ? const Color(0xFF2563EB).withValues(alpha: 0.3)
+                                : (_isSpecialOccasion
+                                    ? const Color(0xFF8B5CF6).withValues(alpha: 0.3)
+                                    : (!_isWindowAllowed
+                                        ? Colors.red
+                                        : (_alreadyMarkedCurrentSlot ? Colors.green : Colors.orange)))),
                       ),
                     ),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(
-                          !_isWindowAllowed
-                              ? Icons.error_outline
-                              : (_alreadyMarkedCurrentSlot
-                                  ? Icons.check_circle
-                                  : Icons.access_time),
-                          color: !_isWindowAllowed
-                              ? Colors.red
-                              : (_alreadyMarkedCurrentSlot ? Colors.green : Colors.orange),
+                          isCheckOutDone
+                              ? Icons.check_circle
+                              : (_isHoliday
+                                  ? Icons.beach_access_rounded
+                                  : (_isSpecialOccasion
+                                      ? Icons.emoji_events_rounded
+                                      : (!_isWindowAllowed
+                                          ? Icons.error_outline
+                                          : (_alreadyMarkedCurrentSlot
+                                              ? Icons.check_circle
+                                              : Icons.access_time)))),
+                          color: isCheckOutDone
+                              ? Colors.green
+                              : (_isHoliday
+                                  ? const Color(0xFF2563EB)
+                                  : (_isSpecialOccasion
+                                      ? const Color(0xFF8B5CF6)
+                                      : (!_isWindowAllowed
+                                          ? Colors.red
+                                          : (_alreadyMarkedCurrentSlot ? Colors.green : Colors.orange)))),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            !_isWindowAllowed
-                                ? "Outside active attendance window"
-                                : (_alreadyMarkedCurrentSlot
-                                    ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN (Morning)' : _activeSlotHalf == 'second_half' ? 'AN (Afternoon)' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'} today"
-                                    : "Active: ${_activeSlotHalf == 'first_half' ? 'FN Morning Slot' : _activeSlotHalf == 'second_half' ? 'AN Afternoon Slot' : _activeSlotType == 'check_in' ? 'Check-In Slot' : 'Check-Out Slot'} — Tap to mark"),
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: !_isWindowAllowed
-                                  ? Colors.red
-                                  : (_alreadyMarkedCurrentSlot
-                                      ? Colors.green
-                                      : Colors.orange[700]),
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isCheckOutDone
+                                    ? "Check-Out recorded successfully for today"
+                                    : (_isHoliday
+                                        ? (_holidayTitle?.isNotEmpty == true ? "Declared Holiday — $_holidayTitle" : "Declared Institutional Holiday")
+                                        : (_isSpecialOccasion
+                                            ? (_holidayTitle?.isNotEmpty == true ? "Special Occasion — $_holidayTitle" : "Special Institutional Occasion")
+                                            : (!_isWindowAllowed
+                                                ? "Outside active attendance window"
+                                                : (_alreadyMarkedCurrentSlot
+                                                    ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN (Morning)' : _activeSlotHalf == 'second_half' ? 'AN (Afternoon)' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'} today"
+                                                    : "Active: ${_activeSlotHalf == 'first_half' ? 'FN Morning Slot' : _activeSlotHalf == 'second_half' ? 'AN Afternoon Slot' : _activeSlotType == 'check_in' ? 'Check-In Slot' : 'Check-Out Slot'} — Tap to mark")))),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: isCheckOutDone
+                                      ? Colors.green[700]
+                                      : (_isHoliday
+                                          ? const Color(0xFF1D4ED8)
+                                          : (_isSpecialOccasion
+                                              ? const Color(0xFF6D28D9)
+                                              : (!_isWindowAllowed
+                                                  ? Colors.red
+                                                  : (_alreadyMarkedCurrentSlot
+                                                      ? Colors.green
+                                                      : Colors.orange[700])))),
+                                ),
+                              ),
+                              if (_isHoliday || _isSpecialOccasion) ...[
+                                const SizedBox(height: 3),
+                                Text(
+                                  _holidayReason?.isNotEmpty == true
+                                      ? _holidayReason!
+                                      : (_isHoliday ? "No biometric attendance required today." : "Regular attendance recording is suspended for this event."),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: _isHoliday ? const Color(0xFF1E40AF) : const Color(0xFF5B21B6),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                       ],
                     ),
                   ),
+                  if (_isCheckedIn || _isCheckedOut) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Check-In", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                              const SizedBox(height: 2),
+                              Text(_checkInTime ?? (_isCheckedIn ? "Present" : "--"), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Check-Out", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                              const SizedBox(height: 2),
+                              Text(_checkOutTime ?? (_isCheckedOut ? "Completed" : "--"), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedOut ? Colors.green.shade700 : null)),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                              const SizedBox(height: 2),
+                              Text(
+                                _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   if (!_isRegistered) ...[
                     SizedBox(
@@ -3726,20 +4489,18 @@ class _HODMarkAttendanceTabState extends State<HODMarkAttendanceTab> {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton.icon(
-                      onPressed: (_isRegistered && _isWindowAllowed && !_alreadyMarkedCurrentSlot)
+                      onPressed: (_isRegistered && _isWindowAllowed && !_alreadyMarkedCurrentSlot && !isCheckOutDone)
                           ? _navigateToMarkAttendance
                           : null,
-                      icon: const Icon(Icons.qr_code_scanner),
-                      label: Text(
-                        !_isWindowAllowed
-                            ? "Outside Window"
-                            : (_alreadyMarkedCurrentSlot
-                                ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN' : _activeSlotHalf == 'second_half' ? 'AN' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"
-                                : "Mark ${_activeSlotHalf == 'first_half' ? 'FN Attendance' : _activeSlotHalf == 'second_half' ? 'AN Attendance' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"),
-                      ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal,
+                        backgroundColor: isCheckOutDone ? const Color(0xFF059669) : Colors.teal,
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: isCheckOutDone ? const Color(0xFF10B981).withValues(alpha: 0.25) : null,
+                        disabledForegroundColor: isCheckOutDone ? const Color(0xFF047857) : null,
+                      ),
+                      icon: Icon(isCheckOutDone ? Icons.check_circle_rounded : Icons.qr_code_scanner),
+                      label: Text(
+                        _getButtonText(isCheckOutDone),
                       ),
                     ),
                   ),

@@ -17,15 +17,27 @@ import '../widgets/quick_access_stat_card.dart';
 import '../widgets/face_registration_widget.dart';
 import '../widgets/attendance_pie_chart.dart';
 import '../widgets/thirukkural_banner.dart';
+import '../widgets/service_health_card.dart';
 import '../widgets/user_settings_tab.dart';
 import '../widgets/leave_request_widget.dart';
 import '../widgets/location_permission_enforcer.dart';
+import '../widgets/academic_schedule/date_timetable_view.dart';
 import '../services/leave_balance_notifier.dart';
 import '../services/pre_verification_service.dart';
 import '../widgets/staff_multi_user_kiosk_tab.dart';
 import '../widgets/staff_student_permissions_widget.dart';
 import '../widgets/student_attendance_log_widget.dart';
+import '../widgets/student_management/student_management_tab.dart';
 import 'attendance_log_page.dart';
+import '../widgets/student_leave_od_management_tab.dart';
+import '../widgets/student_face_requests_management_tab.dart';
+import 'attendance_corrections_page.dart';
+import 'holiday_calendar_page.dart';
+import 'student_grievance_page.dart';
+import 'system_reports_page.dart';
+import 'security_hub_page.dart';
+import '../widgets/staff_schedule_working_list_tab.dart';
+
 
 
 String get API_URL => CollegeIPConfig.defaultURL;
@@ -442,6 +454,7 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         icon: Icons.dashboard_outlined,
         selectedIcon: Icons.dashboard_rounded,
         label: 'Dashboard',
+        sectionHeader: 'Main',
       ),
       const NavDestination(
         icon: Icons.qr_code_scanner_outlined,
@@ -449,9 +462,21 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         label: 'Attend',
       ),
       const NavDestination(
+        icon: Icons.school_outlined,
+        selectedIcon: Icons.school_rounded,
+        label: 'Students',
+        sectionHeader: 'Academic & Teaching',
+      ),
+      const NavDestination(
+        icon: Icons.calendar_month_outlined,
+        selectedIcon: Icons.calendar_month_rounded,
+        label: 'Schedule & Sessions',
+      ),
+      const NavDestination(
         icon: Icons.face_outlined,
         selectedIcon: Icons.face_rounded,
         label: 'My Face',
+        sectionHeader: 'Leave & Biometrics',
       ),
       const NavDestination(
         icon: Icons.verified_user_outlined,
@@ -461,12 +486,23 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
       const NavDestination(
         icon: Icons.event_note_outlined,
         selectedIcon: Icons.event_note_rounded,
-        label: 'Leave',
+        label: 'Staff Leave',
+      ),
+      const NavDestination(
+        icon: Icons.assignment_turned_in_outlined,
+        selectedIcon: Icons.assignment_turned_in_rounded,
+        label: 'Student Leave & OD',
+      ),
+      const NavDestination(
+        icon: Icons.face_retouching_natural_outlined,
+        selectedIcon: Icons.face_retouching_natural_rounded,
+        label: 'Face Requests',
       ),
       const NavDestination(
         icon: Icons.history_edu_outlined,
         selectedIcon: Icons.history_edu_rounded,
         label: 'Log',
+        sectionHeader: 'Reports & Logs',
       ),
       const NavDestination(
         icon: Icons.person_search_outlined,
@@ -474,14 +510,41 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         label: 'Student Log',
       ),
       const NavDestination(
+        icon: Icons.edit_calendar_outlined,
+        selectedIcon: Icons.edit_calendar_rounded,
+        label: 'Disputes',
+        sectionHeader: 'Institutional Operations',
+      ),
+      const NavDestination(
+        icon: Icons.analytics_outlined,
+        selectedIcon: Icons.analytics_rounded,
+        label: 'Reports',
+      ),
+      const NavDestination(
+        icon: Icons.celebration_outlined,
+        selectedIcon: Icons.celebration_rounded,
+        label: 'Holidays',
+      ),
+      const NavDestination(
+        icon: Icons.feedback_outlined,
+        selectedIcon: Icons.feedback_rounded,
+        label: 'Grievances',
+      ),
+      const NavDestination(
+        icon: Icons.security_outlined,
+        selectedIcon: Icons.security_rounded,
+        label: 'Security',
+      ),
+      const NavDestination(
         icon: Icons.settings_outlined,
         selectedIcon: Icons.settings_rounded,
         label: 'Settings',
+        sectionHeader: 'System',
       ),
     ];
     if (_isKioskEnabled) {
       list.insert(
-        2,
+        3,
         const NavDestination(
           icon: Icons.storefront_outlined,
           selectedIcon: Icons.storefront,
@@ -509,17 +572,45 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     _titles.add('Mark My Attendance');
     _pages.add(StaffMarkAttendanceTab(token: widget.token, user: widget.user));
 
+    _titles.add('Students & Class Hub');
+    _pages.add(
+      StudentManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isStaff: true,
+        defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+        staffRegNo: (widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString(),
+        onNavigateToTab: _onTabSelected,
+      ),
+    );
+
     if (_isKioskEnabled) {
       _titles.add('Multi-User Kiosk');
       _pages.add(StaffMultiUserKioskTab(token: widget.token, user: widget.user));
     }
 
+    _titles.add('Schedule & Working List');
+    _pages.add(
+      StaffScheduleWorkingListTab(
+        token: widget.token,
+        user: widget.user,
+        onNavigateToTab: _onTabSelected,
+      ),
+    );
+
     _titles.addAll([
       'My Face',
       'Student Permissions',
-      'Leave Requests',
+      'Staff Leave',
+      'Student Leave & OD Endorsements',
+      'Student Face Requests',
       'Attendance Log',
       'Student Log',
+      'Attendance Regularisation & Disputes',
+      'Reports & Analytics Suite',
+      'Academic Holiday Calendar',
+      'Feedback & Grievances',
+      'Security, Sessions & 2FA',
       'Settings',
     ]);
 
@@ -531,6 +622,20 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         sessionToken: widget.token,
       ),
       StaffLeaveRequestTab(token: widget.token),
+      StudentLeaveODManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isStaff: true,
+        defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+      ),
+      StudentFaceRequestsManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isStaff: true,
+        isHod: false,
+        isAdmin: false,
+        defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+      ),
       AttendanceLogTab(token: widget.token, user: widget.user),
       StudentAttendanceLogWidget(
         token: widget.token,
@@ -539,9 +644,32 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
         isAdmin: false,
         defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
       ),
+      AttendanceCorrectionsPage(
+        token: widget.token,
+        user: widget.user,
+        isAdminOrHod: false,
+      ),
+      SystemReportsPage(
+        token: widget.token,
+        user: widget.user,
+      ),
+      HolidayCalendarPage(
+        token: widget.token,
+        isAdmin: false,
+      ),
+      StudentGrievancePage(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: false,
+      ),
+      SecurityHubPage(
+        token: widget.token,
+        user: widget.user,
+      ),
       UserSettingsTab(title: 'Staff Settings', token: widget.token),
     ]);
   }
+
 
   void _onTabSelected(int index) {
     setState(() {
@@ -844,14 +972,29 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
               ),
             ),
             const SizedBox(height: 12),
-            for (int i = 0; i < _navDestinations.length; i++)
+            // Drawer Nav Options with Categorized Section Sub-Headings
+            for (int i = 0; i < _navDestinations.length; i++) ...[
+              if (_navDestinations[i].sectionHeader != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+                  child: Text(
+                    _navDestinations[i].sectionHeader!.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      color: isDark ? Colors.white38 : Colors.grey.shade500,
+                    ),
+                  ),
+                ),
               _buildDrawerItem(
                 i,
                 _navDestinations[i].selectedIcon,
-                _navDestinations[i].label,
+                _titles.length > i ? _titles[i] : _navDestinations[i].label,
                 _navDestinations[i].icon,
               ),
-            const SizedBox(height: 16),
+            ],
+            const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Divider(
@@ -862,6 +1005,7 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: ListTile(
+
                 leading: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
@@ -939,19 +1083,24 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
                   ),
                 ),
                 const SizedBox(width: 14),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                    color: isSelected
-                        ? iOSBlue
-                        : (isDark ? Colors.white : Colors.grey.shade700),
-                    fontSize: 15,
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                      color: isSelected
+                          ? iOSBlue
+                          : (isDark ? Colors.white : Colors.grey.shade700),
+                      fontSize: 15,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
-                const Spacer(),
-                if (isSelected)
+                if (isSelected) ...[
+                  const SizedBox(width: 8),
                   Icon(Icons.chevron_right, color: iOSBlue, size: 22),
+                ],
               ],
             ),
           ),
@@ -1045,26 +1194,36 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
         ),
         DrawerItem(
           index: 2,
+          icon: Icons.school_rounded,
+          title: 'Students',
+        ),
+        DrawerItem(
+          index: 3,
           icon: Icons.storefront_rounded,
           title: 'Multi-User Kiosk',
         ),
-        DrawerItem(index: 3, icon: Icons.face_rounded, title: 'My Face'),
         DrawerItem(
           index: 4,
+          icon: Icons.calendar_month_rounded,
+          title: 'Schedule & Working List',
+        ),
+        DrawerItem(index: 5, icon: Icons.face_rounded, title: 'My Face'),
+        DrawerItem(
+          index: 6,
           icon: Icons.event_note_rounded,
           title: 'Leave Requests',
         ),
         DrawerItem(
-          index: 5,
+          index: 7,
           icon: Icons.history_edu_rounded,
           title: 'Attendance Log',
         ),
         DrawerItem(
-          index: 6,
+          index: 8,
           icon: Icons.person_search_rounded,
           title: 'Student Log',
         ),
-        DrawerItem(index: 7, icon: Icons.settings_rounded, title: 'Settings'),
+        DrawerItem(index: 15, icon: Icons.settings_rounded, title: 'Settings'),
       ];
     }
     return const [
@@ -1073,23 +1232,33 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
         icon: Icons.qr_code_scanner_rounded,
         title: 'Mark Attendance',
       ),
-      DrawerItem(index: 2, icon: Icons.face_rounded, title: 'My Face'),
+      DrawerItem(
+        index: 2,
+        icon: Icons.school_rounded,
+        title: 'Students',
+      ),
       DrawerItem(
         index: 3,
+        icon: Icons.calendar_month_rounded,
+        title: 'Schedule & Working List',
+      ),
+      DrawerItem(index: 4, icon: Icons.face_rounded, title: 'My Face'),
+      DrawerItem(
+        index: 5,
         icon: Icons.event_note_rounded,
         title: 'Leave Requests',
       ),
       DrawerItem(
-        index: 4,
+        index: 6,
         icon: Icons.history_edu_rounded,
         title: 'Attendance Log',
       ),
       DrawerItem(
-        index: 5,
+        index: 7,
         icon: Icons.person_search_rounded,
         title: 'Student Log',
       ),
-      DrawerItem(index: 6, icon: Icons.settings_rounded, title: 'Settings'),
+      DrawerItem(index: 14, icon: Icons.settings_rounded, title: 'Settings'),
     ];
   }
 
@@ -1192,7 +1361,6 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
       // Silently fail for attendance stats
     }
   }
-
   // ignore: unused_element
   void _showMyAttendanceDetails() {
     showDialog(
@@ -1288,7 +1456,317 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
       );
     }
 
+    Widget todayClassesWidget() {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E3A8A).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.calendar_today_rounded, color: Color(0xFF1E3A8A), size: 18),
+                        ),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            "Today's Schedule",
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : const Color(0xFF0F172A),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: () {
+                      final targetIdx = widget.isKioskEnabled ? 4 : 3;
+                      widget.onTabSelected?.call(targetIdx);
+                    },
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 14),
+                    label: const Text("Full Schedule", style: TextStyle(fontSize: 12)),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: DateTimetableView(
+                token: widget.token,
+                staffRegNo: (widget.user['reg_no'] ?? widget.user['username'] ?? '').toString(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget institutionalQuickHub() {
+
+      final items = [
+        {
+          'title': 'Teaching Schedule & Working List',
+          'desc': 'Live classes, working queue, substitution duties & lesson notes',
+          'icon': Icons.calendar_month_rounded,
+          'color': const Color(0xFF1E3A8A),
+          'action': () {
+            final targetIdx = widget.isKioskEnabled ? 4 : 3;
+            widget.onTabSelected?.call(targetIdx);
+          },
+        },
+        {
+          'title': 'Attendance Regularisation',
+          'desc': 'Dispute missed biometric punches & regularise records',
+          'icon': Icons.edit_calendar_rounded,
+          'color': const Color(0xFF2563EB),
+          'action': () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => AttendanceCorrectionsPage(
+                    token: widget.token,
+                    user: widget.user,
+                    isAdminOrHod: false,
+                  ),
+                ),
+              ),
+        },
+        {
+          'title': 'Institutional Reports',
+          'desc': 'Export daily registers, heatmaps & leaves to Excel/PDF',
+          'icon': Icons.analytics_rounded,
+          'color': const Color(0xFF0D9488),
+          'action': () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => SystemReportsPage(
+                    token: widget.token,
+                    user: widget.user,
+                  ),
+                ),
+              ),
+        },
+        {
+          'title': 'Academic Holidays',
+          'desc': 'View national, state & institutional holiday schedule',
+          'icon': Icons.celebration_rounded,
+          'color': const Color(0xFF7C3AED),
+          'action': () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => HolidayCalendarPage(
+                    token: widget.token,
+                    isAdmin: false,
+                  ),
+                ),
+              ),
+        },
+        {
+          'title': 'Feedback & Grievances',
+          'desc': 'Submit and track academic or campus grievance tickets',
+          'icon': Icons.feedback_rounded,
+          'color': const Color(0xFFEA580C),
+          'action': () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => StudentGrievancePage(
+                    token: widget.token,
+                    user: widget.user,
+                    isAdmin: false,
+                  ),
+                ),
+              ),
+        },
+        {
+          'title': 'Security & 2FA Hub',
+          'desc': 'Active device sessions, login audit & 2FA setup',
+          'icon': Icons.security_rounded,
+          'color': const Color(0xFF4F46E5),
+          'action': () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (ctx) => SecurityHubPage(
+                    token: widget.token,
+                    user: widget.user,
+                  ),
+                ),
+              ),
+        },
+      ];
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: iOSBlue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.apps_rounded, color: iOSBlue, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Institutional Operations & Services',
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'Quick access to attendance disputes, reports, holidays, feedback, and security',
+                          style: TextStyle(
+                            color: isDark ? Colors.white60 : Colors.grey.shade600,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (ctx, constraints) {
+                  final isNarrow = constraints.maxWidth < 700;
+                  return GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: isNarrow ? (constraints.maxWidth < 450 ? 1 : 2) : 3,
+                      crossAxisSpacing: 14,
+                      mainAxisSpacing: 14,
+                      mainAxisExtent: 110,
+                    ),
+                    itemCount: items.length,
+                    itemBuilder: (ctx, idx) {
+                      final item = items[idx];
+                      final color = item['color'] as Color;
+                      return Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: item['action'] as VoidCallback,
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: isDark ? 0.12 : 0.06),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: color.withValues(alpha: isDark ? 0.35 : 0.2),
+                                width: 1.2,
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: color.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(item['icon'] as IconData, color: color, size: 22),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        item['title'] as String,
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                          color: isDark ? Colors.white : Colors.black87,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        item['desc'] as String,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: isDark ? Colors.white60 : Colors.grey.shade600,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(Icons.arrow_forward_ios_rounded, size: 12, color: color.withValues(alpha: 0.7)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     Widget recentAttendancePanel() {
+
       return Container(
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
@@ -1770,6 +2248,7 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
             welcomeCard(),
             const SizedBox(height: 16),
             const ThirukkuralBanner(),
+            const ServiceHealthCard(),
             const SizedBox(height: 16),
             SizedBox(
               height: 270,
@@ -1899,8 +2378,11 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
             children: [
               bentoGrid(),
               const SizedBox(height: 24),
+              institutionalQuickHub(),
+              todayClassesWidget(),
               recentAttendancePanel(),
             ],
+
           ),
         ),
       ),
@@ -1941,11 +2423,11 @@ class ModernStaffStatCard extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.7),
+            color: Colors.white.withValues(alpha: 0.7),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withValues(alpha: 0.05),
                 blurRadius: 15,
                 offset: const Offset(0, 6),
               ),
@@ -1959,9 +2441,10 @@ class ModernStaffStatCard extends StatelessWidget {
                 child: Icon(
                   icon,
                   size: iconSize,
-                  color: color.withOpacity(0.8),
+                  color: color.withValues(alpha: 0.8),
                 ),
               ),
+
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -3342,9 +3825,19 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
   String _message = '';
 
   bool _isWindowAllowed = false;
+  bool _isHoliday = false;
+  bool _isSpecialOccasion = false;
+  String? _holidayTitle;
+  String? _holidayReason;
+  String _dayType = 'WORKING_DAY';
   String _activeSlotType = 'check_in';
   String _activeSlotHalf = 'full_day'; // 'first_half' | 'second_half' | 'full_day'
   bool _alreadyMarkedCurrentSlot = false;
+  String? _checkInTime;
+  String? _checkOutTime;
+  bool _isCheckedIn = false;
+  bool _isCheckedOut = false;
+  String _todayAttendanceStatus = '';
 
   @override
   void initState() {
@@ -3384,16 +3877,31 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
       bool allowed = false;
       String slotType = 'check_in';
       String slotHalf = 'full_day';
+      bool isHol = false;
+      bool isSpecial = false;
+      String? holTitle;
+      String? holReason;
+      String dayType = 'WORKING_DAY';
       
       if (slotResponse.statusCode == 200) {
         final slotData = jsonDecode(slotResponse.body);
         allowed = slotData['allowed'] ?? false;
         slotType = slotData['slot_type'] ?? 'check_in';
         slotHalf = slotData['slot_half'] ?? 'full_day';
+        isHol = slotData['is_holiday'] == true;
+        isSpecial = slotData['is_special_occasion'] == true;
+        holTitle = slotData['holiday_title']?.toString() ?? slotData['occasion_title']?.toString();
+        holReason = slotData['holiday_reason']?.toString() ?? slotData['reason']?.toString() ?? slotData['message']?.toString();
+        dayType = slotData['day_type']?.toString() ?? 'WORKING_DAY';
       }
 
       // Check if already marked for the current session (slotType & slotHalf)
       bool alreadyMarked = false;
+      String? inTime;
+      String? outTime;
+      bool checkedIn = false;
+      bool checkedOut = false;
+      String statusStr = '';
       final today = DateTime.now().toString().split(' ')[0];
 
       if (slotHalf == 'first_half' || slotHalf == 'second_half') {
@@ -3410,6 +3918,12 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
           );
 
           if (todayRecord != null) {
+            statusStr = todayRecord['status']?.toString() ?? 'Present';
+            inTime = todayRecord['first_half_in_time']?.toString() ?? todayRecord['second_half_in_time']?.toString() ?? todayRecord['in_time']?.toString();
+            outTime = todayRecord['first_half_out_time']?.toString() ?? todayRecord['second_half_out_time']?.toString() ?? todayRecord['out_time']?.toString();
+            checkedIn = inTime != null || todayRecord['first_half_status'] == 'Present' || todayRecord['second_half_status'] == 'Present';
+            checkedOut = outTime != null;
+
             if (slotHalf == 'first_half') {
               if (slotType == 'check_in') {
                 alreadyMarked = todayRecord['first_half_in_time'] != null || todayRecord['first_half_status'] == 'Present';
@@ -3437,7 +3951,20 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
           final regNo = widget.user['regNo'] ?? widget.user['reg_no'] ?? '';
           final userRecords = attendance.where((record) => record['reg_no'] == regNo).toList();
           if (userRecords.isNotEmpty) {
+            for (var r in userRecords) {
+              final st = r['status']?.toString().toLowerCase();
+              final ts = r['timestamp']?.toString() ?? '';
+              final timePart = ts.contains(' ') ? ts.split(' ')[1] : (ts.contains('T') ? ts.split('T')[1] : ts);
+              if (st == 'check_in' || st == 'present') {
+                checkedIn = true;
+                inTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
+              } else if (st == 'check_out') {
+                checkedOut = true;
+                outTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
+              }
+            }
             alreadyMarked = userRecords.any((record) => record['status'] == slotType);
+            statusStr = checkedIn ? 'Present' : '';
           }
         }
       }
@@ -3445,9 +3972,19 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
 
       setState(() {
         _isWindowAllowed = allowed;
+        _isHoliday = isHol;
+        _isSpecialOccasion = isSpecial;
+        _holidayTitle = holTitle;
+        _holidayReason = holReason;
+        _dayType = dayType;
         _activeSlotType = slotType;
         _activeSlotHalf = slotHalf;
         _alreadyMarkedCurrentSlot = alreadyMarked;
+        _checkInTime = inTime;
+        _checkOutTime = outTime;
+        _isCheckedIn = checkedIn;
+        _isCheckedOut = checkedOut;
+        _todayAttendanceStatus = statusStr;
         _isLoading = false;
       });
     } catch (e) {
@@ -3474,12 +4011,28 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
           regNo: widget.user['regNo'],
           name: widget.user['name'],
           dept: widget.user['dept'],
-          onVerified: () {
-            // Immediately trigger location tracking resume (check-in) or suspend (check-out)
+          onVerifiedData: (data) {
             LocationTrackingService.instance.onAttendanceMarked();
+            final isCheckout = data['action'] == 'check_out' || data['slot_type'] == 'check_out' || _activeSlotType == 'check_out';
+            final msg = data['message']?.toString() ?? (isCheckout ? 'Check-Out marked successfully!' : 'Attendance marked successfully!');
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Attendance marked successfully!')),
+              SnackBar(
+                content: Row(
+                  children: [
+                    Icon(isCheckout ? Icons.check_circle_outline : Icons.task_alt, color: Colors.white),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(msg)),
+                  ],
+                ),
+                backgroundColor: isCheckout ? const Color(0xFF059669) : const Color(0xFF007AFF),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             );
+            _checkTodayAttendance();
+          },
+          onVerified: () {
+            LocationTrackingService.instance.onAttendanceMarked();
             _checkTodayAttendance();
           },
           onCancel: () => Navigator.pop(context),
@@ -3516,6 +4069,8 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
     final cardBg = isDark ? const Color(0xFF1E1E24) : Colors.white;
     final textColor = isDark ? Colors.white : const Color(0xFF1A1A2E);
     final infoBg = isDark ? const Color(0xFF2A2A30) : const Color(0xFFF8F5FF);
+    final isCheckOutSlot = _activeSlotType == 'check_out';
+    final isCheckOutDone = _isCheckedOut || (_alreadyMarkedCurrentSlot && isCheckOutSlot);
 
     if (_isLoading) {
       return Center(
@@ -3534,7 +4089,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF007AFF).withValues(alpha: 0.1),
+                  color: (isCheckOutDone ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.1),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -3549,12 +4104,28 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF007AFF), Color(0xFF5AC8FA)],
+                          gradient: LinearGradient(
+                            colors: isCheckOutDone
+                                ? const [Color(0xFF10B981), Color(0xFF059669)]
+                                : (_isHoliday
+                                    ? const [Color(0xFF2563EB), Color(0xFF3B82F6)]
+                                    : (_isSpecialOccasion
+                                        ? const [Color(0xFF7C3AED), Color(0xFF8B5CF6)]
+                                        : const [Color(0xFF007AFF), Color(0xFF5AC8FA)])),
                           ),
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: const Icon(Icons.qr_code_scanner, color: Colors.white, size: 32),
+                        child: Icon(
+                          isCheckOutDone
+                              ? Icons.check_circle_rounded
+                              : (_isHoliday
+                                  ? Icons.beach_access_rounded
+                                  : (_isSpecialOccasion
+                                      ? Icons.emoji_events_rounded
+                                      : Icons.qr_code_scanner)),
+                          color: Colors.white,
+                          size: 32,
+                        ),
                       ),
                       const SizedBox(width: 18),
                       Expanded(
@@ -3562,20 +4133,39 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Mark Your Attendance',
+                              isCheckOutDone
+                                  ? 'Check-Out Done Successfully'
+                                  : (_isHoliday
+                                      ? (_holidayTitle?.isNotEmpty == true ? "Declared Holiday — $_holidayTitle" : "Declared Institutional Holiday")
+                                      : (_isSpecialOccasion
+                                          ? (_holidayTitle?.isNotEmpty == true ? "Special Occasion — $_holidayTitle" : "Special Institutional Occasion")
+                                          : 'Mark Your Attendance')),
                               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textColor),
                             ),
+                            const SizedBox(height: 3),
                             Text(
-                              !_isWindowAllowed
-                                  ? "Outside active attendance window"
-                                  : (_alreadyMarkedCurrentSlot
-                                      ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN (Morning)' : _activeSlotHalf == 'second_half' ? 'AN (Afternoon)' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'} today"
-                                      : "Active: ${_activeSlotHalf == 'first_half' ? 'FN Morning Slot' : _activeSlotHalf == 'second_half' ? 'AN Afternoon Slot' : _activeSlotType == 'check_in' ? 'Check-In Slot' : 'Check-Out Slot'} — Tap to mark"),
+                              isCheckOutDone
+                                  ? (_checkOutTime != null ? "Checked out at $_checkOutTime. Attendance recorded." : "Check-out completed for today.")
+                                  : (_isHoliday
+                                      ? (_holidayReason?.isNotEmpty == true ? _holidayReason! : "Institutional Holiday — No biometric attendance required today.")
+                                      : (_isSpecialOccasion
+                                          ? (_holidayReason?.isNotEmpty == true ? _holidayReason! : "Special Institutional Occasion — Regular attendance suspended.")
+                                          : (!_isWindowAllowed
+                                              ? "Outside active attendance window"
+                                              : (_alreadyMarkedCurrentSlot
+                                                  ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN (Morning)' : _activeSlotHalf == 'second_half' ? 'AN (Afternoon)' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'} today"
+                                                  : "Active: ${_activeSlotHalf == 'first_half' ? 'FN Morning Slot' : _activeSlotHalf == 'second_half' ? 'AN Afternoon Slot' : _activeSlotType == 'check_in' ? 'Check-In Slot' : 'Check-Out Slot'} — Tap to mark")))),
                               style: TextStyle(
-                                fontSize: 14,
-                                color: !_isWindowAllowed
-                                    ? Colors.red[700]
-                                    : (_alreadyMarkedCurrentSlot ? Colors.green[700] : Colors.orange[700]),
+                                fontSize: 13,
+                                color: isCheckOutDone
+                                    ? Colors.green[700]
+                                    : (_isHoliday
+                                        ? const Color(0xFF1D4ED8)
+                                        : (_isSpecialOccasion
+                                            ? const Color(0xFF6D28D9)
+                                            : (!_isWindowAllowed
+                                                ? Colors.red[700]
+                                                : (_alreadyMarkedCurrentSlot ? Colors.green[700] : Colors.orange[700])))),
                               ),
                             ),
                           ],
@@ -3590,7 +4180,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                     decoration: BoxDecoration(
                       color: infoBg,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFF007AFF).withValues(alpha: 0.2)),
+                      border: Border.all(color: (isCheckOutDone ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.2)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3600,6 +4190,41 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                         _buildInfoRow(Icons.badge_outlined, "ID", widget.user['regNo'] ?? 'N/A'),
                         const SizedBox(height: 10),
                         _buildInfoRow(Icons.school_outlined, "Department", widget.user['dept'] ?? 'N/A'),
+                        if (_isCheckedIn || _isCheckedOut) ...[
+                          const Divider(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("Check-In", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                  const SizedBox(height: 2),
+                                  Text(_checkInTime ?? (_isCheckedIn ? "Present" : "--"), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                ],
+                              ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("Check-Out", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                  const SizedBox(height: 2),
+                                  Text(_checkOutTime ?? (_isCheckedOut ? "Completed" : "--"), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedOut ? Colors.green.shade700 : null)),
+                                ],
+                              ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -3608,23 +4233,51 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton.icon(
-                      onPressed: (_isRegistered && _isWindowAllowed && !_alreadyMarkedCurrentSlot)
+                      onPressed: (_isRegistered && _isWindowAllowed && !_alreadyMarkedCurrentSlot && !isCheckOutDone && !_isHoliday && !_isSpecialOccasion)
                           ? _navigateToMarkAttendance
                           : null,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF007AFF),
+                        backgroundColor: isCheckOutDone
+                            ? const Color(0xFF059669)
+                            : (_isHoliday
+                                ? const Color(0xFF2563EB)
+                                : (_isSpecialOccasion ? const Color(0xFF7C3AED) : const Color(0xFF007AFF))),
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: isCheckOutDone
+                            ? const Color(0xFF10B981).withValues(alpha: 0.25)
+                            : (_isHoliday
+                                ? const Color(0xFF2563EB).withValues(alpha: 0.2)
+                                : (_isSpecialOccasion
+                                    ? const Color(0xFF8B5CF6).withValues(alpha: 0.2)
+                                    : null)),
+                        disabledForegroundColor: isCheckOutDone
+                            ? const Color(0xFF047857)
+                            : (_isHoliday
+                                ? const Color(0xFF1D4ED8)
+                                : (_isSpecialOccasion
+                                    ? const Color(0xFF6D28D9)
+                                    : null)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        elevation: 8,
+                        elevation: (isCheckOutDone || _isHoliday || _isSpecialOccasion) ? 0 : 8,
                         shadowColor: const Color(0xFF007AFF).withValues(alpha: 0.4),
                       ),
-                      icon: const Icon(Icons.qr_code_scanner),
+                      icon: Icon(isCheckOutDone
+                          ? Icons.check_circle_rounded
+                          : (_isHoliday
+                              ? Icons.beach_access_rounded
+                              : (_isSpecialOccasion ? Icons.emoji_events_rounded : Icons.qr_code_scanner))),
                       label: Text(
-                        !_isWindowAllowed
-                            ? "Outside Window"
-                            : (_alreadyMarkedCurrentSlot
-                                ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN' : _activeSlotHalf == 'second_half' ? 'AN' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"
-                                : "Mark ${_activeSlotHalf == 'first_half' ? 'FN Attendance' : _activeSlotHalf == 'second_half' ? 'AN Attendance' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"),
+                        isCheckOutDone
+                            ? "Checked Out Successfully"
+                            : (_isHoliday
+                                ? (_holidayTitle?.isNotEmpty == true ? "Holiday: $_holidayTitle" : "Institutional Holiday — Attendance Exempted")
+                                : (_isSpecialOccasion
+                                    ? (_holidayTitle?.isNotEmpty == true ? "Event: $_holidayTitle" : "Special Occasion — Attendance Exempted")
+                                    : (!_isWindowAllowed
+                                        ? "Outside Window"
+                                        : (_alreadyMarkedCurrentSlot
+                                            ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN' : _activeSlotHalf == 'second_half' ? 'AN' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"
+                                            : "Mark ${_activeSlotHalf == 'first_half' ? 'FN Attendance' : _activeSlotHalf == 'second_half' ? 'AN Attendance' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}")))),
                       ),
                     ),
                   ),
@@ -4516,9 +5169,10 @@ class _AdminReRegisterRequestsTabState
                       else
                         const Chip(
                           label: Text('HOD Pending'),
-                          backgroundColor: const Color(0xFF007AFF),
+                          backgroundColor: Color(0xFF007AFF),
                           labelStyle: TextStyle(color: Colors.white),
                         ),
+
                       const SizedBox(width: 8),
                       if (!req['admin_approved'])
                         Expanded(

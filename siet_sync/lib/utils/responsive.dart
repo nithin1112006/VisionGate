@@ -169,10 +169,13 @@ class NavDestination {
   final IconData icon;
   final IconData selectedIcon;
   final String label;
+  final String? sectionHeader;
+
   const NavDestination({
     required this.icon,
     required this.selectedIcon,
     required this.label,
+    this.sectionHeader,
   });
 }
 
@@ -197,63 +200,277 @@ class _DesktopRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
-      selectedIndex: selectedIndex,
-      onDestinationSelected: onDestinationSelected,
-      extended: extended,
-      labelType: NavigationRailLabelType.none,
-      minExtendedWidth: 220,
-      backgroundColor: isDark ? const Color(0xFF000000) : Colors.white,
-      selectedIconTheme: IconThemeData(color: accentColor),
-      unselectedIconTheme: IconThemeData(
-        color: isDark ? Colors.white54 : Colors.grey.shade500,
+    final bgColor = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final borderColor = isDark ? Colors.white10 : Colors.grey.shade200;
+
+    return Container(
+      width: extended ? 240.0 : 72.0,
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border(
+          right: BorderSide(color: borderColor, width: 1.0),
+        ),
       ),
-      selectedLabelTextStyle: TextStyle(
-        color: accentColor,
-        fontWeight: FontWeight.w600,
-        fontSize: 13,
-      ),
-      unselectedLabelTextStyle: TextStyle(
-        color: isDark ? Colors.white54 : Colors.grey.shade600,
-        fontSize: 13,
-      ),
-      indicatorColor: accentColor.withValues(alpha: 0.12),
-      leading: extended
-          ? Padding(
-              padding: const EdgeInsets.only(bottom: 16, top: 8),
-              child: Text(
-                'VisionGate',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: accentColor,
+      child: SafeArea(
+        child: Column(
+          children: [
+            // App Header Branding
+            if (extended)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [accentColor, accentColor.withValues(alpha: 0.8)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.school_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'VisionGate',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                          Text(
+                            'Institutional Portal',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: isDark ? Colors.white54 : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            )
-          : null,
-      destinations: [
-        for (final d in destinations)
-          NavigationRailDestination(
-            icon: Icon(d.icon),
-            selectedIcon: Icon(d.selectedIcon),
-            label: Text(d.label),
-          ),
-      ],
-      trailing: onLogout != null
-          ? Expanded(
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: IconButton(
-                    icon: Icon(Icons.logout, color: Colors.red.shade400),
-                    onPressed: onLogout,
-                    tooltip: 'Logout',
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: accentColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
                   ),
+                  child: Icon(Icons.school_rounded, color: accentColor, size: 20),
                 ),
               ),
-            )
-          : null,
+
+            Divider(color: borderColor, height: 1),
+
+            // Scrollable Navigation List with Section Sub-Headings
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(
+                  horizontal: extended ? 10 : 6,
+                  vertical: 8,
+                ),
+                itemCount: destinations.length,
+                itemBuilder: (context, index) {
+                  final item = destinations[index];
+                  final isSelected = selectedIndex == index;
+
+                  // Check if this item has a section header
+                  Widget? headerWidget;
+                  if (item.sectionHeader != null) {
+                    if (extended) {
+                      headerWidget = Padding(
+                        padding: const EdgeInsets.only(
+                          left: 10,
+                          right: 10,
+                          top: 14,
+                          bottom: 6,
+                        ),
+                        child: Text(
+                          item.sectionHeader!.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                            color: isDark ? Colors.white38 : Colors.grey.shade500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    } else {
+                      headerWidget = Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Divider(
+                          color: isDark ? Colors.white12 : Colors.grey.shade200,
+                          thickness: 1,
+                          indent: 8,
+                          endIndent: 8,
+                        ),
+                      );
+                    }
+                  }
+
+                  final itemTile = extended
+                      ? Container(
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          child: Material(
+                            color: isSelected
+                                ? accentColor.withValues(alpha: isDark ? 0.2 : 0.1)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            child: InkWell(
+                              onTap: () => onDestinationSelected(index),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 9,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      isSelected ? item.selectedIcon : item.icon,
+                                      color: isSelected
+                                          ? accentColor
+                                          : (isDark ? Colors.white60 : Colors.grey.shade600),
+                                      size: 19,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        item.label,
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                          color: isSelected
+                                              ? accentColor
+                                              : (isDark ? Colors.white70 : Colors.grey.shade800),
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      : Container(
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          child: Tooltip(
+                            message: item.label,
+                            preferBelow: false,
+                            child: Material(
+                              color: isSelected
+                                  ? accentColor.withValues(alpha: isDark ? 0.25 : 0.12)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                              child: InkWell(
+                                onTap: () => onDestinationSelected(index),
+                                borderRadius: BorderRadius.circular(10),
+                                child: SizedBox(
+                                  width: 48,
+                                  height: 42,
+                                  child: Icon(
+                                    isSelected ? item.selectedIcon : item.icon,
+                                    color: isSelected
+                                        ? accentColor
+                                        : (isDark ? Colors.white60 : Colors.grey.shade500),
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+
+                  if (headerWidget != null) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        headerWidget,
+                        itemTile,
+                      ],
+                    );
+                  }
+                  return itemTile;
+                },
+              ),
+            ),
+
+            // Logout Action
+            if (onLogout != null) ...[
+              Divider(color: borderColor, height: 1),
+              Padding(
+                padding: EdgeInsets.all(extended ? 10 : 8),
+                child: extended
+                    ? Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onLogout,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.logout_rounded,
+                                  color: Color(0xFFEF4444),
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 12),
+                                const Text(
+                                  'Sign Out',
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFFEF4444),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    : Tooltip(
+                        message: 'Sign Out',
+                        child: IconButton(
+                          icon: const Icon(
+                            Icons.logout_rounded,
+                            color: Color(0xFFEF4444),
+                            size: 20,
+                          ),
+                          onPressed: onLogout,
+                        ),
+                      ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

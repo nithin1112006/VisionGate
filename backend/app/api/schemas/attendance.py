@@ -1,4 +1,4 @@
-from datetime import datetime, date
+import datetime as dt
 from typing import Optional, List, Literal, Dict, Any
 from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -50,7 +50,7 @@ class AttendanceMarkRequest(BaseModel):
 class AttendanceMarkResponse(BaseModel):
     """Attendance marking response."""
     attendance_id: int = Field(..., description="Unique attendance record ID")
-    timestamp: datetime = Field(..., description="Attendance timestamp (UTC)")
+    timestamp: dt.datetime = Field(..., description="Attendance timestamp (UTC)")
     confidence: float = Field(..., ge=0, le=1, description="Face recognition confidence score")
     mode: Literal["insightface", "fallback"] = Field(..., description="Detection method used")
 
@@ -74,7 +74,7 @@ class AttendanceRecord(BaseModel):
     reg_no: str = Field(..., description="User registration number")
     name: str = Field(..., description="User full name")
     dept: str = Field(..., description="Department code")
-    timestamp: datetime = Field(..., description="Check-in timestamp")
+    timestamp: dt.datetime = Field(..., description="Check-in timestamp")
     error_message: Optional[str] = Field(None, description="Error message if any")
 
     model_config = ConfigDict(
@@ -95,7 +95,7 @@ class AttendanceRecord(BaseModel):
 
 class DailyStatusResponse(BaseModel):
     """Daily attendance status for a user."""
-    date: date = Field(..., description="Date of status")
+    date: dt.date = Field(..., description="Date of status")
     status: Literal["present", "absent", "half_day", "leave", "holiday"] = Field(..., description="Attendance status")
     leave_type: Optional[Literal["casual", "earned", "od", "sick"]] = Field(None, description="Leave type if on leave")
     leave_request_id: Optional[int] = Field(None, description="Associated leave request ID")
@@ -121,8 +121,8 @@ class AttendanceValueSummary(BaseModel):
     reg_no: str = Field(..., description="User registration number")
     name: str = Field(..., description="User full name")
     dept: str = Field(..., description="Department")
-    start_date: date = Field(..., description="Start date of period")
-    end_date: date = Field(..., description="End date of period")
+    start_date: dt.date = Field(..., description="Start date of period")
+    end_date: dt.date = Field(..., description="End date of period")
     total_attendance_value: Decimal = Field(..., ge=Decimal("0.0"), description="Total attendance value accumulated")
     total_working_days: int = Field(..., ge=0, description="Total working days in period")
     attendance_percentage: Decimal = Field(..., ge=Decimal("0.0"), le=Decimal("100.0"), description="Attendance percentage")
@@ -155,7 +155,7 @@ class AttendanceValueSummary(BaseModel):
 
 class HalfDayReport(BaseModel):
     """Half-day attendance report for a specific date."""
-    date: date = Field(..., description="Report date")
+    date: dt.date = Field(..., description="Report date")
     total_users: int = Field(..., description="Total number of users")
     full_day_present: int = Field(..., description="Users with full day present")
     first_half_only: int = Field(..., description="Users present only in first half")

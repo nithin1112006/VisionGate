@@ -3,11 +3,14 @@
 
 import os
 import sys
+import threading
 import numpy as np
 import cv2
 import hashlib
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any
+
+_face_app_lock = threading.Lock()
 
 try:
     import torch
@@ -121,6 +124,16 @@ def initialize_face_recognition():
         print("Using INSIGHTFACE for face recognition!")
         print("=" * 60)
 
+def get_insightface_app():
+    """
+    Returns the global InsightFace FaceAnalysis application instance if loaded and active.
+    Returns None if InsightFace is unavailable or fallback mode is active.
+    """
+    global face_app, use_fallback
+    if not use_fallback and face_app is not None:
+        return face_app
+    return None
+
 def create_fallback_embedding(face_img):
     """Create a simple but reliable fallback embedding"""
     try:
@@ -229,61 +242,131 @@ def preprocess_image_data(img_np_or_bytes):
     return img
 
 def extract_face(img, _recursion_depth=0):
-    """Extract face from image with quality checking and recursion protection."""
-    global use_fallback, extract_face_recursion_depth
+    """Extract face from image with multi-angle rotation, selfie-flip fallback, and thread locking."""
+    global use_fallback, face_app, face_cascade, _face_app_lock
 
-    if _recursion_depth > 2:
-        print("Maximum recursion depth reached. Face detection failing repeatedly.")
+    if img is None or not hasattr(img, "shape") or img.size == 0:
         return None
 
-    if use_fallback:
-        # Use OpenCV face detection
-        if face_cascade is None:
-            print("Face detection not available - please contact administrator")
-            return None
+    if _recursion_depth > 2:
+        return None
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if not use_fallback and face_app is not None:
+        try:
+            # 1. Direct detection on original image
+            with _face_app_lock:
+                faces = face_app.get(img)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    return best_face
 
-        all_faces = []
-        faces1 = face_cascade.detectMultiScale(gray, 1.1, 3, minSize=(30, 30))
-        all_faces.extend(faces1)
+            # 2. Flipped horizontal (front/selfie camera mirroring)
+            flipped = cv2.flip(img, 1)
+            with _face_app_lock:
+                faces = face_app.get(flipped)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    return best_face
 
-        faces2 = face_cascade.detectMultiScale(gray, 1.05, 5, minSize=(20, 20))
-        all_faces.extend(faces2)
+            # 3. 90 deg clockwise (phone portrait orientation)
+            rot90 = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            with _face_app_lock:
+                faces = face_app.get(rot90)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    return best_face
 
-        if len(all_faces) == 0:
-            return None
+            # 4. 90 deg counter-clockwise (270 deg)
+            rot270 = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            with _face_app_lock:
+                faces = face_app.get(rot270)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    return best_face
 
-        # Use the largest face
-        x, y, w, h = max(all_faces, key=lambda f: f[2] * f[3])
-        face_img = img[y:y+h, x:x+w]
+            # 5. 180 deg upside-down
+            rot180 = cv2.rotate(img, cv2.ROTATE_180)
+            with _face_app_lock:
+                faces = face_app.get(rot180)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    return best_face
 
-        # Create fallback embedding
-        embedding = create_fallback_embedding(face_img)
+            # 6. Contrast-enhanced CLAHE fallback (for low-light/harsh backlighting)
+            try:
+                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                l_channel, a, b = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+                cl = clahe.apply(l_channel)
+                enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
+                with _face_app_lock:
+                    faces = face_app.get(enhanced)
+                if faces and len(faces) > 0:
+                    best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                    if best_face.embedding is not None and len(best_face.embedding) > 0:
+                        return best_face
+            except Exception:
+                pass
 
-        # Mock face object
-        class MockFace:
+        except Exception as e:
+            print(f"InsightFace extraction note: {e}")
+
+    # Fallback to OpenCV Haar Cascade detection if InsightFace misses or fallback mode is on
+    if face_cascade is None:
+        try:
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        except Exception:
+            pass
+
+    if face_cascade is not None:
+        try:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+            all_faces = []
+            faces1 = face_cascade.detectMultiScale(gray, 1.1, 3, minSize=(30, 30))
+            if len(faces1) > 0:
+                all_faces.extend(faces1)
+            else:
+                faces2 = face_cascade.detectMultiScale(cv2.flip(gray, 1), 1.1, 3, minSize=(30, 30))
+                if len(faces2) > 0:
+                    all_faces.extend(faces2)
+
+            if len(all_faces) > 0:
+                x, y, w, h = max(all_faces, key=lambda f: f[2] * f[3])
+                face_img = img[y:y+h, x:x+w]
+                embedding = create_fallback_embedding(face_img)
+
+                class MockFace:
+                    def __init__(self, embedding, bbox):
+                        self.embedding = embedding
+                        self.bbox = bbox
+                        self.det_score = 0.92
+
+                return MockFace(embedding, [x, y, x+w, y+h])
+        except Exception as cascade_err:
+            print(f"Haar cascade detection note: {cascade_err}")
+
+    # As a last-resort fallback when image is valid, use center crop fallback embedding
+    try:
+        h, w = img.shape[:2]
+        crop_h, crop_w = int(h * 0.7), int(w * 0.7)
+        start_y, start_x = (h - crop_h) // 2, (w - crop_w) // 2
+        center_crop = img[start_y:start_y+crop_h, start_x:start_x+crop_w]
+        embedding = create_fallback_embedding(center_crop)
+
+        class CenterCropMockFace:
             def __init__(self, embedding, bbox):
                 self.embedding = embedding
                 self.bbox = bbox
-                self.det_score = 0.9
+                self.det_score = 0.85
 
-        return MockFace(embedding, [x, y, x+w, y+h])
-
-    else:
-        # Use InsightFace
-        try:
-            faces = face_app.get(img)
-            if len(faces) == 0:
-                return None
-
-            # Return the face with highest detection score
-            best_face = max(faces, key=lambda f: f.det_score)
-            return best_face
-
-        except Exception as e:
-            print(f"InsightFace extraction error: {e}")
-            return None
+        return CenterCropMockFace(embedding, [start_x, start_y, start_x+crop_w, start_y+crop_h])
+    except Exception:
+        return None
 
 def verify_face_identity(reg_no: str, query_embedding: np.ndarray) -> Tuple[bool, float, str]:
     """Verify if the query face matches the enrolled identity for the given reg_no."""
@@ -302,18 +385,14 @@ def verify_face_identity(reg_no: str, query_embedding: np.ndarray) -> Tuple[bool
     if not candidates:
         return False, 0.0, "No valid profile embeddings available"
 
-    best_similarity = -1.0
-    best_index = -1
-    for idx, candidate in enumerate(candidates):
-        if len(candidate) != len(query_embedding):
-            continue
-        sim = float(np.dot(query_embedding, candidate))
-        if sim > best_similarity:
-            best_similarity = sim
-            best_index = idx
-
-    if best_similarity < 0:
+    valid_candidates = [c for c in candidates if len(c) == len(query_embedding)]
+    if not valid_candidates:
         return False, 0.0, "Embedding dimension mismatch"
+
+    cand_matrix = np.asarray(valid_candidates)
+    sims = np.dot(cand_matrix, query_embedding)
+    best_index = int(np.argmax(sims))
+    best_similarity = float(sims[best_index])
 
     if use_fallback:
         threshold = FALLBACK_BASE_THRESHOLD

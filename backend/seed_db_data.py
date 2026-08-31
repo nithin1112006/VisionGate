@@ -8,6 +8,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import json
 import bcrypt
 import pg_adapter
 
@@ -124,6 +125,46 @@ def run_seed():
         ('714024801001', 'Tejaswini K', 'Data Science', 'STAFF010'),
     ]
     inserted_students = 0
+    default_pw_hash = hash_pw('student123')
+    # Ensure all columns exist on students table
+    student_cols_migration = [
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS roll_no VARCHAR(64)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS email VARCHAR(160)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS dob DATE DEFAULT '2004-01-01'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS gender VARCHAR(10) DEFAULT 'Male'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS blood_group VARCHAR(10)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS degree VARCHAR(50) DEFAULT 'B.E.'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS batch VARCHAR(20) DEFAULT '2022-2026'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS year_of_study INT DEFAULT 1",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS semester INT DEFAULT 1",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS section VARCHAR(10) DEFAULT 'A'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS quota VARCHAR(20) DEFAULT 'Govt'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS mentor_staff_reg_no VARCHAR(64)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS father_name VARCHAR(160)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS mother_name VARCHAR(160)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS parent_phone VARCHAR(20) DEFAULT '9876543210'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS parent_email VARCHAR(160)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS emergency_contact VARCHAR(20)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS permanent_address TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS city VARCHAR(100)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS state VARCHAR(100) DEFAULT 'Tamil Nadu'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS pincode VARCHAR(10)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT ''",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS first_time_login BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS can_reregister BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS registered_by VARCHAR(64) DEFAULT 'SYSTEM'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS registered_role VARCHAR(20) DEFAULT 'admin'",
+    ]
+    for alt in student_cols_migration:
+        try:
+            cursor.execute(alt)
+        except Exception:
+            pass
+
     for reg, name, dept, reg_by in students_data:
         try:
             cursor.execute('SELECT reg_no FROM student_face_profiles WHERE LOWER(reg_no) = LOWER(?)', (reg,))
@@ -137,14 +178,86 @@ def run_seed():
             cursor.execute('SELECT reg_no FROM students WHERE LOWER(reg_no) = LOWER(?)', (reg,))
             if not cursor.fetchone():
                 cursor.execute(
-                    'INSERT INTO students (reg_no, name, dept, embedding) VALUES (?, ?, ?, ?)',
-                    (reg, name, dept, '[]')
+                    '''
+                    INSERT INTO students (
+                        reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
+                        degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
+                        father_name, mother_name, parent_phone, parent_email, emergency_contact,
+                        permanent_address, city, state, pincode, password_hash, first_time_login,
+                        registered_by, registered_role
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        reg, f"R_{reg[-4:]}", name, f"{reg.lower()}@college.edu", "9876543210",
+                        "2004-06-15", "Male", "O+", "B.E.", dept, "2022-2026", 3, 6, "A", "Govt", reg_by,
+                        "Parent Name", "Mother Name", "9876543210", "parent@gmail.com", "9876543210",
+                        "123 University Campus Road", "Coimbatore", "Tamil Nadu", "641001",
+                        default_pw_hash, True, reg_by, "staff"
+                    )
                 )
         except Exception as e:
             print(f"Error seeding student {reg}: {e}")
     print(f"Students & Face Profiles: {inserted_students} inserted.")
+
+    # 5. Seed Academic Period Configs
+    depts = ['CSE', 'ECE', 'EEE', 'MECH', 'CIVIL', 'IT', 'AI & ML', 'Data Science']
+    default_breaks = json.dumps([
+        {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
+        {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
+    ])
+    default_days = json.dumps(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+
+    for d in depts:
+        try:
+            cursor.execute("SELECT id FROM academic_period_configs WHERE LOWER(dept) = LOWER(?)", (d,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    """
+                    INSERT INTO academic_period_configs (
+                        dept, semester_type, start_time, total_periods, period_duration_mins,
+                        working_days, breaks_json, updated_by
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (d, 'all', '08:45', 7, 50, default_days, default_breaks, 'SYSTEM')
+                )
+        except Exception as e:
+            pass
+
+    # 6. Seed Class Advisors
+    advisors_data = [
+        ('CSE', '2022-2026', 3, 6, 'A', 'STAFF_0002', 'primary', '2024-2025'),
+        ('CSE', '2022-2026', 3, 6, 'A', 'STAFF_0001', 'assistant', '2024-2025'),
+        ('CSE', '2022-2026', 3, 6, 'B', 'STAFF_0001', 'primary', '2024-2025'),
+        ('ECE', '2022-2026', 3, 6, 'A', 'STAFF003', 'primary', '2024-2025'),
+        ('IT', '2022-2026', 3, 6, 'A', 'STAFF008', 'primary', '2024-2025'),
+    ]
+    for dept, batch, yr, sem, sec, staff_reg, adv_type, ac_yr in advisors_data:
+        try:
+            cursor.execute(
+                "SELECT id FROM class_advisors WHERE LOWER(dept) = LOWER(?) AND batch = ? AND semester = ? AND LOWER(section) = LOWER(?) AND advisor_type = ?",
+                (dept, batch, sem, sec, adv_type)
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    """
+                    INSERT INTO class_advisors (
+                        dept, batch, year_of_study, semester, section, staff_reg_no,
+                        advisor_type, academic_year, assigned_by, assigned_role
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SYSTEM', 'admin')
+                    """,
+                    (dept, batch, yr, sem, sec, staff_reg, adv_type, ac_yr)
+                )
+        except Exception:
+            pass
+
+    print("Academic period configs and class advisors seeded successfully!")
     print("Database seeding completed successfully!")
 
 
 if __name__ == '__main__':
     run_seed()
+
+

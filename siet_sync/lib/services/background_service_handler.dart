@@ -1,14 +1,16 @@
 import 'package:flutter/services.dart';
 
-/// Manage background location updates when app is closed and phone is locked using native Android services.
+/// Manage background location updates via native Android foreground service.
+/// The service runs in a separate `:attendance_service` process, meaning it
+/// survives app swipe, Doze mode, and device reboot (via BootReceiver).
 class BackgroundLocationService {
   static const MethodChannel _channel = MethodChannel('attendance');
 
   static Future<void> initialize() async {
-    // Native service handles its own initialization on the native side.
+    // Native service handles its own initialisation — no-op on Dart side.
   }
 
-  /// Start the background service with server connection and geofence coordinates
+  /// Start the background service.
   static Future<void> start({
     required String baseUrl,
     required double geofenceLat,
@@ -31,15 +33,48 @@ class BackgroundLocationService {
     } catch (_) {}
   }
 
-  /// Stop the background service
+  /// Stop the background service.
   static Future<void> stop() async {
     try {
       await _channel.invokeMethod('stopService');
     } catch (_) {}
   }
 
-  /// Update the notification on Android (handled internally by native service now)
-  static void updateNotification({required bool isTracking, String? customContent}) {
-    // Internal native handling, no-op in Dart
+  /// Returns `true` if Android battery optimisation is disabled for this app.
+  /// Always returns `true` on non-Android platforms.
+  static Future<bool> isIgnoringBatteryOptimisations() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isIgnoringBatteryOptimisations');
+      return result ?? false;
+    } catch (_) {
+      return true; // non-Android: no battery restriction concept
+    }
   }
+
+  /// Opens the system battery-optimisation exemption dialog.
+  /// Must be called from a user-initiated action (e.g. a settings button tap).
+  static Future<void> requestBatteryOptimisationExemption() async {
+    try {
+      await _channel.invokeMethod('requestBatteryOptimisationExemption');
+    } catch (_) {}
+  }
+
+  /// Returns the current service health status.
+  /// `running` — whether the foreground service process is alive.
+  /// `batteryExempt` — whether battery optimisation is disabled.
+  static Future<({bool running, bool batteryExempt})> getServiceStatus() async {
+    try {
+      final result = await _channel.invokeMethod<Map>('getServiceStatus');
+      if (result != null) {
+        return (
+          running: result['running'] as bool? ?? false,
+          batteryExempt: result['batteryExempt'] as bool? ?? false,
+        );
+      }
+    } catch (_) {}
+    return (running: false, batteryExempt: true);
+  }
+
+  /// No-op — notification content is managed entirely by the native service.
+  static void updateNotification({required bool isTracking, String? customContent}) {}
 }

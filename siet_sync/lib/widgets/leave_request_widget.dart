@@ -5,6 +5,7 @@ import '../config/college_ip_config.dart';
 import '../services/session_service.dart';
 import '../services/leave_request_service.dart';
 import '../services/leave_balance_notifier.dart';
+import 'staff_alternate_leave_widget.dart';
 
 
 /// Helper function to format date as yyyy-MM-dd
@@ -948,7 +949,7 @@ class _AdminLeaveManagementState extends State<AdminLeaveManagement>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -968,11 +969,13 @@ class _AdminLeaveManagementState extends State<AdminLeaveManagement>
           controller: _tabController,
           labelColor: const Color(0xFF3949AB),
           unselectedLabelColor: Colors.grey,
+          isScrollable: true,
           labelStyle: isSmallScreen ? const TextStyle(fontSize: 12) : null,
           tabs: const [
             Tab(text: 'All Requests'),
             Tab(text: 'Pending'),
             Tab(text: 'Expired Leaves'),
+            Tab(text: 'Staff Alternate Leaves'),
           ],
         ),
         Expanded(
@@ -982,6 +985,10 @@ class _AdminLeaveManagementState extends State<AdminLeaveManagement>
               AdminLeaveRequestList(token: widget.token),
               AdminPendingRequestList(token: widget.token),
               ExpiredLeavesList(token: widget.token),
+              AdminStaffLeaveTab(
+                token: widget.token,
+                accentColor: const Color(0xFF3949AB),
+              ),
             ],
           ),
         ),
@@ -2077,15 +2084,24 @@ class AdminNotificationsWidget extends StatefulWidget {
       _AdminNotificationsWidgetState();
 }
 
-/// Staff Leave Request Tab - shows form to submit, my requests, and expired leaves list
+/// Staff Leave Request Tab — Unified single leave interface:
+///   1. Apply Leave (Smart form with CL/EL balance, class detection, and alternate picker)
+///   2. My Requests (Live status tracking, cancellation, re-nomination)
+///   3. Coverage Requests (Incoming nominations with live badge and countdown)
+///   4. Expired Leaves (History list)
+///   5. Dept Staff Approvals (HOD) / All Staff Approvals (Admin)
 class StaffLeaveRequestTab extends StatefulWidget {
   final String token;
   final Color accentColor;
+  final bool isHod;
+  final bool isAdmin;
 
   const StaffLeaveRequestTab({
     super.key,
     required this.token,
     this.accentColor = const Color(0xFF007AFF),
+    this.isHod = false,
+    this.isAdmin = false,
   });
 
   @override
@@ -2095,11 +2111,32 @@ class StaffLeaveRequestTab extends StatefulWidget {
 class _StaffLeaveRequestTabState extends State<StaffLeaveRequestTab>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  int _altBadge = 0;
+
+  int get _tabCount => (widget.isHod || widget.isAdmin) ? 5 : 4;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: _tabCount, vsync: this);
+    _loadBadge();
+  }
+
+  Future<void> _loadBadge() async {
+    try {
+      final res = await http.get(
+        Uri.parse('${CollegeIPConfig.defaultURL}/staff/leave/alternate/pending'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (mounted) {
+          setState(() {
+            _altBadge = ((data['pending_nominations'] as List?)?.length ?? 0);
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -2110,31 +2147,92 @@ class _StaffLeaveRequestTabState extends State<StaffLeaveRequestTab>
 
   @override
   Widget build(BuildContext context) {
+    final List<Widget> tabs = [
+      const Tab(text: 'Apply Leave'),
+      const Tab(text: 'My Requests'),
+      Tab(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Coverage Requests'),
+            if (_altBadge > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _altBadge > 99 ? '99+' : _altBadge.toString(),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      const Tab(text: 'Expired Leaves'),
+    ];
+
+    if (widget.isHod) {
+      tabs.add(const Tab(text: 'Dept Staff Approvals'));
+    } else if (widget.isAdmin) {
+      tabs.add(const Tab(text: 'All Staff Approvals'));
+    }
+
+    final List<Widget> tabViews = [
+      StaffSubmitRequestPane(
+        token: widget.token,
+        onSubmitted: () {
+          _tabController.animateTo(1);
+          _loadBadge();
+        },
+      ),
+      StaffMyRequestsPane(
+        token: widget.token,
+        onRefresh: _loadBadge,
+      ),
+      StaffCoverageRequestsPane(
+        token: widget.token,
+        onRefresh: _loadBadge,
+      ),
+      ExpiredLeavesList(token: widget.token),
+    ];
+
+    if (widget.isHod) {
+      tabViews.add(
+        HodStaffLeaveReviewTab(
+          token: widget.token,
+          accentColor: widget.accentColor,
+        ),
+      );
+    } else if (widget.isAdmin) {
+      tabViews.add(
+        AdminStaffLeaveTab(
+          token: widget.token,
+          accentColor: widget.accentColor,
+        ),
+      );
+    }
+
     return Column(
       children: [
         TabBar(
           controller: _tabController,
           labelColor: widget.accentColor,
           unselectedLabelColor: Colors.grey,
-          tabs: const [
-            Tab(text: 'Submit Request'),
-            Tab(text: 'My Requests'),
-            Tab(text: 'Expired Leaves'),
-          ],
+          isScrollable: true,
+          tabs: tabs,
         ),
         Expanded(
           child: TabBarView(
             controller: _tabController,
-            children: [
-              LeaveRequestForm(
-                token: widget.token,
-                onRequestSubmitted: () {
-                  _tabController.animateTo(1);
-                },
-              ),
-              LeaveRequestList(token: widget.token),
-              ExpiredLeavesList(token: widget.token),
-            ],
+            children: tabViews,
           ),
         ),
       ],

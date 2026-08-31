@@ -31,7 +31,21 @@ import 'cl_management_page.dart';
 import 'ccl_management_page.dart';
 import 'attendance_log_page.dart';
 import '../widgets/student_attendance_log_widget.dart';
+import '../widgets/student_management/student_management_tab.dart';
+import '../widgets/academic_schedule/academic_schedule_tab.dart';
+import '../widgets/academic_schedule/venue_management_view.dart';
+import '../widgets/student_academics/student_academics_settings_tab.dart';
+import '../widgets/student_leave_od_management_tab.dart';
+import '../widgets/student_face_requests_management_tab.dart';
+import '../widgets/class_session_history_widget.dart';
+import 'attendance_corrections_page.dart';
+import 'system_reports_page.dart';
+import 'security_hub_page.dart';
+import 'holiday_calendar_page.dart';
+import 'student_grievance_page.dart';
+import 'substitute_management_page.dart';
 import 'package:file_picker/file_picker.dart';
+
 import '../utils/file_saver.dart';
 import '../theme/admin_theme.dart';
 import '../theme/admin_breakpoints.dart';
@@ -394,6 +408,44 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     _loadGeoFenceCoordinates();
   }
 
+  static List<List<List<double>>> _parsePolygonsStore(dynamic raw) {
+    if (raw == null || raw is! List) return [];
+    final result = <List<List<double>>>[];
+    for (final poly in raw) {
+      if (poly is List) {
+        final polygon = <List<double>>[];
+        for (final pt in poly) {
+          if (pt is List && pt.length >= 2) {
+            try {
+              final lat = (pt[0] as num).toDouble();
+              final lng = (pt[1] as num).toDouble();
+              polygon.add([lat, lng]);
+            } catch (_) {}
+          }
+        }
+        if (polygon.length >= 3) {
+          result.add(polygon);
+        }
+      }
+    }
+    return result;
+  }
+
+  static List<List<double>> _parseSinglePolygon(dynamic raw) {
+    if (raw == null || raw is! List) return [];
+    final polygon = <List<double>>[];
+    for (final pt in raw) {
+      if (pt is List && pt.length >= 2) {
+        try {
+          final lat = (pt[0] as num).toDouble();
+          final lng = (pt[1] as num).toDouble();
+          polygon.add([lat, lng]);
+        } catch (_) {}
+      }
+    }
+    return polygon;
+  }
+
   Future<void> _loadGeoFenceCoordinates() async {
     try {
       final url = '${CollegeIPConfig.defaultURL}/admin/geo-fence';
@@ -405,85 +457,48 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['data'] != null) {
-          final outerPolygonsData = data['data']['outer_polygons'];
-          final innerPolygonsData = data['data']['inner_polygons'];
-          final outerData = data['data']['outer_polygon'];
-          final innerData = data['data']['inner_polygon'];
+          final parsedOuter = _parsePolygonsStore(data['data']['outer_polygons']);
+          final parsedInner = _parsePolygonsStore(data['data']['inner_polygons']);
+          final parsedLimit = _parsePolygonsStore(data['data']['limit_range_polygons']);
 
           setState(() {
-            if (outerPolygonsData != null &&
-                outerPolygonsData is List &&
-                outerPolygonsData.isNotEmpty) {
-              _outerPolygonsStore = List<List<List<double>>>.from(
-                outerPolygonsData.map(
-                  (poly) => List<List<double>>.from(
-                    poly.map(
-                      (point) => List<double>.from(point.cast<double>()),
-                    ),
-                  ),
-                ),
-              );
+            if (parsedOuter.isNotEmpty) {
+              _outerPolygonsStore = parsedOuter;
               _selectedOuterBoundary = 0;
               _outerPolygon = List<List<double>>.from(_outerPolygonsStore[0]);
-            } else if (outerData != null && outerData.isNotEmpty) {
-              _outerPolygon = List<List<double>>.from(
-                outerData.map(
-                  (point) => List<double>.from(point.cast<double>()),
-                ),
-              );
-              _outerPolygonsStore = [List<List<double>>.from(_outerPolygon)];
-              _selectedOuterBoundary = 0;
+            } else if (data['data']['outer_polygon'] != null) {
+              final single = _parseSinglePolygon(data['data']['outer_polygon']);
+              if (single.isNotEmpty) {
+                _outerPolygon = single;
+                _outerPolygonsStore = [List<List<double>>.from(single)];
+                _selectedOuterBoundary = 0;
+              }
             }
 
-            if (innerPolygonsData != null &&
-                innerPolygonsData is List &&
-                innerPolygonsData.isNotEmpty) {
-              _innerPolygonsStore = List<List<List<double>>>.from(
-                innerPolygonsData.map(
-                  (poly) => List<List<double>>.from(
-                    poly.map(
-                      (point) => List<double>.from(point.cast<double>()),
-                    ),
-                  ),
-                ),
-              );
+            if (parsedInner.isNotEmpty) {
+              _innerPolygonsStore = parsedInner;
               _selectedInnerBoundary = 0;
               _innerPolygon = List<List<double>>.from(_innerPolygonsStore[0]);
-            } else if (innerData != null && innerData.isNotEmpty) {
-              _innerPolygon = List<List<double>>.from(
-                innerData.map(
-                  (point) => List<double>.from(point.cast<double>()),
-                ),
-              );
-              _innerPolygonsStore = [List<List<double>>.from(_innerPolygon)];
-              _selectedInnerBoundary = 0;
+            } else if (data['data']['inner_polygon'] != null) {
+              final single = _parseSinglePolygon(data['data']['inner_polygon']);
+              if (single.isNotEmpty) {
+                _innerPolygon = single;
+                _innerPolygonsStore = [List<List<double>>.from(single)];
+                _selectedInnerBoundary = 0;
+              }
             }
 
-            final limitRangePolygonsData = data['data']['limit_range_polygons'];
-            final limitRangeData = data['data']['limit_range_polygon'];
-
-            if (limitRangePolygonsData != null &&
-                limitRangePolygonsData is List &&
-                limitRangePolygonsData.isNotEmpty) {
-              _limitRangePolygonsStore = List<List<List<double>>>.from(
-                limitRangePolygonsData.map(
-                  (poly) => List<List<double>>.from(
-                    poly.map(
-                      (point) => List<double>.from(point.cast<double>()),
-                    ),
-                  ),
-                ),
-              );
+            if (parsedLimit.isNotEmpty) {
+              _limitRangePolygonsStore = parsedLimit;
               _selectedLimitRangeBoundary = 0;
               _limitRangePolygon = List<List<double>>.from(_limitRangePolygonsStore[0]);
-            } else if (limitRangeData != null && limitRangeData.isNotEmpty) {
-              _limitRangePolygon = List<List<double>>.from(
-                limitRangeData.map(
-                  (point) => List<double>.from(point.cast<double>()),
-                ),
-              );
-              _limitRangePolygonsStore = [List<List<double>>.from(_limitRangePolygon)];
-              _selectedLimitRangeBoundary = 0;
+            } else if (data['data']['limit_range_polygon'] != null) {
+              final single = _parseSinglePolygon(data['data']['limit_range_polygon']);
+              if (single.isNotEmpty) {
+                _limitRangePolygon = single;
+                _limitRangePolygonsStore = [List<List<double>>.from(single)];
+                _selectedLimitRangeBoundary = 0;
+              }
             }
             _errorMessage = null;
           });
@@ -562,20 +577,32 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     _saveToHistory();
     setState(() {
       if (type == 'outer') {
+        final last = _outerPolygon.isNotEmpty ? _outerPolygon.last : [11.040730, 77.073717];
         _outerPolygon = [
           ..._outerPolygon,
-          [11.040730, 77.073717],
+          [last[0] + 0.0001, last[1] + 0.0001],
         ];
+        if (_selectedOuterBoundary < _outerPolygonsStore.length) {
+          _outerPolygonsStore[_selectedOuterBoundary] = List<List<double>>.from(_outerPolygon);
+        }
       } else if (type == 'inner') {
+        final last = _innerPolygon.isNotEmpty ? _innerPolygon.last : [11.039537, 77.075328];
         _innerPolygon = [
           ..._innerPolygon,
-          [11.039537, 77.075328],
+          [last[0] + 0.0001, last[1] + 0.0001],
         ];
+        if (_selectedInnerBoundary < _innerPolygonsStore.length) {
+          _innerPolygonsStore[_selectedInnerBoundary] = List<List<double>>.from(_innerPolygon);
+        }
       } else {
+        final last = _limitRangePolygon.isNotEmpty ? _limitRangePolygon.last : [11.040730, 77.073717];
         _limitRangePolygon = [
           ..._limitRangePolygon,
-          [11.040730, 77.073717],
+          [last[0] + 0.0001, last[1] + 0.0001],
         ];
+        if (_selectedLimitRangeBoundary < _limitRangePolygonsStore.length) {
+          _limitRangePolygonsStore[_selectedLimitRangeBoundary] = List<List<double>>.from(_limitRangePolygon);
+        }
       }
     });
   }
@@ -587,14 +614,23 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
         final list = List<List<double>>.from(_outerPolygon);
         list.removeAt(index);
         _outerPolygon = list;
+        if (_selectedOuterBoundary < _outerPolygonsStore.length) {
+          _outerPolygonsStore[_selectedOuterBoundary] = list;
+        }
       } else if (type == 'inner' && _innerPolygon.length > 3) {
         final list = List<List<double>>.from(_innerPolygon);
         list.removeAt(index);
         _innerPolygon = list;
+        if (_selectedInnerBoundary < _innerPolygonsStore.length) {
+          _innerPolygonsStore[_selectedInnerBoundary] = list;
+        }
       } else if (type == 'limit_range' && _limitRangePolygon.length > 3) {
         final list = List<List<double>>.from(_limitRangePolygon);
         list.removeAt(index);
         _limitRangePolygon = list;
+        if (_selectedLimitRangeBoundary < _limitRangePolygonsStore.length) {
+          _limitRangePolygonsStore[_selectedLimitRangeBoundary] = list;
+        }
       }
     });
   }
@@ -605,14 +641,23 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
         final list = List<List<double>>.from(_outerPolygon);
         list[index] = [lat, lng];
         _outerPolygon = list;
+        if (_selectedOuterBoundary < _outerPolygonsStore.length) {
+          _outerPolygonsStore[_selectedOuterBoundary] = list;
+        }
       } else if (type == 'inner' && index < _innerPolygon.length) {
         final list = List<List<double>>.from(_innerPolygon);
         list[index] = [lat, lng];
         _innerPolygon = list;
+        if (_selectedInnerBoundary < _innerPolygonsStore.length) {
+          _innerPolygonsStore[_selectedInnerBoundary] = list;
+        }
       } else if (type == 'limit_range' && index < _limitRangePolygon.length) {
         final list = List<List<double>>.from(_limitRangePolygon);
         list[index] = [lat, lng];
         _limitRangePolygon = list;
+        if (_selectedLimitRangeBoundary < _limitRangePolygonsStore.length) {
+          _limitRangePolygonsStore[_selectedLimitRangeBoundary] = list;
+        }
       }
     });
   }
@@ -621,7 +666,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     if (_outerPolygonsStore.isEmpty) {
       _outerPolygonsStore = [List<List<double>>.from(_outerPolygon)];
       _selectedOuterBoundary = 0;
-    } else {
+    } else if (_selectedOuterBoundary < _outerPolygonsStore.length) {
       _outerPolygonsStore[_selectedOuterBoundary] = List<List<double>>.from(
         _outerPolygon,
       );
@@ -630,7 +675,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     if (_innerPolygonsStore.isEmpty) {
       _innerPolygonsStore = [List<List<double>>.from(_innerPolygon)];
       _selectedInnerBoundary = 0;
-    } else {
+    } else if (_selectedInnerBoundary < _innerPolygonsStore.length) {
       _innerPolygonsStore[_selectedInnerBoundary] = List<List<double>>.from(
         _innerPolygon,
       );
@@ -639,7 +684,7 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     if (_limitRangePolygonsStore.isEmpty) {
       _limitRangePolygonsStore = [List<List<double>>.from(_limitRangePolygon)];
       _selectedLimitRangeBoundary = 0;
-    } else {
+    } else if (_selectedLimitRangeBoundary < _limitRangePolygonsStore.length) {
       _limitRangePolygonsStore[_selectedLimitRangeBoundary] = List<List<double>>.from(
         _limitRangePolygon,
       );
@@ -648,36 +693,54 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
 
   void _selectOuterBoundary(int index) {
     _persistCurrentPolygons();
+    if (index < 0 || index >= _outerPolygonsStore.length) return;
     setState(() {
       _selectedOuterBoundary = index;
       _outerPolygon = List<List<double>>.from(_outerPolygonsStore[index]);
     });
+    try {
+      _editorMapController.move(_editorCenter(), 18.0);
+    } catch (_) {}
   }
 
   void _selectInnerBoundary(int index) {
     _persistCurrentPolygons();
+    if (index < 0 || index >= _innerPolygonsStore.length) return;
     setState(() {
       _selectedInnerBoundary = index;
       _innerPolygon = List<List<double>>.from(_innerPolygonsStore[index]);
     });
+    try {
+      final center = _toPolygonCenter(_innerPolygon);
+      if (center != null) _editorMapController.move(center, 18.0);
+    } catch (_) {}
   }
 
   void _selectLimitRangeBoundary(int index) {
     _persistCurrentPolygons();
+    if (index < 0 || index >= _limitRangePolygonsStore.length) return;
     setState(() {
       _selectedLimitRangeBoundary = index;
       _limitRangePolygon = List<List<double>>.from(_limitRangePolygonsStore[index]);
     });
+    try {
+      final center = _toPolygonCenter(_limitRangePolygon);
+      if (center != null) _editorMapController.move(center, 18.0);
+    } catch (_) {}
   }
 
   void _addOuterBoundary() {
     _saveToHistory();
     _persistCurrentPolygons();
+    final center = _editorCenter();
+    final lat = center.latitude;
+    final lng = center.longitude;
     setState(() {
       _outerPolygonsStore.add([
-        [11.040730, 77.073717],
-        [11.040865, 77.075121],
-        [11.039733, 77.075201],
+        [lat + 0.0006, lng - 0.0006],
+        [lat + 0.0006, lng + 0.0006],
+        [lat - 0.0006, lng + 0.0006],
+        [lat - 0.0006, lng - 0.0006],
       ]);
       _selectedOuterBoundary = _outerPolygonsStore.length - 1;
       _outerPolygon = List<List<double>>.from(
@@ -690,11 +753,15 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   void _addInnerBoundary() {
     _saveToHistory();
     _persistCurrentPolygons();
+    final center = _editorCenter();
+    final lat = center.latitude;
+    final lng = center.longitude;
     setState(() {
       _innerPolygonsStore.add([
-        [11.039537, 77.075328],
-        [11.039554, 77.075895],
-        [11.038858, 77.075912],
+        [lat + 0.0003, lng - 0.0003],
+        [lat + 0.0003, lng + 0.0003],
+        [lat - 0.0003, lng + 0.0003],
+        [lat - 0.0003, lng - 0.0003],
       ]);
       _selectedInnerBoundary = _innerPolygonsStore.length - 1;
       _innerPolygon = List<List<double>>.from(
@@ -737,11 +804,15 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
   void _addLimitRangeBoundary() {
     _saveToHistory();
     _persistCurrentPolygons();
+    final center = _editorCenter();
+    final lat = center.latitude;
+    final lng = center.longitude;
     setState(() {
       _limitRangePolygonsStore.add([
-        [11.040730, 77.073717],
-        [11.040865, 77.075121],
-        [11.039733, 77.075201],
+        [lat + 0.0008, lng - 0.0008],
+        [lat + 0.0008, lng + 0.0008],
+        [lat - 0.0008, lng + 0.0008],
+        [lat - 0.0008, lng - 0.0008],
       ]);
       _selectedLimitRangeBoundary = _limitRangePolygonsStore.length - 1;
       _limitRangePolygon = List<List<double>>.from(
@@ -785,6 +856,13 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
     return polygon.map((p) => LatLng(p[0], p[1])).toList();
   }
 
+  LatLng? _toPolygonCenter(List<List<double>> source) {
+    if (source.isEmpty) return null;
+    final lat = source.fold<double>(0, (sum, p) => sum + p[0]) / source.length.toDouble();
+    final lng = source.fold<double>(0, (sum, p) => sum + p[1]) / source.length.toDouble();
+    return LatLng(lat, lng);
+  }
+
   LatLng _editorCenter() {
     final source = _outerPolygon.isNotEmpty ? _outerPolygon : _innerPolygon;
     if (source.isEmpty) {
@@ -808,16 +886,25 @@ class _GeoFenceEditorState extends State<GeoFenceEditor> {
           ..._outerPolygon,
           [point.latitude, point.longitude],
         ];
+        if (_selectedOuterBoundary < _outerPolygonsStore.length) {
+          _outerPolygonsStore[_selectedOuterBoundary] = List<List<double>>.from(_outerPolygon);
+        }
       } else if (_tapTarget == 'inner') {
         _innerPolygon = [
           ..._innerPolygon,
           [point.latitude, point.longitude],
         ];
+        if (_selectedInnerBoundary < _innerPolygonsStore.length) {
+          _innerPolygonsStore[_selectedInnerBoundary] = List<List<double>>.from(_innerPolygon);
+        }
       } else if (_tapTarget == 'limit_range') {
         _limitRangePolygon = [
           ..._limitRangePolygon,
           [point.latitude, point.longitude],
         ];
+        if (_selectedLimitRangeBoundary < _limitRangePolygonsStore.length) {
+          _limitRangePolygonsStore[_selectedLimitRangeBoundary] = List<List<double>>.from(_limitRangePolygon);
+        }
       }
     });
   }
@@ -3300,6 +3387,22 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
   }
 }
 
+class _AdminNavEntry {
+  final int index;
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+  final String? sectionHeader;
+
+  const _AdminNavEntry({
+    required this.index,
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
+    this.sectionHeader,
+  });
+}
+
 class AdminDashboardPage extends StatefulWidget {
   final String token;
   final Map<String, dynamic> user;
@@ -3318,46 +3421,302 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   int _selectedIndex = 0;
   Key _analysisTabKey = UniqueKey();
 
+  static const List<_AdminNavEntry> _adminNavEntries = [
+    // MAIN
+    _AdminNavEntry(
+      index: 0,
+      label: 'Dashboard',
+      icon: Icons.dashboard_outlined,
+      selectedIcon: Icons.dashboard_rounded,
+      sectionHeader: 'Main',
+    ),
+
+    // ACADEMIC MANAGEMENT
+    _AdminNavEntry(
+      index: 1,
+      label: 'Departments',
+      icon: Icons.business_outlined,
+      selectedIcon: Icons.business_rounded,
+      sectionHeader: 'Academic Management',
+    ),
+    _AdminNavEntry(
+      index: 2,
+      label: 'Students',
+      icon: Icons.people_alt_outlined,
+      selectedIcon: Icons.people_alt_rounded,
+    ),
+    _AdminNavEntry(
+      index: 12,
+      label: 'Student Academics',
+      icon: Icons.auto_stories_outlined,
+      selectedIcon: Icons.auto_stories_rounded,
+    ),
+    _AdminNavEntry(
+      index: 13,
+      label: 'Staff Academics',
+      icon: Icons.school_outlined,
+      selectedIcon: Icons.school_rounded,
+    ),
+    _AdminNavEntry(
+      index: 14,
+      label: 'Timetable',
+      icon: Icons.calendar_month_outlined,
+      selectedIcon: Icons.calendar_month_rounded,
+    ),
+    _AdminNavEntry(
+      index: 15,
+      label: 'Halls & Labs',
+      icon: Icons.domain_outlined,
+      selectedIcon: Icons.domain_rounded,
+    ),
+
+    // USER & BIOMETRICS
+    _AdminNavEntry(
+      index: 5,
+      label: 'Other Users',
+      icon: Icons.apartment_outlined,
+      selectedIcon: Icons.apartment_rounded,
+      sectionHeader: 'User & Biometrics',
+    ),
+    _AdminNavEntry(
+      index: 4,
+      label: 'Face Requests',
+      icon: Icons.face_outlined,
+      selectedIcon: Icons.face_rounded,
+    ),
+    _AdminNavEntry(
+      index: 10,
+      label: 'Student Face Requests',
+      icon: Icons.face_retouching_natural_outlined,
+      selectedIcon: Icons.face_retouching_natural_rounded,
+    ),
+    _AdminNavEntry(
+      index: 11,
+      label: 'Live Locations',
+      icon: Icons.location_on_outlined,
+      selectedIcon: Icons.location_on_rounded,
+    ),
+
+    // LEAVE & ON-DUTY
+    _AdminNavEntry(
+      index: 6,
+      label: 'Leave Management',
+      icon: Icons.event_note_outlined,
+      selectedIcon: Icons.event_note_rounded,
+      sectionHeader: 'Leave & On-Duty',
+    ),
+    _AdminNavEntry(
+      index: 7,
+      label: 'Casual Leave',
+      icon: Icons.beach_access_outlined,
+      selectedIcon: Icons.beach_access_rounded,
+    ),
+    _AdminNavEntry(
+      index: 8,
+      label: 'CCL Management',
+      icon: Icons.more_time_outlined,
+      selectedIcon: Icons.more_time_rounded,
+    ),
+    _AdminNavEntry(
+      index: 9,
+      label: 'Student Leave & OD',
+      icon: Icons.assignment_turned_in_outlined,
+      selectedIcon: Icons.assignment_turned_in_rounded,
+    ),
+
+    // INSTITUTIONAL OPERATIONS
+    _AdminNavEntry(
+      index: 19,
+      label: 'Attendance Disputes',
+      icon: Icons.edit_calendar_outlined,
+      selectedIcon: Icons.edit_calendar_rounded,
+      sectionHeader: 'Institutional Operations',
+    ),
+    _AdminNavEntry(
+      index: 21,
+      label: 'Substitute Allocator',
+      icon: Icons.swap_horiz_outlined,
+      selectedIcon: Icons.swap_horiz_rounded,
+    ),
+    _AdminNavEntry(
+      index: 22,
+      label: 'Holiday Calendar',
+      icon: Icons.celebration_outlined,
+      selectedIcon: Icons.celebration_rounded,
+    ),
+    _AdminNavEntry(
+      index: 23,
+      label: 'Student Grievances',
+      icon: Icons.feedback_outlined,
+      selectedIcon: Icons.feedback_rounded,
+    ),
+    _AdminNavEntry(
+      index: 24,
+      label: 'Security & 2FA Hub',
+      icon: Icons.security_outlined,
+      selectedIcon: Icons.security_rounded,
+    ),
+
+    // REPORTS & AUDIT LOGS
+    _AdminNavEntry(
+      index: 3,
+      label: 'Analysis',
+      icon: Icons.analytics_outlined,
+      selectedIcon: Icons.analytics_rounded,
+      sectionHeader: 'Reports & Audit Logs',
+    ),
+    _AdminNavEntry(
+      index: 16,
+      label: 'Attendance Log',
+      icon: Icons.history_edu_outlined,
+      selectedIcon: Icons.history_edu_rounded,
+    ),
+    _AdminNavEntry(
+      index: 17,
+      label: 'Student Log',
+      icon: Icons.person_search_outlined,
+      selectedIcon: Icons.person_search_rounded,
+    ),
+    _AdminNavEntry(
+      index: 18,
+      label: 'Class Sessions',
+      icon: Icons.playlist_add_check_circle_outlined,
+      selectedIcon: Icons.playlist_add_check_circle_rounded,
+    ),
+    _AdminNavEntry(
+      index: 20,
+      label: 'System Reports & Export',
+      icon: Icons.analytics_outlined,
+      selectedIcon: Icons.analytics_rounded,
+    ),
+
+    // SYSTEM & SETTINGS
+    _AdminNavEntry(
+      index: 25,
+      label: 'Settings',
+      icon: Icons.settings_outlined,
+      selectedIcon: Icons.settings_rounded,
+      sectionHeader: 'System',
+    ),
+  ];
+
   final List<Widget> _pages = [];
   final List<String> _titles = [
     'Dashboard',
     'Departments',
+    'Students',
     'Analysis',
     'Face Requests',
     'Other User Departments',
     'Leave Management',
     'Casual Leave',
     'CCL Management',
+    'Student Leave & OD',
+    'Student Face Requests',
     'Live Locations',
-    'Academics',
+    'Student Academics',
+    'Staff Academics',
+    'Timetable',
+    'Halls & Labs',
     'Attendance Log',
     'Student Log',
+    'Class Sessions',
+    'Attendance Regularisation & Disputes',
+    'Institutional Reports & Analytics',
+    'Substitute Faculty Management',
+    'Academic Holiday Calendar',
+    'Student Grievances & Feedback',
+    'Security & Session Control',
     'Settings',
   ];
+
 
   @override
   void initState() {
     super.initState();
     _pages.addAll([
       DashboardTab(token: widget.token, user: widget.user),
-      DepartmentsTab(token: widget.token),
+      DepartmentsTab(token: widget.token, user: widget.user),
+      StudentManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: true,
+        onNavigateToTab: (idx) => setState(() => _selectedIndex = idx),
+      ),
       AnalysisTab(token: widget.token),
       AdminFaceRequestsTab(token: widget.token),
       OtherStaffAttendanceTab(token: widget.token),
       AdminLeaveManagement(token: widget.token),
       CLManagementPage(token: widget.token),
       CCLManagementPage(token: widget.token),
+      StudentLeaveODManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: true,
+      ),
+      StudentFaceRequestsManagementTab(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: true,
+        isHod: false,
+        isStaff: false,
+      ),
       LiveLocationsTab(token: widget.token),
-      AcademicsSettingsPage(token: widget.token),
+      StudentAcademicsSettingsTab(token: widget.token, user: widget.user),
+      AcademicsSettingsPage(token: widget.token, showAppBar: false),
+      AcademicScheduleTab(
+        token: widget.token,
+        userRole: 'admin',
+        userDept: 'CSE',
+      ),
+      VenueManagementView(
+        token: widget.token,
+        userRole: 'admin',
+        userDept: 'GLOBAL',
+        currentSelectedDept: 'ALL',
+      ),
       AttendanceLogTab(token: widget.token, user: widget.user),
       StudentAttendanceLogWidget(
         token: widget.token,
         user: widget.user,
         isAdmin: true,
       ),
+      ClassSessionHistoryWidget(
+        token: widget.token,
+        user: widget.user,
+        isHod: false,
+      ),
+      AttendanceCorrectionsPage(
+        token: widget.token,
+        user: widget.user,
+        isAdminOrHod: true,
+      ),
+      SystemReportsPage(
+        token: widget.token,
+        user: widget.user,
+      ),
+      SubstituteManagementPage(
+        token: widget.token,
+        user: widget.user,
+        isAdminOrHod: true,
+      ),
+      HolidayCalendarPage(
+        token: widget.token,
+        isAdmin: true,
+      ),
+      StudentGrievancePage(
+        token: widget.token,
+        user: widget.user,
+        isAdmin: true,
+      ),
+      SecurityHubPage(
+        token: widget.token,
+        user: widget.user,
+      ),
       SettingsTab(token: widget.token),
     ]);
   }
+
 
   void _logout() async {
     await sessionService.clearSession();
@@ -3373,9 +3732,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final shouldExtendRail = width >= AdminBreakpoints.xxl; // Desktop 1280dp+
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    Widget currentPage = _selectedIndex == 2
+    Widget currentPage = _selectedIndex == 3
         ? AnalysisTab(key: _analysisTabKey, token: widget.token)
-        : _pages[_selectedIndex];
+        : (_selectedIndex >= 0 && _selectedIndex < _pages.length
+            ? _pages[_selectedIndex]
+            : (_pages.isNotEmpty ? _pages.first : const SizedBox.shrink()));
 
     Widget pageBody = Stack(
       children: [
@@ -3420,29 +3781,92 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           child: RefreshIndicator(
             onRefresh: () async {
               setState(() {
-                if (_selectedIndex == 2) {
+                if (_selectedIndex == 3) {
                   _analysisTabKey = UniqueKey();
                 } else {
                   _pages.clear();
                   _pages.addAll([
                     DashboardTab(token: widget.token, user: widget.user),
-                    DepartmentsTab(token: widget.token),
+                    DepartmentsTab(token: widget.token, user: widget.user),
+                    StudentManagementTab(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdmin: true,
+                      onNavigateToTab: (idx) => setState(() => _selectedIndex = idx),
+                    ),
                     AnalysisTab(token: widget.token),
                     AdminFaceRequestsTab(token: widget.token),
                     OtherStaffAttendanceTab(token: widget.token),
                     AdminLeaveManagement(token: widget.token),
                     CLManagementPage(token: widget.token),
                     CCLManagementPage(token: widget.token),
+                    StudentLeaveODManagementTab(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdmin: true,
+                    ),
+                    StudentFaceRequestsManagementTab(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdmin: true,
+                      isHod: false,
+                      isStaff: false,
+                    ),
                     LiveLocationsTab(token: widget.token),
-                    AcademicsSettingsPage(token: widget.token),
+                    StudentAcademicsSettingsTab(token: widget.token, user: widget.user),
+                    AcademicsSettingsPage(token: widget.token, showAppBar: false),
+                    AcademicScheduleTab(
+                      token: widget.token,
+                      userRole: 'admin',
+                      userDept: 'CSE',
+                    ),
+                    VenueManagementView(
+                      token: widget.token,
+                      userRole: 'admin',
+                      userDept: 'GLOBAL',
+                      currentSelectedDept: 'ALL',
+                    ),
                     AttendanceLogTab(token: widget.token, user: widget.user),
                     StudentAttendanceLogWidget(
                       token: widget.token,
                       user: widget.user,
                       isAdmin: true,
                     ),
+                    ClassSessionHistoryWidget(
+                      token: widget.token,
+                      user: widget.user,
+                      isHod: false,
+                    ),
+                    AttendanceCorrectionsPage(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdminOrHod: true,
+                    ),
+                    SystemReportsPage(
+                      token: widget.token,
+                      user: widget.user,
+                    ),
+                    SubstituteManagementPage(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdminOrHod: true,
+                    ),
+                    HolidayCalendarPage(
+                      token: widget.token,
+                      isAdmin: true,
+                    ),
+                    StudentGrievancePage(
+                      token: widget.token,
+                      user: widget.user,
+                      isAdmin: true,
+                    ),
+                    SecurityHubPage(
+                      token: widget.token,
+                      user: widget.user,
+                    ),
                     SettingsTab(token: widget.token),
                   ]);
+
                 }
               });
               await Future.delayed(const Duration(milliseconds: 100));
@@ -3458,7 +3882,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       backgroundColor: AdminColors.getSurface(isDark),
       appBar: AppBar(
         title: Text(
-          _titles[_selectedIndex],
+          (_selectedIndex >= 0 && _selectedIndex < _titles.length)
+              ? _titles[_selectedIndex]
+              : 'Admin Dashboard',
           style: AdminTextStyles.titleLg(isDark),
           overflow: TextOverflow.ellipsis,
         ),
@@ -3487,7 +3913,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             : null,
         actions: [
           // Refresh button for Analysis tab
-          if (_selectedIndex == 2)
+          if (_selectedIndex == 3)
             IconButton(
               icon: const Icon(Icons.refresh_rounded),
               onPressed: () {
@@ -3572,96 +3998,138 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                           Divider(color: AdminColors.getBorder(isDark), height: 1),
                         ],
                         Expanded(
-                          child: NavigationRail(
-                            backgroundColor: Colors.transparent,
-                            selectedIndex: _selectedIndex,
-                            onDestinationSelected: (index) =>
-                                setState(() => _selectedIndex = index),
-                            extended: shouldExtendRail,
-                            labelType: shouldExtendRail
-                                ? NavigationRailLabelType.none
-                                : NavigationRailLabelType.selected,
-                            indicatorColor: AdminColors.primarySoft,
-                            selectedIconTheme: const IconThemeData(color: AdminColors.primary),
-                            unselectedIconTheme: IconThemeData(
-                              color: AdminColors.getTextMuted(isDark),
+                          child: ListView.builder(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: shouldExtendRail ? 10 : 6,
+                              vertical: 8,
                             ),
-                            selectedLabelTextStyle: TextStyle(
-                              color: AdminColors.primary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            unselectedLabelTextStyle: TextStyle(
-                              color: AdminColors.getTextMuted(isDark),
-                              fontSize: 11,
-                            ),
-                            destinations: const [
-                              NavigationRailDestination(
-                                icon: Icon(Icons.dashboard_outlined),
-                                selectedIcon: Icon(Icons.dashboard_rounded),
-                                label: Text('Dashboard'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.business_outlined),
-                                selectedIcon: Icon(Icons.business_rounded),
-                                label: Text('Depts'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.analytics_outlined),
-                                selectedIcon: Icon(Icons.analytics_rounded),
-                                label: Text('Analysis'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.face_outlined),
-                                selectedIcon: Icon(Icons.face_rounded),
-                                label: Text('Face Req'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.apartment_outlined),
-                                selectedIcon: Icon(Icons.apartment_rounded),
-                                label: Text('Other Users'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.event_note_outlined),
-                                selectedIcon: Icon(Icons.event_note_rounded),
-                                label: Text('Leave'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.beach_access_outlined),
-                                selectedIcon: Icon(Icons.beach_access_rounded),
-                                label: Text('Casual Leave'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.more_time_outlined),
-                                selectedIcon: Icon(Icons.more_time_rounded),
-                                label: Text('CCL'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.location_on_outlined),
-                                selectedIcon: Icon(Icons.location_on_rounded),
-                                label: Text('Live Map'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.school_outlined),
-                                selectedIcon: Icon(Icons.school_rounded),
-                                label: Text('Academics'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.history_edu_outlined),
-                                selectedIcon: Icon(Icons.history_edu_rounded),
-                                label: Text('Log'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.person_search_outlined),
-                                selectedIcon: Icon(Icons.person_search_rounded),
-                                label: Text('Student Log'),
-                              ),
-                              NavigationRailDestination(
-                                icon: Icon(Icons.settings_outlined),
-                                selectedIcon: Icon(Icons.settings_rounded),
-                                label: Text('Settings'),
-                              ),
-                            ],
+                            itemCount: _adminNavEntries.length,
+                            itemBuilder: (context, index) {
+                              final item = _adminNavEntries[index];
+                              final isSelected = _selectedIndex == item.index;
+
+                              Widget? headerWidget;
+                              if (item.sectionHeader != null) {
+                                if (shouldExtendRail) {
+                                  headerWidget = Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: 10,
+                                      right: 10,
+                                      top: 14,
+                                      bottom: 6,
+                                    ),
+                                    child: Text(
+                                      item.sectionHeader!.toUpperCase(),
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.8,
+                                        color: AdminColors.getTextMuted(isDark),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  );
+                                } else {
+                                  headerWidget = Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 6),
+                                    child: Divider(
+                                      color: AdminColors.getBorder(isDark),
+                                      thickness: 1,
+                                      indent: 8,
+                                      endIndent: 8,
+                                    ),
+                                  );
+                                }
+                              }
+
+                              final itemTile = shouldExtendRail
+                                  ? Container(
+                                      margin: const EdgeInsets.symmetric(vertical: 2),
+                                      child: Material(
+                                        color: isSelected
+                                            ? AdminColors.primary.withValues(alpha: isDark ? 0.2 : 0.1)
+                                            : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: InkWell(
+                                          onTap: () => setState(() => _selectedIndex = item.index),
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 9,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  isSelected ? item.selectedIcon : item.icon,
+                                                  color: isSelected
+                                                      ? AdminColors.primary
+                                                      : AdminColors.getTextMuted(isDark),
+                                                  size: 19,
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Text(
+                                                    item.label,
+                                                    style: TextStyle(
+                                                      fontSize: 12.5,
+                                                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                                      color: isSelected
+                                                          ? AdminColors.primary
+                                                          : (isDark ? Colors.white70 : Colors.grey.shade800),
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : Container(
+                                      margin: const EdgeInsets.symmetric(vertical: 2),
+                                      child: Tooltip(
+                                        message: item.label,
+                                        preferBelow: false,
+                                        child: Material(
+                                          color: isSelected
+                                              ? AdminColors.primary.withValues(alpha: isDark ? 0.25 : 0.12)
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: InkWell(
+                                            onTap: () => setState(() => _selectedIndex = item.index),
+                                            borderRadius: BorderRadius.circular(10),
+                                            child: SizedBox(
+                                              width: 48,
+                                              height: 42,
+                                              child: Icon(
+                                                isSelected ? item.selectedIcon : item.icon,
+                                                color: isSelected
+                                                    ? AdminColors.primary
+                                                    : AdminColors.getTextMuted(isDark),
+                                                size: 20,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+
+                              if (headerWidget != null) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    headerWidget,
+                                    itemTile,
+                                  ],
+                                );
+                              }
+                              return itemTile;
+                            },
                           ),
                         ),
                       ],
@@ -3757,20 +4225,29 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           ),
           const SizedBox(height: 12),
 
-          // Drawer Nav Options
-          _buildDrawerItem(0, Icons.dashboard_rounded, 'Dashboard', Icons.dashboard_outlined),
-          _buildDrawerItem(1, Icons.business_rounded, 'Departments', Icons.business_outlined),
-          _buildDrawerItem(2, Icons.analytics_rounded, 'Analysis', Icons.analytics_outlined),
-          _buildDrawerItem(3, Icons.face_rounded, 'Face Requests', Icons.face_outlined),
-          _buildDrawerItem(4, Icons.apartment_rounded, 'Other Users', Icons.apartment_outlined),
-          _buildDrawerItem(5, Icons.event_note_rounded, 'Leave Management', Icons.event_note_outlined),
-          _buildDrawerItem(6, Icons.beach_access_rounded, 'Casual Leave', Icons.beach_access_outlined),
-          _buildDrawerItem(7, Icons.more_time_rounded, 'CCL Management', Icons.more_time_outlined),
-          _buildDrawerItem(8, Icons.location_on_rounded, 'Live Locations', Icons.location_on_outlined),
-          _buildDrawerItem(9, Icons.school_rounded, 'Academics', Icons.school_outlined),
-          _buildDrawerItem(10, Icons.history_edu_rounded, 'Attendance Log', Icons.history_edu_outlined),
-          _buildDrawerItem(11, Icons.person_search_rounded, 'Student Log', Icons.person_search_outlined),
-          _buildDrawerItem(12, Icons.settings_rounded, 'Settings', Icons.settings_outlined),
+          // Drawer Nav Options with Categorized Section Sub-Headings
+          for (final item in _adminNavEntries) ...[
+            if (item.sectionHeader != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+                child: Text(
+                  item.sectionHeader!.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                    color: AdminColors.getTextMuted(isDark),
+                  ),
+                ),
+              ),
+            _buildDrawerItem(
+              item.index,
+              item.selectedIcon,
+              item.label,
+              item.icon,
+            ),
+          ],
+
 
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -6694,7 +7171,16 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
               ),
+              const SizedBox(height: 16),
+
+              // Daily Thirukkural Banner
+              const ThirukkuralBanner(),
               const SizedBox(height: 20),
+
+              // Institutional Operations & Services Hub
+              _buildAdminOperationsHub(context, isDark, screenWidth),
+              const SizedBox(height: 24),
+
 
               // Section Header
               const AdminSectionHeader(
@@ -6758,6 +7244,10 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
               ),
+              const SizedBox(height: 24),
+
+              // Student Academic Session & Calendar Pulse Card
+              _StudentAcademicPulseCard(token: widget.token),
               const SizedBox(height: 24),
 
               // Recent Attendance Feed
@@ -6883,7 +7373,180 @@ class _DashboardTabState extends State<DashboardTab> {
       ),
     );
   }
+
+  Widget _buildAdminOperationsHub(BuildContext context, bool isDark, double screenWidth) {
+    final hubItems = [
+      {
+        'title': 'Attendance Regularisation',
+        'desc': 'Audit, dispute review & manual biometric regularisation',
+        'icon': Icons.edit_calendar_rounded,
+        'color': const Color(0xFF2563EB),
+        'page': AttendanceCorrectionsPage(
+          token: widget.token,
+          user: widget.user,
+          isAdminOrHod: true,
+        ),
+      },
+      {
+        'title': 'Institutional Reports & Exports',
+        'desc': 'Daily registers, heatmaps & leave reports in Excel/PDF',
+        'icon': Icons.analytics_rounded,
+        'color': const Color(0xFF0D9488),
+        'page': SystemReportsPage(
+          token: widget.token,
+          user: widget.user,
+        ),
+      },
+      {
+        'title': 'Substitute Faculty Allocator',
+        'desc': 'Reassign timetable periods & manage faculty replacements',
+        'icon': Icons.swap_horiz_rounded,
+        'color': const Color(0xFFD97706),
+        'page': SubstituteManagementPage(
+          token: widget.token,
+          user: widget.user,
+          isAdminOrHod: true,
+        ),
+      },
+      {
+        'title': 'Academic Holiday Calendar',
+        'desc': 'Publish institutional, national & optional holiday dates',
+        'icon': Icons.celebration_rounded,
+        'color': const Color(0xFF7C3AED),
+        'page': HolidayCalendarPage(
+          token: widget.token,
+          isAdmin: true,
+        ),
+      },
+      {
+        'title': 'Student Grievances & Support',
+        'desc': 'Manage academic & campus grievance tickets & resolutions',
+        'icon': Icons.feedback_rounded,
+        'color': const Color(0xFFEA580C),
+        'page': StudentGrievancePage(
+          token: widget.token,
+          user: widget.user,
+          isAdmin: true,
+        ),
+      },
+      {
+        'title': 'Security & 2FA Session Hub',
+        'desc': 'Active device sessions, login telemetry & MFA management',
+        'icon': Icons.security_rounded,
+        'color': const Color(0xFF4F46E5),
+        'page': SecurityHubPage(
+          token: widget.token,
+          user: widget.user,
+        ),
+      },
+    ];
+
+    final isNarrow = screenWidth < 700;
+    final isCompact = screenWidth < 480;
+    final crossAxisCount = isCompact ? 1 : (isNarrow ? 2 : 3);
+
+    return AdminCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const AdminSectionHeader(
+            title: 'Institutional Operations & Services',
+            subtitle: 'Direct management of disputes, reporting, timetable substitution, holidays, grievances & 2FA',
+            icon: Icons.apps_rounded,
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: hubItems.length,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              mainAxisExtent: 106,
+            ),
+            itemBuilder: (context, index) {
+              final item = hubItems[index];
+              final color = item['color'] as Color;
+              final page = item['page'] as Widget;
+
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => page),
+                  ),
+                  borderRadius: BorderRadius.circular(AdminRadii.md),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: isDark ? 0.12 : 0.06),
+                      borderRadius: BorderRadius.circular(AdminRadii.md),
+                      border: Border.all(
+                        color: color.withValues(alpha: isDark ? 0.35 : 0.2),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            item['icon'] as IconData,
+                            color: color,
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                item['title'] as String,
+                                style: AdminTextStyles.bodyMd(isDark).copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                item['desc'] as String,
+                                style: AdminTextStyles.labelSm(isDark).copyWith(
+                                  fontSize: 11,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 12,
+                          color: color.withValues(alpha: 0.7),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
 }
+
 
 /// Modern responsive stat card with enterprise design system styling
 class ModernStatCard extends StatelessWidget {
@@ -7218,11 +7881,214 @@ class _ErrorLogsDialogState extends State<_ErrorLogsDialog> {
   }
 }
 
+/// Student Academic Session & Calendar Pulse Card on Admin Dashboard
+class _StudentAcademicPulseCard extends StatefulWidget {
+  final String token;
+  const _StudentAcademicPulseCard({required this.token});
+
+  @override
+  State<_StudentAcademicPulseCard> createState() => _StudentAcademicPulseCardState();
+}
+
+class _StudentAcademicPulseCardState extends State<_StudentAcademicPulseCard> {
+  Map<String, dynamic>? _stats;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAcademicStats();
+  }
+
+  Future<void> _fetchAcademicStats() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$API_URL/admin/student-academics/stats'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        if (mounted) {
+          setState(() {
+            _stats = body['data'] ?? {};
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeYear = _stats?['active_academic_year'] ?? '2025-2026';
+    final activeRange = _stats?['active_range'] as Map<String, dynamic>?;
+    final rangeName = activeRange?['name'] ?? 'Odd Semester (Active)';
+    final targetDays = (activeRange?['target_working_days'] as num?)?.toInt() ?? 90;
+    final completedDays = (_stats?['completed_working_days'] as num?)?.toInt() ?? 14;
+    final progressPct = (_stats?['term_progress_percentage'] as num?)?.toDouble() ??
+        ((completedDays / (targetDays > 0 ? targetDays : 1)) * 100).clamp(0.0, 100.0);
+    final holidays = _stats?['upcoming_holidays'] as List? ?? [];
+    final nextHoliday = holidays.isNotEmpty ? holidays.first as Map<String, dynamic> : null;
+
+    return AdminCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6366F1).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(AdminRadii.md),
+                      ),
+                      child: const Icon(Icons.school_rounded, color: Color(0xFF6366F1), size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Student Academic Session & Working Days',
+                            style: AdminTextStyles.titleMd(isDark).copyWith(fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            'Academic Year $activeYear • $rangeName',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AdminColors.getTextSecondary(isDark),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                onPressed: _fetchAcademicStats,
+                tooltip: 'Refresh Academic Pulse',
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (_isLoading)
+            const AdminShimmerLoader(height: 50, borderRadius: AdminRadii.md)
+          else ...[
+            // Progress Bar Section
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Instructional Term Progress',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white70 : Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '$completedDays / $targetDays Working Days (${progressPct.toStringAsFixed(1)}%)',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF6366F1),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: (progressPct / 100).clamp(0.0, 1.0),
+                minHeight: 8,
+                backgroundColor: isDark ? Colors.white12 : const Color(0xFFE2E8F0),
+                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
+              ),
+            ),
+            if (nextHoliday != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFFEF3C7).withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isDark ? Colors.amber.withValues(alpha: 0.3) : const Color(0xFFFDE68A),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.celebration_rounded, color: Colors.amber, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Upcoming Student Holiday: ${nextHoliday['title'] ?? 'Holiday'} (${nextHoliday['date'] ?? ''})',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.amber.shade200 : Colors.amber.shade900,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (nextHoliday['category'] != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${nextHoliday['category']}'.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.amber.shade200 : Colors.amber.shade900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 // Departments Tab - Shows all departments with HOD and Staff
 class DepartmentsTab extends StatefulWidget {
   final String token;
+  final Map<String, dynamic>? user;
 
-  const DepartmentsTab({super.key, required this.token});
+  const DepartmentsTab({super.key, required this.token, this.user});
 
   @override
   State<DepartmentsTab> createState() => _DepartmentsTabState();
@@ -7975,6 +8841,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
                           ),
                         ),
                       ),
+
                       const SizedBox(width: 8),
                       IconButton(
                         icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
@@ -7992,14 +8859,208 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
 
           Expanded(
             child: ListView.builder(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
-              itemCount: departments.length,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              itemCount: departments.length + 1,
               itemBuilder: (context, index) {
-                final dept = departments[index];
+                // Item 0 is the Institutional Operations & Quick Hub
+                if (index == 0) {
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E1B4B).withValues(alpha: 0.5) : const Color(0xFFEEF2FF),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: const Color(0xFF6366F1).withValues(alpha: isDark ? 0.35 : 0.25),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF6366F1).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.hub_rounded, color: Color(0xFF6366F1), size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Institutional Operations & Services',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                      color: isDark ? Colors.white : const Color(0xFF1E1B4B),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Direct access to regularisation approvals, reports export, substitutions, holidays, and security',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: isDark ? Colors.white60 : Colors.indigo.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        LayoutBuilder(
+                          builder: (ctx, constraints) {
+                            final isNarrow = constraints.maxWidth < 750;
+                            final adminUser = widget.user ?? const {'role': 'admin', 'name': 'Admin'};
+                            final ops = [
+                              {
+                                'title': 'Dispute Approvals',
+                                'desc': 'Review & regularise punches',
+                                'icon': Icons.edit_calendar_rounded,
+                                'color': const Color(0xFF2563EB),
+                                'page': AttendanceCorrectionsPage(token: widget.token, user: adminUser, isAdminOrHod: true),
+                              },
+                              {
+                                'title': 'Reports & Export',
+                                'desc': 'Export Excel, PDF & CSV',
+                                'icon': Icons.analytics_rounded,
+                                'color': const Color(0xFF0D9488),
+                                'page': SystemReportsPage(token: widget.token, user: adminUser),
+                              },
+                              {
+                                'title': 'Faculty Substitution',
+                                'desc': 'Assign timetable substitutes',
+                                'icon': Icons.swap_horiz_rounded,
+                                'color': const Color(0xFFD97706),
+                                'page': SubstituteManagementPage(token: widget.token, user: adminUser, isAdminOrHod: true),
+                              },
+                              {
+                                'title': 'Academic Holidays',
+                                'desc': 'Manage holiday calendar',
+                                'icon': Icons.celebration_rounded,
+                                'color': const Color(0xFF7C3AED),
+                                'page': HolidayCalendarPage(token: widget.token, isAdmin: true),
+                              },
+                              {
+                                'title': 'Student Grievances',
+                                'desc': 'Review & resolve tickets',
+                                'icon': Icons.feedback_rounded,
+                                'color': const Color(0xFFEA580C),
+                                'page': StudentGrievancePage(token: widget.token, user: adminUser, isAdmin: true),
+                              },
+                              {
+                                'title': 'Security & 2FA Hub',
+                                'desc': 'Active sessions & 2FA config',
+                                'icon': Icons.security_rounded,
+                                'color': const Color(0xFF4F46E5),
+                                'page': SecurityHubPage(token: widget.token, user: adminUser),
+                              },
+                            ];
+
+                            return GridView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: isNarrow ? (constraints.maxWidth < 480 ? 1 : 2) : 3,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                mainAxisExtent: 76,
+                              ),
+                              itemCount: ops.length,
+                              itemBuilder: (ctx, i) {
+                                final op = ops[i];
+                                final color = op['color'] as Color;
+                                return Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (c) => op['page'] as Widget),
+                                    ),
+                                    borderRadius: BorderRadius.circular(14),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: color.withValues(alpha: isDark ? 0.35 : 0.2),
+                                          width: 1.2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: color.withValues(alpha: 0.05),
+                                            blurRadius: 6,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              color: color.withValues(alpha: 0.12),
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            child: Icon(op['icon'] as IconData, color: color, size: 20),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Text(
+                                                  op['title'] as String,
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 12.5,
+                                                    color: isDark ? Colors.white : Colors.black87,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  op['desc'] as String,
+                                                  style: TextStyle(
+                                                    fontSize: 10.5,
+                                                    color: isDark ? Colors.white60 : Colors.grey.shade600,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          Icon(Icons.chevron_right_rounded, size: 16, color: color),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                final deptIndex = index - 1;
+                final dept = departments[deptIndex];
                 final data = deptData[dept] ?? {};
                 final hodCount = (data['hod'] ?? []).length;
                 final staffCount = (data['staff'] ?? []).length;
-                final gradColors = palette[index % palette.length];
+                final gradColors = palette[deptIndex % palette.length];
                 final isExpanded = expandedDepartments[dept] == true;
                 final hodName = hodCount > 0
                     ? (data['hod'] ?? [])[0]['name'] as String? ?? 'Unknown'
@@ -11392,65 +12453,79 @@ class _AnalysisTabState extends State<AnalysisTab> {
   Future<void> _loadInitialData() async {
     setState(() => isLoading = true);
     try {
-      // Fetch departments
-      final deptResponse = await http.get(
-        Uri.parse('$API_URL/admin/departments'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
+      // Fetch all initial data concurrently in parallel
+      final results = await Future.wait([
+        apiClient.get(
+          '$API_URL/admin/departments',
+          token: widget.token,
+          cacheKey: 'admin_departments',
+          cacheDuration: const Duration(minutes: 5),
+        ),
+        apiClient.get(
+          '$API_URL/admin/other_staff',
+          token: widget.token,
+          cacheKey: 'admin_other_staff',
+          cacheDuration: const Duration(minutes: 3),
+        ),
+        apiClient.get(
+          '$API_URL/admin/attendance/hods',
+          token: widget.token,
+          cacheKey: 'admin_hods',
+          cacheDuration: const Duration(minutes: 3),
+        ),
+        apiClient.get(
+          '$API_URL/academics/current',
+          cacheKey: 'academics_current',
+          cacheDuration: const Duration(minutes: 10),
+        ),
+        apiClient.get(
+          '$API_URL/admin/attendance/staff-list',
+          token: widget.token,
+          cacheKey: 'admin_staff_attendance_list',
+          cacheDuration: const Duration(minutes: 3),
+        ),
+      ]);
 
+      final deptResponse = results[0];
+      final otherStaffResponse = results[1];
+      final hodResponse = results[2];
+      final acadResponse = results[3];
+      final staffResponse = results[4];
+
+      // Parse departments
       if (deptResponse.statusCode == 200) {
         final deptData = jsonDecode(deptResponse.body);
-        setState(() {
-          departments =
-              (deptData['departments'] as List)
-                  .map((d) => d['name'].toString())
-                  .toList()
-                ..sort();
-        });
+        departments =
+            (deptData['departments'] as List)
+                .map((d) => d['name'].toString())
+                .toList()
+              ..sort();
       }
 
-      // Fetch Other Staff Departments
-      final otherStaffResponse = await http.get(
-        Uri.parse('$API_URL/admin/other_staff'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
-
+      // Parse other staff & departments
       if (otherStaffResponse.statusCode == 200) {
         final otherData = jsonDecode(otherStaffResponse.body);
         final staffList = otherData['other_staff'] ?? [];
-        // Extract unique departments from other staff
         final Set<String> uniqueDepts = {};
-        for (final staff in staffList) {
-          final dept = (staff['dept']?.toString().trim().isNotEmpty ?? false)
-              ? staff['dept'].toString().trim()
+        for (final s in staffList) {
+          final dept = (s['dept']?.toString().trim().isNotEmpty ?? false)
+              ? s['dept'].toString().trim()
               : 'Unassigned';
           uniqueDepts.add(dept);
         }
-        setState(() {
-          otherStaffDepartments = uniqueDepts.toList()..sort();
-          otherStaff = staffList;
-        });
+        otherStaffDepartments = uniqueDepts.toList()..sort();
+        otherStaff = staffList;
       }
 
-      // Fetch HODs
-      final hodResponse = await http.get(
-        Uri.parse('$API_URL/admin/attendance/hods'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
-
+      // Parse HODs
       if (hodResponse.statusCode == 200) {
         final hodData = jsonDecode(hodResponse.body);
-        setState(() {
-          hods = hodData['hods'] ?? [];
-        });
+        hods = hodData['hods'] ?? [];
       }
 
-      // Fetch academic ranges for date picker restriction
-      try {
-        final acadResponse = await http.get(
-          Uri.parse('$API_URL/academics/current'),
-        );
-        if (acadResponse.statusCode == 200) {
+      // Parse academic ranges
+      if (acadResponse.statusCode == 200) {
+        try {
           final acadData = jsonDecode(acadResponse.body);
           final rawRanges = acadData['academic_ranges'] as List? ?? [];
           final parsed = <Map<String, DateTime>>[];
@@ -11462,25 +12537,18 @@ class _AnalysisTabState extends State<AnalysisTab> {
             }
           }
           if (parsed.isNotEmpty) {
-            setState(() => academicRanges = parsed);
+            academicRanges = parsed;
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
 
-      // Fetch all staff (with caching - 3 minutes)
-      final staffResponse = await apiClient.get(
-        '$API_URL/admin/attendance/staff-list',
-        token: widget.token,
-        cacheKey: 'admin_staff_attendance_list',
-        cacheDuration: const Duration(minutes: 3),
-      );
-
+      // Parse staff list
       if (staffResponse.statusCode == 200) {
         final staffData = jsonDecode(staffResponse.body);
-        setState(() {
-          staff = staffData['staff'] ?? [];
-        });
+        staff = staffData['staff'] ?? [];
       }
+
+      setState(() {});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -12196,121 +13264,119 @@ class _AnalysisTabState extends State<AnalysisTab> {
         return;
       }
 
-      final List<Map<String, dynamic>> allStats = [];
+      final startDateStr =
+          '${startDate!.year}-${startDate!.month.toString().padLeft(2, '0')}-${startDate!.day.toString().padLeft(2, '0')}';
+      final endDateStr =
+          '${endDate!.year}-${endDate!.month.toString().padLeft(2, '0')}-${endDate!.day.toString().padLeft(2, '0')}';
 
-      for (final person in departmentStaff) {
-        final regNo = person['reg_no'];
-        final startDateStr =
-            '${startDate!.year}-${startDate!.month.toString().padLeft(2, '0')}-${startDate!.day.toString().padLeft(2, '0')}';
-        final endDateStr =
-            '${endDate!.year}-${endDate!.month.toString().padLeft(2, '0')}-${endDate!.day.toString().padLeft(2, '0')}';
+      // Fetch all staff members' attendance & CL status in parallel
+      final List<Map<String, dynamic>> allStats = await Future.wait(
+        departmentStaff.map((person) async {
+          final regNo = person['reg_no'];
+          String apiUrl;
+          if (departmentType == 'other') {
+            apiUrl =
+                '$API_URL/admin/other_staff/attendance?reg_no=$regNo&start_date=$startDateStr&end_date=$endDateStr';
+          } else {
+            apiUrl =
+                '$API_URL/admin/attendance/person-details?reg_no=$regNo&start_date=$startDateStr&end_date=$endDateStr';
+          }
 
-        // Use different API based on department type
-        String apiUrl;
-        List<String> datesPresent = [];
-        List<dynamic> records = [];
-        int? serverTotalDays;
-        int? serverAbsentDays;
+          // Fetch attendance and CL status concurrently for this person
+          final personResponses = await Future.wait([
+            apiClient.get(apiUrl, token: widget.token),
+            apiClient.get(
+              '$API_URL/cl/status/$regNo',
+              token: widget.token,
+              cacheKey: 'cl_status_$regNo',
+              cacheDuration: const Duration(minutes: 2),
+            ),
+          ]);
 
-        if (departmentType == 'other') {
-          apiUrl =
-              '$API_URL/admin/other_staff/attendance?reg_no=$regNo&start_date=$startDateStr&end_date=$endDateStr';
+          final attResponse = personResponses[0];
+          final clResponse = personResponses[1];
 
-          final response = await http.get(
-            Uri.parse(apiUrl),
-            headers: {'Authorization': 'Bearer ${widget.token}'},
-          );
+          List<String> datesPresent = [];
+          List<dynamic> records = [];
+          int? serverTotalDays;
+          int? serverAbsentDays;
 
-          if (response.statusCode == 200) {
-            final data = jsonDecode(response.body);
-            records = data['attendance'] ?? [];
-            serverTotalDays = data['working_days'] as int?;
-            serverAbsentDays = data['absent_days'] as int?;
-            // Extract unique dates (handle both ' ' and 'T' timestamp formats)
-            final Set<String> uniqueDates = {};
-            for (var record in records) {
-              final timestamp = record['timestamp']?.toString() ?? '';
-              if (timestamp.isNotEmpty) {
-                // Handle both "2024-03-11 07:04:29" and "2024-03-11T07:04:29" formats
-                final date = timestamp.contains(' ')
-                    ? timestamp.split(' ')[0]
-                    : (timestamp.contains('T')
-                          ? timestamp.split('T')[0]
-                          : timestamp);
-                uniqueDates.add(date);
+          if (attResponse.statusCode == 200) {
+            final data = jsonDecode(attResponse.body);
+            if (departmentType == 'other') {
+              records = data['attendance'] ?? [];
+              serverTotalDays = data['working_days'] as int?;
+              serverAbsentDays = data['absent_days'] as int?;
+              final Set<String> uniqueDates = {};
+              for (var record in records) {
+                final timestamp = record['timestamp']?.toString() ?? '';
+                if (timestamp.isNotEmpty) {
+                  final date = timestamp.contains(' ')
+                      ? timestamp.split(' ')[0]
+                      : (timestamp.contains('T')
+                            ? timestamp.split('T')[0]
+                            : timestamp);
+                  uniqueDates.add(date);
+                }
               }
+              datesPresent = uniqueDates.toList();
+            } else {
+              datesPresent = List<String>.from(data['dates_present'] ?? []);
+              records = data['attendance_records'] ?? [];
+              serverTotalDays = data['working_days'] as int?;
+              serverAbsentDays = data['absent_days'] as int?;
             }
-            datesPresent = uniqueDates.toList();
           }
-        } else {
-          apiUrl =
-              '$API_URL/admin/attendance/person-details?reg_no=$regNo&start_date=$startDateStr&end_date=$endDateStr';
 
-          final response = await http.get(
-            Uri.parse(apiUrl),
-            headers: {'Authorization': 'Bearer ${widget.token}'},
-          );
+          // Calculate total days in range
+          final int totalDays =
+              serverTotalDays ?? endDate!.difference(startDate!).inDays + 1;
+          final int presentDays = datesPresent.length;
+          final int absentDays = serverAbsentDays ?? totalDays - presentDays;
 
-          if (response.statusCode == 200) {
-            final data = jsonDecode(response.body);
-            datesPresent = List<String>.from(data['dates_present'] ?? []);
-            records = data['attendance_records'] ?? [];
-            serverTotalDays = data['working_days'] as int?;
-            serverAbsentDays = data['absent_days'] as int?;
+          // Determine role display
+          String roleDisplay;
+          if (departmentType == 'other') {
+            roleDisplay = person['role']?.toString() ?? 'Other Staff';
+          } else {
+            final isHod = hods.any((h) => h['reg_no'] == regNo);
+            roleDisplay = isHod ? 'HOD' : 'Staff';
           }
-        }
 
-        // Calculate total days in range (use server-computed holiday-aware values if available)
-        final int totalDays = serverTotalDays ?? endDate!.difference(startDate!).inDays + 1;
-        final int presentDays = datesPresent.length;
-        final int absentDays = serverAbsentDays ?? totalDays - presentDays;
-
-        // Determine role display
-        String roleDisplay;
-        if (departmentType == 'other') {
-          roleDisplay = person['role']?.toString() ?? 'Other Staff';
-        } else {
-          // Check if this person is a HOD
-          final isHod = hods.any((h) => h['reg_no'] == regNo);
-          roleDisplay = isHod ? 'HOD' : 'Staff';
-        }
-
-        // Fetch CL status for this staff member
-        int totalCLAvailable = 0;
-        int clUsedCurrentMonth = 0;
-        try {
-          final clResponse = await http.get(
-            Uri.parse('$API_URL/cl/status/$regNo'),
-            headers: {'Authorization': 'Bearer ${widget.token}'},
-          );
+          // Parse CL status
+          int totalCLAvailable = 0;
+          int clUsedCurrentMonth = 0;
           if (clResponse.statusCode == 200) {
-            final clJson = json.decode(clResponse.body);
-            if (clJson['success'] == true && clJson['data'] != null) {
-              totalCLAvailable = (clJson['data']['total_cl_available'] as num? ?? 0).toInt();
-              clUsedCurrentMonth = (clJson['data']['cl_used_current_month'] as num? ?? 0).toInt();
-            }
+            try {
+              final clJson = json.decode(clResponse.body);
+              if (clJson['success'] == true && clJson['data'] != null) {
+                totalCLAvailable =
+                    (clJson['data']['total_cl_available'] as num? ?? 0).toInt();
+                clUsedCurrentMonth =
+                    (clJson['data']['cl_used_current_month'] as num? ?? 0)
+                        .toInt();
+              }
+            } catch (_) {}
           }
-        } catch (e) {
-          // CL fetch failed, continue without CL data
-        }
 
-        allStats.add({
-          'person_name': person['name'],
-          'person_reg_no': regNo,
-          'person_role': roleDisplay,
-          'department': person['dept'],
-          'total_days': totalDays,
-          'present_days': presentDays,
-          'absent_days': absentDays,
-          'attendance_percentage': totalDays > 0
-              ? (presentDays / totalDays * 100).toStringAsFixed(2)
-              : '0.00',
-          'dates_present': datesPresent,
-          'attendance_records': records,
-          'total_cl_available': totalCLAvailable,
-          'cl_used_current_month': clUsedCurrentMonth,
-        });
-      }
+          return {
+            'person_name': person['name'],
+            'person_reg_no': regNo,
+            'person_role': roleDisplay,
+            'department': person['dept'],
+            'total_days': totalDays,
+            'present_days': presentDays,
+            'absent_days': absentDays,
+            'attendance_percentage': totalDays > 0
+                ? (presentDays / totalDays * 100).toStringAsFixed(2)
+                : '0.00',
+            'dates_present': datesPresent,
+            'attendance_records': records,
+            'total_cl_available': totalCLAvailable,
+            'cl_used_current_month': clUsedCurrentMonth,
+          };
+        }),
+      );
 
       setState(() {
         allStaffAttendanceStats = allStats;
@@ -16714,9 +17780,9 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isMobile = MediaQuery.of(context).size.width < 600;
-    final bg = isDark ? const Color(0xFF0A0A0F) : const Color(0xFFF2F0FF);
-    final cardBg = isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white.withValues(alpha: 0.85);
-    final borderClr = isDark ? Colors.white.withValues(alpha: 0.10) : Colors.deepPurple.withValues(alpha: 0.10);
+    final bg = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+    final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final borderClr = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
 
     final totalOtherStaff = otherStaff.length;
     final principalCount = otherStaff.where((s) => s['role'] == 'principal').length;
@@ -16738,15 +17804,16 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: isDark
-                        ? [const Color(0xFF3B0EAB), const Color(0xFF1A0078)]
-                        : [const Color(0xFF5E35B1), const Color(0xFF7B1FA2)],
+                        ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
+                        : [const Color(0xFF3730A3), const Color(0xFF4F46E5), const Color(0xFF6366F1)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(20),
+                  border: isDark ? Border.all(color: const Color(0xFF4F46E5).withValues(alpha: 0.35)) : null,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.deepPurple.withValues(alpha: 0.35),
+                      color: const Color(0xFF4F46E5).withValues(alpha: 0.30),
                       blurRadius: 22,
                       offset: const Offset(0, 6),
                     ),
@@ -16818,7 +17885,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                   border: Border.all(color: borderClr),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.deepPurple.withValues(alpha: 0.06),
+                      color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
                       blurRadius: 12,
                     ),
                   ],
@@ -16835,7 +17902,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                           width: isMobile ? 140 : 175,
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.4)),
+                            border: Border.all(color: const Color(0xFF4F46E5).withValues(alpha: 0.35)),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: DropdownButtonHideUnderline(
@@ -16876,11 +17943,11 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                               ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(10),
-                                borderSide: BorderSide(color: Colors.deepPurple.withValues(alpha: 0.4)),
+                                borderSide: BorderSide(color: const Color(0xFF4F46E5).withValues(alpha: 0.35)),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(10),
-                                borderSide: BorderSide(color: Colors.deepPurple.withValues(alpha: 0.3)),
+                                borderSide: BorderSide(color: const Color(0xFF4F46E5).withValues(alpha: 0.25)),
                               ),
                             ),
                             style: const TextStyle(fontSize: 13),
@@ -16894,12 +17961,12 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
                               gradient: const LinearGradient(
-                                colors: [Color(0xFF5E35B1), Color(0xFF7B1FA2)],
+                                colors: [Color(0xFF4F46E5), Color(0xFF6366F1)],
                               ),
                               borderRadius: BorderRadius.circular(10),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.deepPurple.withValues(alpha: 0.35),
+                                  color: const Color(0xFF4F46E5).withValues(alpha: 0.30),
                                   blurRadius: 8,
                                   offset: const Offset(0, 3),
                                 ),
@@ -16922,7 +17989,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                               decoration: BoxDecoration(
                                 gradient: const LinearGradient(
-                                  colors: [Color(0xFF1A237E), Color(0xFF3949AB)],
+                                  colors: [Color(0xFF3730A3), Color(0xFF4F46E5)],
                                 ),
                                 borderRadius: BorderRadius.circular(10),
                               ),
@@ -16962,7 +18029,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.engineering_rounded, size: 56, color: Colors.deepPurple.withValues(alpha: 0.35)),
+                      Icon(Icons.engineering_rounded, size: 56, color: const Color(0xFF4F46E5).withValues(alpha: 0.35)),
                       const SizedBox(height: 12),
                       Text(
                         'No staff found',
@@ -16974,7 +18041,7 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFF5E35B1), Color(0xFF7B1FA2)]),
+                            gradient: const LinearGradient(colors: [Color(0xFF4F46E5), Color(0xFF6366F1)]),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Text('+ Add Staff', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -17025,13 +18092,13 @@ class _OtherStaffsTabState extends State<OtherStaffsTab> {
 
     // Role-based gradient colors
     final roleGradient = {
-      'principal': [const Color(0xFF1A237E), const Color(0xFF3949AB)],
-      'placement_staff': [const Color(0xFF00695C), const Color(0xFF00897B)],
-      'lab_technician': [const Color(0xFFE65100), const Color(0xFFFF8F00)],
-      'system_admin': [const Color(0xFF880E4F), const Color(0xFFC2185B)],
-      'office_staff': [const Color(0xFF4A148C), const Color(0xFF7B1FA2)],
+      'principal': [const Color(0xFF3730A3), const Color(0xFF4F46E5)],
+      'placement_staff': [const Color(0xFF0D9488), const Color(0xFF14B8A6)],
+      'lab_technician': [const Color(0xFF0284C7), const Color(0xFF06B6D4)],
+      'system_admin': [const Color(0xFF7C3AED), const Color(0xFFA855F7)],
+      'office_staff': [const Color(0xFF1D4ED8), const Color(0xFF3B82F6)],
     };
-    final gradColors = roleGradient[roleStr] ?? [const Color(0xFF5E35B1), const Color(0xFF7B1FA2)];
+    final gradColors = roleGradient[roleStr] ?? [const Color(0xFF4F46E5), const Color(0xFF6366F1)];
 
     final bg = cardBg ?? Colors.white;
     final border = borderClr ?? Colors.grey.shade200;
@@ -17670,10 +18737,11 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
             },
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
                     color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04),
@@ -17681,12 +18749,13 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
+                      isExpanded: false,
                       value: _selectedDepartment,
                       dropdownColor: isDark ? const Color(0xFF1E1E24) : Colors.white,
                       style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 13),
                       items: depts.map((d) => DropdownMenuItem(
                         value: d,
-                        child: Text(d.toUpperCase()),
+                        child: Text(d.toUpperCase(), overflow: TextOverflow.ellipsis),
                       )).toList(),
                       onChanged: (val) {
                         if (val != null) {
@@ -17697,51 +18766,51 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              FilterChip(
-                label: const Text('Breaches Only', style: TextStyle(fontSize: 12)),
-                selected: _onlyBreaches,
-                selectedColor: Colors.redAccent.withValues(alpha: 0.25),
-                checkmarkColor: Colors.redAccent,
-                labelStyle: TextStyle(color: _onlyBreaches ? Colors.redAccent : (isDark ? Colors.white70 : Colors.black87)),
-                onSelected: (val) {
-                  setState(() => _onlyBreaches = val);
-                  _filterLocations();
-                },
-              ),
-              const SizedBox(width: 8),
-              FilterChip(
-                label: Text(
-                  "${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}",
-                  style: const TextStyle(fontSize: 12),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: const Text('Breaches Only', style: TextStyle(fontSize: 12)),
+                  selected: _onlyBreaches,
+                  selectedColor: Colors.redAccent.withValues(alpha: 0.25),
+                  checkmarkColor: Colors.redAccent,
+                  labelStyle: TextStyle(color: _onlyBreaches ? Colors.redAccent : (isDark ? Colors.white70 : Colors.black87)),
+                  onSelected: (val) {
+                    setState(() => _onlyBreaches = val);
+                    _filterLocations();
+                  },
                 ),
-                selected: _selectedDate.day != DateTime.now().day ||
-                    _selectedDate.month != DateTime.now().month ||
-                    _selectedDate.year != DateTime.now().year,
-                selectedColor: primaryColor.withValues(alpha: 0.25),
-                checkmarkColor: primaryColor,
-                avatar: Icon(Icons.calendar_month_rounded, size: 16, color: primaryColor),
-                labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-                onSelected: (val) async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _selectedDate,
-                    firstDate: DateTime.now().subtract(const Duration(days: 90)),
-                    lastDate: DateTime.now(),
-                  );
-                  if (picked != null) {
-                    setState(() {
-                      _selectedDate = picked;
-                    });
-                    if (_selectedUserRegNo != null) {
-                      _fetchUserHistory(_selectedUserRegNo!);
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: Text(
+                    "${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}",
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: _selectedDate.day != DateTime.now().day ||
+                      _selectedDate.month != DateTime.now().month ||
+                      _selectedDate.year != DateTime.now().year,
+                  selectedColor: primaryColor.withValues(alpha: 0.25),
+                  checkmarkColor: primaryColor,
+                  avatar: Icon(Icons.calendar_month_rounded, size: 16, color: primaryColor),
+                  labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+                  onSelected: (val) async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _selectedDate,
+                      firstDate: DateTime.now().subtract(const Duration(days: 90)),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null) {
+                      setState(() {
+                        _selectedDate = picked;
+                      });
+                      if (_selectedUserRegNo != null) {
+                        _fetchUserHistory(_selectedUserRegNo!);
+                      }
                     }
-                  }
-                },
-              )
-            ],
-          )
+                  },
+                ),
+              ],
+            ),
+          ),
         ],
       );
     }
@@ -18981,6 +20050,7 @@ class _SettingsTabState extends State<SettingsTab> {
   bool _enforceAppGeoFence = true;
   bool _enforceVpnBlocking = true;
   bool _multiUserKioskMode = false;
+  bool _enableThirukkural = true;
   bool _isThemeExpanded = false;
   bool _isLoading = true;
   bool _isSaving = false;
@@ -19014,6 +20084,8 @@ class _SettingsTabState extends State<SettingsTab> {
                 data['settings']['enforce_vpn_blocking'] ?? true;
             _multiUserKioskMode =
                 data['settings']['multi_user_kiosk_mode'] ?? false;
+            _enableThirukkural =
+                data['settings']['enable_thirukkural'] ?? true;
           });
         }
       }
@@ -19041,6 +20113,7 @@ class _SettingsTabState extends State<SettingsTab> {
           'enforce_app_geo_fence': _enforceAppGeoFence,
           'enforce_vpn_blocking': _enforceVpnBlocking,
           'multi_user_kiosk_mode': _multiUserKioskMode,
+          'enable_thirukkural': _enableThirukkural,
           'profile_password': profilePassword,
         }),
       );
@@ -19948,6 +21021,37 @@ class _SettingsTabState extends State<SettingsTab> {
                               );
                             },
                     ),
+                    const SizedBox(height: 16),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    const SizedBox(height: 16),
+
+                    // Thirukkural Banner Toggle
+                    _buildSleekToggleRow(
+                      title: 'Enable Thirukkural Daily Banner',
+                      subtitle: _enableThirukkural ? 'ON' : 'OFF',
+                      value: _enableThirukkural,
+                      isDark: isDark,
+                      onChanged: _isSaving
+                          ? null
+                          : (value) {
+                              final prevVal = _enableThirukkural;
+                              setState(() {
+                                _enableThirukkural = value;
+                              });
+                              _saveSettings(
+                                title: 'Enable Thirukkural Daily Banner',
+                                onConfirmedStateChange: () {},
+                                onCancelledStateChange: () {
+                                  setState(() {
+                                    _enableThirukkural = prevVal;
+                                  });
+                                },
+                                successMsg: value
+                                    ? 'Thirukkural banner enabled.'
+                                    : 'Thirukkural banner disabled.',
+                              );
+                            },
+                    ),
                   ],
                 ),
               ),
@@ -20148,6 +21252,137 @@ class _SettingsTabState extends State<SettingsTab> {
 
               const SizedBox(height: 24),
 
+              // Institutional Operations & Advanced Modules Section Header
+              Text(
+                'Institutional Modules & Operations',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: iOSBlue,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              ModernGlassCard(
+                accentColor: iOSBlue,
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    ModernSettingTile(
+                      icon: Icons.edit_calendar_rounded,
+                      iconColor: Colors.blue,
+                      title: 'Attendance Regularisation & Disputes',
+                      subtitle: 'Review dispute tickets and adjust submission windows',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => AttendanceCorrectionsPage(
+                              token: widget.token,
+                              user: const {'role': 'admin', 'name': 'Administrator'},
+                              isAdminOrHod: true,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    ModernSettingTile(
+                      icon: Icons.analytics_rounded,
+                      iconColor: Colors.indigo,
+                      title: 'Advanced Reports & Export Suite',
+                      subtitle: 'Daily register, heatmap, leave utilisation, and PDF/Excel export',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => SystemReportsPage(
+                              token: widget.token,
+                              user: const {'role': 'admin', 'name': 'Administrator'},
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    ModernSettingTile(
+                      icon: Icons.security_rounded,
+                      iconColor: Colors.redAccent,
+                      title: 'Security, Sessions & 2FA Hub',
+                      subtitle: 'Active device sessions, audit logs, and two-factor auth',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => SecurityHubPage(
+                              token: widget.token,
+                              user: const {'role': 'admin', 'name': 'Administrator'},
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    ModernSettingTile(
+                      icon: Icons.celebration_rounded,
+                      iconColor: Colors.purple,
+                      title: 'Academic Holiday Calendar',
+                      subtitle: 'Manage national, state, and college holiday schedules',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => HolidayCalendarPage(
+                              token: widget.token,
+                              isAdmin: true,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    ModernSettingTile(
+                      icon: Icons.mark_chat_unread_rounded,
+                      iconColor: Colors.teal,
+                      title: 'Student Grievances & Feedback',
+                      subtitle: 'Track and resolve student academic and campus tickets',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => StudentGrievancePage(
+                              token: widget.token,
+                              user: const {'role': 'admin', 'name': 'Administrator'},
+                              isAdmin: true,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Divider(color: isDark ? Colors.white12 : Colors.grey[200]),
+                    ModernSettingTile(
+                      icon: Icons.swap_horiz_rounded,
+                      iconColor: Colors.amber.shade800,
+                      title: 'Timetable & Substitute Faculty',
+                      subtitle: 'Schedule lecture substitutions and avoid period clashes',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (ctx) => SubstituteManagementPage(
+                              token: widget.token,
+                              user: const {'role': 'admin', 'name': 'Administrator'},
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
               // Appearance Section Header
               Text(
                 'Appearance',
@@ -20157,6 +21392,7 @@ class _SettingsTabState extends State<SettingsTab> {
                   letterSpacing: 0.2,
                 ),
               ),
+
               const SizedBox(height: 16),
 
               ModernGlassCard(

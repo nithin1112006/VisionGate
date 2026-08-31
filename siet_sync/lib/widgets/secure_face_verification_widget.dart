@@ -304,9 +304,9 @@ class _SecureFaceVerificationWidgetState
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.orange.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
@@ -381,6 +381,26 @@ class _SecureFaceVerificationWidgetState
     );
   }
 
+  Widget _buildSafeCameraPreview(CameraController ctrl) {
+    final size = ctrl.value.previewSize;
+    if (size == null) {
+      return SizedBox.expand(child: CameraPreview(ctrl));
+    }
+    final double previewW = kIsWeb ? size.width : (size.height < size.width ? size.height : size.width);
+    final double previewH = kIsWeb ? size.height : (size.height < size.width ? size.width : size.height);
+
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewW,
+          height: previewH,
+          child: CameraPreview(ctrl),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -395,11 +415,7 @@ class _SecureFaceVerificationWidgetState
             children: [
               // Camera preview
               if (_isInitialized && _controller != null)
-                SizedBox(
-                  width: double.infinity,
-                  height: double.infinity,
-                  child: CameraPreview(_controller!),
-                )
+                _buildSafeCameraPreview(_controller!)
               else
                 Container(
                   color: Colors.black,
@@ -428,12 +444,12 @@ class _SecureFaceVerificationWidgetState
               // Processing overlay
               if (_isProcessing)
                 Container(
-                  color: Colors.black.withOpacity(0.72),
+                  color: Colors.black.withValues(alpha: 0.72),
                   child: Center(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
                       decoration: BoxDecoration(
-                        color: cardBg.withOpacity(0.85),
+                        color: cardBg.withValues(alpha: 0.85),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: Colors.white10),
                       ),
@@ -460,18 +476,18 @@ class _SecureFaceVerificationWidgetState
               if (_showTapToVerifyPrompt && !_isProcessing)
                 Positioned.fill(
                   child: Container(
-                    color: Colors.black.withOpacity(0.65),
+                    color: Colors.black.withValues(alpha: 0.65),
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Center(
                       child: Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: cardBg.withOpacity(0.9),
+                          color: cardBg.withValues(alpha: 0.9),
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.redAccent.withOpacity(0.3), width: 1.5),
+                          border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3), width: 1.5),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
+                              color: Colors.black.withValues(alpha: 0.3),
                               blurRadius: 15,
                               offset: const Offset(0, 8),
                             ),
@@ -483,7 +499,7 @@ class _SecureFaceVerificationWidgetState
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: Colors.redAccent.withOpacity(0.12),
+                                color: Colors.redAccent.withValues(alpha: 0.12),
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -507,7 +523,7 @@ class _SecureFaceVerificationWidgetState
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 13,
-                                color: textColor.withOpacity(0.8),
+                                color: textColor.withValues(alpha: 0.8),
                               ),
                             ),
                             const SizedBox(height: 20),
@@ -547,7 +563,7 @@ class _SecureFaceVerificationWidgetState
                               child: Text(
                                 "Cancel",
                                 style: TextStyle(
-                                  color: textColor.withOpacity(0.6),
+                                  color: textColor.withValues(alpha: 0.6),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -571,7 +587,7 @@ class _SecureFaceVerificationWidgetState
             borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.08),
+                color: Colors.black.withValues(alpha: 0.08),
                 blurRadius: 15,
                 offset: const Offset(0, -5),
               ),
@@ -595,7 +611,7 @@ class _SecureFaceVerificationWidgetState
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.deepPurpleAccent.withOpacity(0.12),
+                        color: Colors.deepPurpleAccent.withValues(alpha: 0.12),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
@@ -631,12 +647,12 @@ class _SecureFaceVerificationWidgetState
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.12),
+                          color: Colors.orange.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                          border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                         ),
                         child: Text(
-                          "${_failedAttempts}/3 attempts",
+                          "$_failedAttempts/3 attempts",
                           style: const TextStyle(
                             color: Colors.orange,
                             fontSize: 11,
@@ -648,9 +664,9 @@ class _SecureFaceVerificationWidgetState
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.12),
+                          color: Colors.red.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.red.withOpacity(0.3)),
+                          border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                         ),
                         child: const Text(
                           "LOCKED",
@@ -736,7 +752,7 @@ class _SecureFaceVerificationWidgetState
                         ? null
                         : [
                             BoxShadow(
-                              color: const Color(0xFF6366F1).withOpacity(0.35),
+                              color: const Color(0xFF6366F1).withValues(alpha: 0.35),
                               blurRadius: 12,
                               offset: const Offset(0, 4),
                             ),
@@ -796,7 +812,7 @@ class FaceScannerMaskPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final maskPaint = Paint()
-      ..color = Colors.black.withOpacity(0.70)
+      ..color = Colors.black.withValues(alpha: 0.70)
       ..style = PaintingStyle.fill;
 
     // Dimensions of the viewport scanning oval (responsive to both width and height)
@@ -856,9 +872,9 @@ class FaceScannerMaskPainter extends CustomPainter {
         final laserPaint = Paint()
           ..shader = LinearGradient(
             colors: [
-              ringColor.withOpacity(0.0),
-              ringColor.withOpacity(0.85),
-              ringColor.withOpacity(0.0),
+              ringColor.withValues(alpha: 0.0),
+              ringColor.withValues(alpha: 0.85),
+              ringColor.withValues(alpha: 0.0),
             ],
           ).createShader(Rect.fromLTRB(actualX1, laserY - 2, actualX2, laserY + 2))
           ..style = PaintingStyle.stroke
@@ -868,7 +884,7 @@ class FaceScannerMaskPainter extends CustomPainter {
 
         // Scan reflection glow
         final glowPaint = Paint()
-          ..color = ringColor.withOpacity(0.12)
+          ..color = ringColor.withValues(alpha: 0.12)
           ..style = PaintingStyle.fill;
         canvas.drawOval(
           Rect.fromCenter(center: Offset(center.dx, laserY), width: (actualX2 - actualX1), height: 16),

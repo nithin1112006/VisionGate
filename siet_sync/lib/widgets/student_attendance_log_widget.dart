@@ -1,23 +1,28 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import '../config/college_ip_config.dart';
 
+import '../config/college_ip_config.dart';
+import '../utils/file_saver.dart';
+
+/// Unified Student Attendance Log, Day & Period Matrix (Periods 1 to 8), and Report Suite
+/// Applicable across Staff Panel, HOD Panel, and Admin Panel.
 class StudentAttendanceLogWidget extends StatefulWidget {
-  final String token;
   final Map<String, dynamic> user;
+  final String token;
   final bool isHod;
   final bool isAdmin;
   final String? defaultDept;
 
   const StudentAttendanceLogWidget({
     super.key,
-    required this.token,
     required this.user,
+    required this.token,
     this.isHod = false,
     this.isAdmin = false,
     this.defaultDept,
@@ -30,32 +35,102 @@ class StudentAttendanceLogWidget extends StatefulWidget {
 
 class _StudentAttendanceLogWidgetState
     extends State<StudentAttendanceLogWidget> {
-  static const Color primaryColor = Color(0xFF1E3A8A); // Deep Navy
-  static const Color accentColor = Color(0xFF2563EB); // Royal Blue
-  static const Color backgroundColor = Color(0xFFF8FAFC);
+  // Locked Design Tokens
+  static const Color brandBlue = Color(0xFF1E3A8A);
+  static const Color accentBlue = Color(0xFF3B82F6);
+  static const Color primaryNavy = Color(0xFF0F172A);
+  static const Color emeraldSuccess = Color(0xFF059669);
+  static const Color amberWarning = Color(0xFFD97706);
+  static const Color roseDanger = Color(0xFFDC2626);
+  static const Color purpleAccent = Color(0xFF7C3AED);
+  static const Color slateBg = Color(0xFFF8FAFC);
+  static const Color cardBorder = Color(0xFFE2E8F0);
 
+  // Date Filters
   DateTime _startDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
   DateTime _endDate = DateTime.now();
 
+  // Multi-Level Filter State
   String _selectedDept = "ALL";
+  String _selectedPeriod = "ALL";
   String _selectedStatus = "ALL";
+  String _selectedDegree = "ALL";
+  String _selectedYear = "ALL";
+  String _selectedSemester = "ALL";
+  String _selectedSection = "ALL";
+  String _selectedBatch = "ALL";
+  String _selectedMethod = "ALL";
   String _searchQuery = "";
   final TextEditingController _searchController = TextEditingController();
 
+  bool _isAdvancedFiltersOpen = false;
+  String _viewMode = "matrix"; // "matrix", "table", or "cards"
+  String _sortColumn = "date";
+  bool _sortAscending = false;
+
   List<dynamic> _logs = [];
+  List<dynamic> _matrix = [];
   Map<String, dynamic> _summary = {};
+  Map<String, dynamic> _periodStats = {};
   List<String> _departments = ["ALL"];
 
   bool _isLoading = true;
   String? _errorMessage;
+  Map<String, dynamic>? _academicSettings;
+
+  int get _activeFiltersCount {
+    int count = 0;
+    if (_selectedDept != "ALL" && !widget.isHod) count++;
+    if (_selectedPeriod != "ALL") count++;
+    if (_selectedStatus != "ALL") count++;
+    if (_selectedDegree != "ALL") count++;
+    if (_selectedYear != "ALL") count++;
+    if (_selectedSemester != "ALL") count++;
+    if (_selectedSection != "ALL") count++;
+    if (_selectedBatch != "ALL") count++;
+    if (_selectedMethod != "ALL") count++;
+    if (_searchQuery.isNotEmpty) count++;
+    return count;
+  }
+
+  void _resetAllFilters() {
+    setState(() {
+      if (!widget.isHod) {
+        _selectedDept = "ALL";
+      }
+      _selectedPeriod = "ALL";
+      _selectedStatus = "ALL";
+      _selectedDegree = "ALL";
+      _selectedYear = "ALL";
+      _selectedSemester = "ALL";
+      _selectedSection = "ALL";
+      _selectedBatch = "ALL";
+      _selectedMethod = "ALL";
+      _searchQuery = "";
+      _searchController.clear();
+      _startDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
+      _endDate = DateTime.now();
+    });
+    _fetchLogs();
+  }
 
   @override
   void initState() {
     super.initState();
-    if (widget.isHod && widget.defaultDept != null && widget.defaultDept!.isNotEmpty) {
-      _selectedDept = widget.defaultDept!.trim();
+    final initialDept = (widget.defaultDept ??
+            widget.user['dept'] ??
+            widget.user['department'] ??
+            '')
+        .toString()
+        .trim();
+    if (widget.isHod && initialDept.isNotEmpty) {
+      _selectedDept = initialDept;
+    }
+    if (_selectedDept.isNotEmpty && !_departments.contains(_selectedDept)) {
+      _departments.add(_selectedDept);
     }
     _fetchDepartments();
+    _fetchAcademicSettings();
     _fetchLogs();
   }
 
@@ -72,26 +147,39 @@ class _StudentAttendanceLogWidgetState
 
   String get _apiUrl => CollegeIPConfig.defaultURL;
 
+  Future<void> _fetchAcademicSettings() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_apiUrl/settings/academic'),
+        headers: _headers,
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (mounted) {
+          setState(() {
+            _academicSettings = data;
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> _fetchDepartments() async {
     try {
-      final response = await http
-          .get(Uri.parse('$_apiUrl/staff/departments'), headers: _headers)
-          .timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data is Map && data['departments'] is List) {
-          final List<String> fetched = ["ALL"];
-          for (var d in data['departments']) {
-            final str = d.toString().trim();
-            if (str.isNotEmpty && !fetched.contains(str)) {
-              fetched.add(str);
-            }
-          }
-          if (mounted) {
-            setState(() {
-              _departments = fetched;
-            });
-          }
+      final res = await http.get(
+        Uri.parse('$_apiUrl/admin/departments'),
+        headers: _headers,
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data is List && mounted) {
+          setState(() {
+            final fetched = data
+                .map((d) => (d is Map ? d['code'] ?? d['dept'] : d).toString())
+                .where((d) => d.isNotEmpty && d != 'null')
+                .toList();
+            _departments = ["ALL", ...fetched.toSet()];
+          });
         }
       }
     } catch (_) {}
@@ -108,75 +196,68 @@ class _StudentAttendanceLogWidgetState
       final startStr = DateFormat('yyyy-MM-dd').format(_startDate);
       final endStr = DateFormat('yyyy-MM-dd').format(_endDate);
 
-      final queryParams = {
+      final queryParams = <String, String>{
         'start_date': startStr,
         'end_date': endStr,
         'dept': _selectedDept,
+        'period_number': _selectedPeriod,
         'status': _selectedStatus,
+        'degree': _selectedDegree,
+        'year_of_study': _selectedYear,
+        'semester': _selectedSemester,
+        'section': _selectedSection,
+        'batch': _selectedBatch,
+        'method': _selectedMethod,
         'search': _searchQuery,
       };
 
       final uri = Uri.parse('$_apiUrl/student/attendance/logs')
           .replace(queryParameters: queryParams);
 
-      final response =
-          await http.get(uri, headers: _headers).timeout(const Duration(seconds: 8));
+      final response = await http
+          .get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (mounted) {
           final List<dynamic> allLogs = data['logs'] ?? [];
-          final Map<String, dynamic> rawSummary = Map<String, dynamic>.from(data['summary'] ?? {});
-          
+          final List<dynamic> matrixData = data['matrix'] ?? [];
+          final Map<String, dynamic> rawSummary =
+              Map<String, dynamic>.from(data['summary'] ?? {});
+          final Map<String, dynamic> periodStats =
+              Map<String, dynamic>.from(rawSummary['period_stats'] ?? {});
+
           // Exclude staff members from student logs
           final List<dynamic> rawLogs = allLogs.where((log) {
             if (log is! Map) return false;
-            final role = (log['role'] ?? log['user_type'] ?? log['type'] ?? '').toString().toLowerCase();
-            final regNo = (log['reg_no'] ?? log['staff_id'] ?? '').toString().toUpperCase();
-            if (role == 'staff' || role == 'admin' || role == 'hod' || role == 'other_staff' || regNo.startsWith('STAFF_')) {
+            final role = (log['role'] ??
+                    log['user_type'] ??
+                    log['type'] ??
+                    '')
+                .toString()
+                .toLowerCase();
+            final regNo = (log['reg_no'] ?? log['staff_id'] ?? '')
+                .toString()
+                .toUpperCase();
+            if (role == 'staff' ||
+                role == 'admin' ||
+                role == 'hod' ||
+                role == 'other_staff' ||
+                regNo.startsWith('STAFF_')) {
               return false;
             }
             return true;
           }).toList();
 
-          final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-          final currentHour = DateTime.now().hour;
-          
-          int absentCount = 0;
-          int presentCount = 0;
-          int leaveCount = 0;
-
-          for (var log in rawLogs) {
-            if (log is! Map) continue;
-            final st = (log['status'] ?? '').toString().toLowerCase();
-            final ts = (log['timestamp'] ?? log['date'] ?? '').toString();
-            final isToday = ts.length >= 10 && ts.startsWith(todayStr);
-            final isSessionClosed = (log['is_session_closed'] == true || log['session_closed'] == true) ||
-                (!isToday) || (currentHour >= 17);
-
-            if (st == 'present' || st == 'check_in' || st == 'check_out') {
-              presentCount++;
-            } else if (st == 'leave' || st.contains('leave')) {
-              leaveCount++;
-            } else if (st == 'absent') {
-              if (isSessionClosed) {
-                absentCount++;
-              } else {
-                log['status'] = 'Session Active';
-              }
-            }
-          }
-
-          rawSummary['absent_count'] = absentCount;
-          rawSummary['present_count'] = presentCount;
-          rawSummary['leave_count'] = leaveCount;
-          final total = rawLogs.length;
-          rawSummary['total_records'] = total;
-          rawSummary['present_percentage'] = total > 0 ? (presentCount / total * 100).toStringAsFixed(1) : '0';
+          _sortLogsList(rawLogs);
+          _sortMatrixList(matrixData);
 
           setState(() {
             _logs = rawLogs;
+            _matrix = matrixData;
             _summary = rawSummary;
+            _periodStats = periodStats;
             _isLoading = false;
           });
         }
@@ -187,35 +268,128 @@ class _StudentAttendanceLogWidgetState
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = "Failed to load student attendance logs. $e";
+          _errorMessage = "Failed to load student attendance records. $e";
         });
       }
     }
   }
 
+  void _sortLogsList(List<dynamic> list) {
+    list.sort((a, b) {
+      if (a is! Map || b is! Map) return 0;
+      dynamic valA = a[_sortColumn];
+      dynamic valB = b[_sortColumn];
+
+      if (_sortColumn == 'date') {
+        valA = "${a['date'] ?? ''}_${a['period_number'] ?? ''}";
+        valB = "${b['date'] ?? ''}_${b['period_number'] ?? ''}";
+      } else if (_sortColumn == 'period') {
+        valA = a['period_number'] ?? 0;
+        valB = b['period_number'] ?? 0;
+      }
+
+      int res = 0;
+      if (valA == null && valB == null) {
+        res = 0;
+      } else if (valA == null) {
+        res = -1;
+      } else if (valB == null) {
+        res = 1;
+      } else {
+        res = valA.toString().compareTo(valB.toString());
+      }
+      return _sortAscending ? res : -res;
+    });
+  }
+
+  void _sortMatrixList(List<dynamic> list) {
+    list.sort((a, b) {
+      if (a is! Map || b is! Map) return 0;
+      dynamic valA = a[_sortColumn];
+      dynamic valB = b[_sortColumn];
+
+      if (_sortColumn == 'date') {
+        valA = "${a['date'] ?? ''}_${a['roll_no'] ?? ''}";
+        valB = "${b['date'] ?? ''}_${b['roll_no'] ?? ''}";
+      } else if (_sortColumn == 'percentage') {
+        valA = a['day_percentage'] ?? 0.0;
+        valB = b['day_percentage'] ?? 0.0;
+      }
+
+      int res = 0;
+      if (valA == null && valB == null) {
+        res = 0;
+      } else if (valA == null) {
+        res = -1;
+      } else if (valB == null) {
+        res = 1;
+      } else if (valA is num && valB is num) {
+        res = valA.compareTo(valB);
+      } else {
+        res = valA.toString().compareTo(valB.toString());
+      }
+      return _sortAscending ? res : -res;
+    });
+  }
+
+  // -------------------------------------------------------------
+  // QUICK DATE RANGE PRESETS
+  // -------------------------------------------------------------
   void _selectDatePreset(String preset) {
     final now = DateTime.now();
+    DateTime start = now;
+    DateTime end = now;
+
+    switch (preset) {
+      case 'today':
+        start = DateTime(now.year, now.month, now.day);
+        end = now;
+        break;
+      case 'yesterday':
+        final yest = now.subtract(const Duration(days: 1));
+        start = DateTime(yest.year, yest.month, yest.day);
+        end = DateTime(yest.year, yest.month, yest.day, 23, 59, 59);
+        break;
+      case 'this_week':
+        final weekday = now.weekday; // 1 = Mon, 7 = Sun
+        start = now.subtract(Duration(days: weekday - 1));
+        start = DateTime(start.year, start.month, start.day);
+        end = now;
+        break;
+      case 'last_7_days':
+        start = now.subtract(const Duration(days: 6));
+        start = DateTime(start.year, start.month, start.day);
+        end = now;
+        break;
+      case 'this_month':
+        start = DateTime(now.year, now.month, 1);
+        end = now;
+        break;
+      case 'active_semester':
+        final ranges =
+            _academicSettings?['student_academic_settings']?['academic_ranges']
+                as List<dynamic>?;
+        if (ranges != null && ranges.isNotEmpty) {
+          final activeRange = ranges.firstWhere(
+            (r) => r['is_active'] == true,
+            orElse: () => ranges.first,
+          );
+          if (activeRange != null) {
+            try {
+              start = DateTime.parse(activeRange['start']);
+              end = DateTime.parse(activeRange['end']);
+            } catch (_) {}
+          }
+        } else {
+          start = DateTime(now.year, now.month >= 7 ? 7 : 1, 1);
+          end = now;
+        }
+        break;
+    }
+
     setState(() {
-      switch (preset) {
-        case 'Today':
-          _startDate = DateTime(now.year, now.month, now.day);
-          _endDate = now;
-          break;
-        case 'Yesterday':
-          final yest = now.subtract(const Duration(days: 1));
-          _startDate = DateTime(yest.year, yest.month, yest.day);
-          _endDate = DateTime(yest.year, yest.month, yest.day);
-          break;
-        case 'Last 7 Days':
-          _startDate = now.subtract(const Duration(days: 6));
-          _endDate = now;
-          break;
-        case 'This Month':
-        default:
-          _startDate = DateTime(now.year, now.month, 1);
-          _endDate = now;
-          break;
-      }
+      _startDate = start;
+      _endDate = end;
     });
     _fetchLogs();
   }
@@ -223,17 +397,16 @@ class _StudentAttendanceLogWidgetState
   Future<void> _pickCustomDateRange() async {
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: DateTime(2023, 1, 1),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
       initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
       builder: (context, child) {
         return Theme(
-          data: ThemeData.light().copyWith(
+          data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.light(
-              primary: primaryColor,
+              primary: brandBlue,
               onPrimary: Colors.white,
-              surface: Colors.white,
-              onSurface: Colors.black87,
+              onSurface: primaryNavy,
             ),
           ),
           child: child!,
@@ -250,12 +423,16 @@ class _StudentAttendanceLogWidgetState
     }
   }
 
+  // -------------------------------------------------------------
+  // PDF REPORT GENERATOR (Institutional Day & Period Matrix)
+  // -------------------------------------------------------------
   Future<void> _generatePdfReport() async {
-    if (_logs.isEmpty) {
+    final isMatrixMode = _viewMode == "matrix" && _matrix.isNotEmpty;
+    if (_logs.isEmpty && _matrix.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("No logs available to generate PDF report."),
-          backgroundColor: Colors.orange,
+          content: Text("No records available to generate PDF report."),
+          backgroundColor: amberWarning,
         ),
       );
       return;
@@ -267,30 +444,35 @@ class _StudentAttendanceLogWidgetState
 
     final dateRangeStr =
         "${DateFormat('dd MMM yyyy').format(_startDate)} - ${DateFormat('dd MMM yyyy').format(_endDate)}";
-    final genTimeStr = DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now());
-    final userName = widget.user['name'] ?? widget.user['username'] ?? 'Administrator';
+    final genTimeStr =
+        DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now());
+    final userName =
+        widget.user['name'] ?? widget.user['username'] ?? 'Administrator';
     final userRole = widget.isHod
         ? "HOD (${widget.defaultDept ?? 'Department'})"
-        : (widget.isAdmin ? "System Administrator" : "Staff Member");
+        : (widget.isAdmin ? "System Administrator" : "Faculty Member");
 
     final totalRec = _summary['total_records'] ?? _logs.length;
+    final totalStudentDays = _summary['total_student_days'] ?? _matrix.length;
     final presentCnt = _summary['present_count'] ?? 0;
     final absentCnt = _summary['absent_count'] ?? 0;
+    final odCnt = _summary['od_count'] ?? 0;
     final leaveCnt = _summary['leave_count'] ?? 0;
     final pct = _summary['present_percentage'] ?? 0.0;
 
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(32),
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(24),
         build: (pw.Context context) {
           return [
-            // Clean Institutional Header Banner
+            // Institutional Header Banner
             pw.Container(
-              padding: const pw.EdgeInsets.all(16),
+              padding:
+                  const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: pw.BoxDecoration(
                 color: PdfColor.fromHex('#0F172A'),
-                borderRadius: pw.BorderRadius.circular(8),
+                borderRadius: pw.BorderRadius.circular(6),
               ),
               child: pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -299,21 +481,23 @@ class _StudentAttendanceLogWidgetState
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        "ATTENDA • ACADEMIC MANAGEMENT SYSTEM",
+                        "SRI SHAKTHI INSTITUTE OF ENGINEERING AND TECHNOLOGY",
                         style: pw.TextStyle(
                           font: fontBold,
                           color: PdfColors.white,
-                          fontSize: 13,
+                          fontSize: 12,
                           letterSpacing: 0.5,
                         ),
                       ),
-                      pw.SizedBox(height: 4),
+                      pw.SizedBox(height: 2),
                       pw.Text(
-                        "STUDENT ATTENDANCE LOG REPORT",
+                        isMatrixMode
+                            ? "STUDENT ATTENDANCE DAY & PERIOD MATRIX REPORT (PERIODS 1 TO 8)"
+                            : "STUDENT ATTENDANCE COMPREHENSIVE AUDIT & LOG REPORT",
                         style: pw.TextStyle(
                           font: fontBold,
                           color: PdfColor.fromHex('#38BDF8'),
-                          fontSize: 11,
+                          fontSize: 9.5,
                         ),
                       ),
                     ],
@@ -326,16 +510,16 @@ class _StudentAttendanceLogWidgetState
                         style: pw.TextStyle(
                           font: font,
                           color: PdfColor.fromHex('#E2E8F0'),
-                          fontSize: 8.5,
+                          fontSize: 8,
                         ),
                       ),
                       pw.SizedBox(height: 2),
                       pw.Text(
-                        "By: $userName ($userRole)",
+                        "Auditor: $userName ($userRole)",
                         style: pw.TextStyle(
                           font: font,
                           color: PdfColor.fromHex('#94A3B8'),
-                          fontSize: 8.5,
+                          fontSize: 8,
                         ),
                       ),
                     ],
@@ -343,102 +527,94 @@ class _StudentAttendanceLogWidgetState
                 ],
               ),
             ),
-            pw.SizedBox(height: 14),
+            pw.SizedBox(height: 8),
 
-            // Metadata & Active Filters Info Box
+            // Active Filters Box
             pw.Container(
-              padding: const pw.EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+              padding:
+                  const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 10),
               decoration: pw.BoxDecoration(
                 color: PdfColor.fromHex('#F8FAFC'),
-                borderRadius: pw.BorderRadius.circular(6),
-                border: pw.Border.all(color: PdfColor.fromHex('#E2E8F0'), width: 1),
+                borderRadius: pw.BorderRadius.circular(4),
+                border: pw.Border.all(
+                    color: PdfColor.fromHex('#E2E8F0'), width: 0.8),
               ),
               child: pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Text(
-                    "Date Period: $dateRangeStr",
-                    style: pw.TextStyle(font: fontBold, fontSize: 9.5, color: PdfColor.fromHex('#1E293B')),
-                  ),
-                  pw.Text(
-                    "Department: ${_selectedDept.toUpperCase()}",
-                    style: pw.TextStyle(font: fontBold, fontSize: 9.5, color: PdfColor.fromHex('#1E293B')),
-                  ),
-                  pw.Text(
-                    "Status: ${_selectedStatus.toUpperCase()}",
-                    style: pw.TextStyle(font: fontBold, fontSize: 9.5, color: PdfColor.fromHex('#1E293B')),
-                  ),
+                  pw.Text("Date Range: $dateRangeStr",
+                      style: pw.TextStyle(
+                          font: fontBold,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#0F172A'))),
+                  pw.Text("Dept: $_selectedDept",
+                      style: pw.TextStyle(
+                          font: font,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#475569'))),
+                  pw.Text("Period Filter: $_selectedPeriod",
+                      style: pw.TextStyle(
+                          font: font,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#475569'))),
+                  pw.Text("Status: $_selectedStatus",
+                      style: pw.TextStyle(
+                          font: font,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#475569'))),
+                  pw.Text("Year/Sem: $_selectedYear / Sem $_selectedSemester",
+                      style: pw.TextStyle(
+                          font: font,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#475569'))),
+                  pw.Text("Batch/Sec: $_selectedBatch / Sec $_selectedSection",
+                      style: pw.TextStyle(
+                          font: font,
+                          fontSize: 8,
+                          color: PdfColor.fromHex('#475569'))),
                 ],
               ),
             ),
-            pw.SizedBox(height: 12),
+            pw.SizedBox(height: 8),
 
-            // Clean 4-Box Summary Metrics Bar
+            // 6-Box Summary Metric KPI Strip
             pw.Row(
               children: [
-                _buildPdfStatBox(fontBold, font, "Total Logs", "$totalRec", '#475569', '#F1F5F9'),
-                pw.SizedBox(width: 8),
-                _buildPdfStatBox(fontBold, font, "Present Rate", "$presentCnt ($pct%)", '#16A34A', '#F0FDF4'),
-                pw.SizedBox(width: 8),
-                _buildPdfStatBox(fontBold, font, "Absent Count", "$absentCnt", '#DC2626', '#FEF2F2'),
-                pw.SizedBox(width: 8),
-                _buildPdfStatBox(fontBold, font, "On Leave", "$leaveCnt", '#2563EB', '#EFF6FF'),
+                _buildPdfStatBox(
+                    fontBold,
+                    font,
+                    isMatrixMode ? "STUDENT-DAYS" : "TOTAL LOGS",
+                    isMatrixMode ? "$totalStudentDays" : "$totalRec",
+                    '#1E3A8A',
+                    '#EFF6FF'),
+                pw.SizedBox(width: 5),
+                _buildPdfStatBox(fontBold, font, "ATTENDANCE RATE", "$pct%",
+                    '#059669', '#ECFDF5'),
+                pw.SizedBox(width: 5),
+                _buildPdfStatBox(fontBold, font, "PRESENT", "$presentCnt",
+                    '#059669', '#ECFDF5'),
+                pw.SizedBox(width: 5),
+                _buildPdfStatBox(fontBold, font, "ABSENT", "$absentCnt",
+                    '#DC2626', '#FEF2F2'),
+                pw.SizedBox(width: 5),
+                _buildPdfStatBox(fontBold, font, "ON-DUTY (OD)", "$odCnt",
+                    '#2563EB', '#EFF6FF'),
+                pw.SizedBox(width: 5),
+                _buildPdfStatBox(fontBold, font, "ON LEAVE", "$leaveCnt",
+                    '#7C3AED', '#F5F3FF'),
               ],
             ),
-            pw.SizedBox(height: 14),
+            pw.SizedBox(height: 10),
 
-            // High-Craft Tabular Attendance Log Table
-            pw.TableHelper.fromTextArray(
-              context: context,
-              border: pw.TableBorder.all(color: PdfColor.fromHex('#E2E8F0'), width: 0.5),
-              headerStyle: pw.TextStyle(
-                font: fontBold,
-                color: PdfColors.white,
-                fontSize: 8.5,
-              ),
-              headerDecoration: pw.BoxDecoration(
-                color: PdfColor.fromHex('#1E293B'),
-              ),
-              rowDecoration: const pw.BoxDecoration(
-                color: PdfColors.white,
-              ),
-              oddRowDecoration: pw.BoxDecoration(
-                color: PdfColor.fromHex('#F8FAFC'),
-              ),
-              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-              cellStyle: pw.TextStyle(font: font, fontSize: 8),
-              headers: <String>[
-                '#',
-                'Date',
-                'Reg No',
-                'Student Name',
-                'Dept',
-                'Status',
-                'In Time',
-                'Out Time',
-                'Remarks'
-              ],
-              data: List<List<String>>.generate(
-                _logs.length,
-                (index) {
-                  final item = _logs[index];
-                  return [
-                    '${index + 1}',
-                    '${item['date'] ?? ''}',
-                    '${item['reg_no'] ?? ''}',
-                    '${item['name'] ?? ''}',
-                    '${item['dept'] ?? ''}',
-                    '${item['status'] ?? 'Present'}',
-                    '${item['entry_time'] ?? '--'}',
-                    '${item['exit_time'] ?? '--'}',
-                    '${item['remarks'] ?? 'Verified'}',
-                  ];
-                },
-              ),
-            ),
-            pw.SizedBox(height: 28),
+            // Main Table: Matrix vs Log Stream
+            if (isMatrixMode)
+              _buildPdfMatrixTable(fontBold, font)
+            else
+              _buildPdfLogStreamTable(fontBold, font),
 
-            // Clean Signature Footer Area
+            pw.SizedBox(height: 16),
+
+            // Signatures
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
@@ -446,28 +622,41 @@ class _StudentAttendanceLogWidgetState
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Container(
-                      width: 140,
-                      decoration: const pw.BoxDecoration(
-                        border: pw.Border(top: pw.BorderSide(color: PdfColors.grey400, width: 1)),
-                      ),
-                    ),
-                    pw.SizedBox(height: 4),
-                    pw.Text("Class In-Charge Signature",
-                        style: pw.TextStyle(font: font, fontSize: 8, color: PdfColor.fromHex('#475569'))),
+                        width: 140,
+                        height: 1,
+                        color: PdfColor.fromHex('#CBD5E1')),
+                    pw.SizedBox(height: 3),
+                    pw.Text("Class Advisor / Faculty Signature",
+                        style: pw.TextStyle(
+                            font: fontBold,
+                            fontSize: 7.5,
+                            color: PdfColor.fromHex('#0F172A'))),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    pw.Text(
+                        "Status Key: P = Present | A = Absent | OD = On-Duty | L = Leave | H = Holiday | -- = Free",
+                        style: pw.TextStyle(
+                            font: font,
+                            fontSize: 7,
+                            color: PdfColors.grey700)),
                   ],
                 ),
                 pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.end,
                   children: [
                     pw.Container(
-                      width: 140,
-                      decoration: const pw.BoxDecoration(
-                        border: pw.Border(top: pw.BorderSide(color: PdfColors.grey400, width: 1)),
-                      ),
-                    ),
-                    pw.SizedBox(height: 4),
-                    pw.Text("HOD / Principal Signature",
-                        style: pw.TextStyle(font: fontBold, fontSize: 8, color: PdfColor.fromHex('#0F172A'))),
+                        width: 140,
+                        height: 1,
+                        color: PdfColor.fromHex('#CBD5E1')),
+                    pw.SizedBox(height: 3),
+                    pw.Text("HOD / Academic Dean Signature",
+                        style: pw.TextStyle(
+                            font: fontBold,
+                            fontSize: 7.5,
+                            color: PdfColor.fromHex('#0F172A'))),
                   ],
                 ),
               ],
@@ -477,10 +666,11 @@ class _StudentAttendanceLogWidgetState
         footer: (pw.Context context) {
           return pw.Container(
             alignment: pw.Alignment.centerRight,
-            margin: const pw.EdgeInsets.only(top: 12),
+            margin: const pw.EdgeInsets.only(top: 8),
             child: pw.Text(
-              'Page ${context.pageNumber} of ${context.pagesCount} • Official Attendance Record • Attenda System',
-              style: pw.TextStyle(font: font, fontSize: 7.5, color: PdfColors.grey600),
+              'Page ${context.pageNumber} of ${context.pagesCount} • Official College Record • Attenda System',
+              style: pw.TextStyle(
+                  font: font, fontSize: 7, color: PdfColors.grey600),
             ),
           );
         },
@@ -489,32 +679,199 @@ class _StudentAttendanceLogWidgetState
 
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => doc.save(),
-      name: 'Student_Attendance_Report_${DateFormat('yyyyMMdd').format(_startDate)}.pdf',
+      name:
+          'Student_Period_Matrix_Report_${DateFormat('yyyyMMdd').format(_startDate)}.pdf',
     );
   }
 
-  pw.Widget _buildPdfStatBox(
-      pw.Font fontBold, pw.Font font, String title, String value, String colorHex, String bgHex) {
+  pw.Widget _buildPdfMatrixTable(pw.Font fontBold, pw.Font font) {
+    final headers = [
+      "#",
+      "Date",
+      "Reg No",
+      "Roll No",
+      "Student Name",
+      "Dept",
+      "Sem-Sec",
+      "P1",
+      "P2",
+      "P3",
+      "P4",
+      "P5",
+      "P6",
+      "P7",
+      "P8",
+      "Att/Tot",
+      "Day %",
+      "Status",
+    ];
+
+    final rows = <List<String>>[];
+    for (int i = 0; i < _matrix.length; i++) {
+      final item = _matrix[i];
+      if (item is! Map) continue;
+      final periods = (item['periods'] as Map?) ?? {};
+
+      String getP(int p) {
+        final pData = periods[p.toString()];
+        if (pData is Map) {
+          final st = (pData['status'] ?? '--').toString();
+          if (st == 'Present') return 'P';
+          if (st == 'Absent') return 'A';
+          if (st.contains('OD') || st.contains('On-Duty')) return 'OD';
+          if (st.contains('Leave') || st.contains('Medical')) return 'L';
+          if (st.contains('Holiday')) return 'H';
+          return '--';
+        }
+        return '--';
+      }
+
+      rows.add([
+        "${i + 1}",
+        "${item['date'] ?? '--'}",
+        "${item['reg_no'] ?? '--'}",
+        "${item['roll_no'] ?? '--'}",
+        "${item['name'] ?? '--'}",
+        "${item['dept'] ?? '--'}",
+        "S${item['semester'] ?? '-'}-${item['section'] ?? '-'}",
+        getP(1),
+        getP(2),
+        getP(3),
+        getP(4),
+        getP(5),
+        getP(6),
+        getP(7),
+        getP(8),
+        "${item['attended_periods'] ?? 0}/${item['total_periods'] ?? 0}",
+        "${item['day_percentage'] ?? 0}%",
+        "${item['day_status'] ?? '--'}",
+      ]);
+    }
+
+    return pw.TableHelper.fromTextArray(
+      headers: headers,
+      data: rows,
+      border: pw.TableBorder.all(
+          color: PdfColor.fromHex('#CBD5E1'), width: 0.5),
+      headerStyle: pw.TextStyle(
+        font: fontBold,
+        fontSize: 6.5,
+        color: PdfColors.white,
+      ),
+      headerDecoration: pw.BoxDecoration(
+        color: PdfColor.fromHex('#1E3A8A'),
+      ),
+      cellStyle: pw.TextStyle(
+        font: font,
+        fontSize: 6.5,
+        color: PdfColor.fromHex('#0F172A'),
+      ),
+      cellAlignment: pw.Alignment.center,
+      cellPadding:
+          const pw.EdgeInsets.symmetric(horizontal: 2.5, vertical: 3.5),
+      rowDecoration: const pw.BoxDecoration(
+        color: PdfColors.white,
+      ),
+      oddRowDecoration: pw.BoxDecoration(
+        color: PdfColor.fromHex('#F8FAFC'),
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfLogStreamTable(pw.Font fontBold, pw.Font font) {
+    final headers = [
+      "#",
+      "Date",
+      "Reg No",
+      "Roll No",
+      "Student Name",
+      "Dept",
+      "Period",
+      "Subject",
+      "Faculty",
+      "Status",
+      "Time",
+      "Method",
+    ];
+
+    final rows = <List<String>>[];
+    for (int i = 0; i < _logs.length; i++) {
+      final log = _logs[i];
+      if (log is! Map) continue;
+      rows.add([
+        "${i + 1}",
+        "${log['date'] ?? '--'}",
+        "${log['reg_no'] ?? '--'}",
+        "${log['roll_no'] ?? '--'}",
+        "${log['name'] ?? '--'}",
+        "${log['dept'] ?? '--'}",
+        "P${log['period_number'] ?? 1}",
+        "${log['subject_code'] ?? '--'}",
+        "${log['faculty_name'] ?? '--'}",
+        "${log['status'] ?? '--'}",
+        "${log['entry_time'] ?? '--'}",
+        "${log['method'] ?? 'Face'}",
+      ]);
+    }
+
+    return pw.TableHelper.fromTextArray(
+      headers: headers,
+      data: rows,
+      border: pw.TableBorder.all(
+          color: PdfColor.fromHex('#CBD5E1'), width: 0.5),
+      headerStyle: pw.TextStyle(
+        font: fontBold,
+        fontSize: 6.5,
+        color: PdfColors.white,
+      ),
+      headerDecoration: pw.BoxDecoration(
+        color: PdfColor.fromHex('#1E3A8A'),
+      ),
+      cellStyle: pw.TextStyle(
+        font: font,
+        fontSize: 6.5,
+        color: PdfColor.fromHex('#0F172A'),
+      ),
+      cellAlignment: pw.Alignment.centerLeft,
+      cellPadding:
+          const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 3.5),
+      rowDecoration: const pw.BoxDecoration(
+        color: PdfColors.white,
+      ),
+      oddRowDecoration: pw.BoxDecoration(
+        color: PdfColor.fromHex('#F8FAFC'),
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfStatBox(pw.Font fontBold, pw.Font font, String title,
+      String value, String colorHex, String bgHex) {
     return pw.Expanded(
       child: pw.Container(
-        padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        padding: const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 4),
         decoration: pw.BoxDecoration(
           color: PdfColor.fromHex(bgHex),
-          borderRadius: pw.BorderRadius.circular(6),
-          border: pw.Border.all(color: PdfColor.fromHex(colorHex), width: 0.8),
+          borderRadius: pw.BorderRadius.circular(4),
+          border: pw.Border.all(color: PdfColor.fromHex(colorHex), width: 0.6),
         ),
         child: pw.Column(
           children: [
             pw.Text(
-              value,
-              style: pw.TextStyle(
-                  font: fontBold, fontSize: 10.5, color: PdfColor.fromHex(colorHex)),
-            ),
-            pw.SizedBox(height: 2),
-            pw.Text(
               title,
               style: pw.TextStyle(
-                  font: font, fontSize: 7.5, color: PdfColor.fromHex('#475569')),
+                font: font,
+                fontSize: 6.5,
+                color: PdfColor.fromHex('#64748B'),
+              ),
+            ),
+            pw.SizedBox(height: 1),
+            pw.Text(
+              value,
+              style: pw.TextStyle(
+                font: fontBold,
+                fontSize: 9.5,
+                color: PdfColor.fromHex(colorHex),
+              ),
             ),
           ],
         ),
@@ -522,262 +879,1010 @@ class _StudentAttendanceLogWidgetState
     );
   }
 
+  // -------------------------------------------------------------
+  // CSV / EXCEL SPREADSHEET EXPORT (Period 1 to 8 Matrix)
+  // -------------------------------------------------------------
+  Future<void> _exportCsvSpreadsheet() async {
+    final isMatrix = _viewMode == "matrix" && _matrix.isNotEmpty;
+    if (_logs.isEmpty && _matrix.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("No records available to export CSV."),
+          backgroundColor: amberWarning,
+        ),
+      );
+      return;
+    }
+
+    final StringBuffer buffer = StringBuffer();
+    // Add UTF-8 BOM for Microsoft Excel compatibility
+    buffer.write('\uFEFF');
+
+    if (isMatrix) {
+      buffer.writeln(
+          '"S.No","Date","Register Number","Roll Number","Student Name","Degree","Department","Year","Semester","Section","Batch","Period 1","Period 2","Period 3","Period 4","Period 5","Period 6","Period 7","Period 8","Total Scheduled Periods","Attended Periods","Day Attendance %","Day Status"');
+
+      for (int i = 0; i < _matrix.length; i++) {
+        final item = _matrix[i];
+        if (item is! Map) continue;
+        final periods = (item['periods'] as Map?) ?? {};
+
+        String getPDesc(int p) {
+          final pData = periods[p.toString()];
+          if (pData is Map) {
+            final st = (pData['status'] ?? '--').toString();
+            final code = (pData['subject_code'] ?? '--').toString();
+            if (st != '--') {
+              return '"$st ($code)"';
+            }
+          }
+          return '"--"';
+        }
+
+        buffer.writeln(
+            '${i + 1},"${item['date'] ?? ''}","${item['reg_no'] ?? ''}","${item['roll_no'] ?? ''}","${item['name'] ?? ''}","${item['degree'] ?? ''}","${item['dept'] ?? ''}",${item['year_of_study'] ?? ''},${item['semester'] ?? ''},"${item['section'] ?? ''}","${item['batch'] ?? ''}",${getPDesc(1)},${getPDesc(2)},${getPDesc(3)},${getPDesc(4)},${getPDesc(5)},${getPDesc(6)},${getPDesc(7)},${getPDesc(8)},${item['total_periods'] ?? 0},${item['attended_periods'] ?? 0},"${item['day_percentage'] ?? 0}%","${item['day_status'] ?? ''}"');
+      }
+    } else {
+      buffer.writeln(
+          '"S.No","Date","Register Number","Roll Number","Student Name","Degree","Department","Year","Semester","Section","Batch","Period Number","Session Label","Subject Code","Subject Name","Faculty Name","Faculty ID","Hall/Lab","Status","Entry Time","Exit Time","Confidence Score","Verification Method","Day Type","Remarks"');
+
+      for (int i = 0; i < _logs.length; i++) {
+        final log = _logs[i];
+        if (log is! Map) continue;
+        buffer.writeln(
+            '${i + 1},"${log['date'] ?? ''}","${log['reg_no'] ?? ''}","${log['roll_no'] ?? ''}","${log['name'] ?? ''}","${log['degree'] ?? ''}","${log['dept'] ?? ''}",${log['year_of_study'] ?? ''},${log['semester'] ?? ''},"${log['section'] ?? ''}","${log['batch'] ?? ''}",${log['period_number'] ?? 1},"${log['period_label'] ?? log['session'] ?? ''}","${log['subject_code'] ?? ''}","${log['subject_name'] ?? ''}","${log['faculty_name'] ?? ''}","${log['faculty_reg_no'] ?? ''}","${log['hall_name'] ?? ''}","${log['status'] ?? ''}","${log['entry_time'] ?? ''}","${log['exit_time'] ?? ''}",${log['confidence_score'] ?? 1.0},"${log['method'] ?? ''}","${log['day_type'] ?? 'NORMAL'}","${log['remarks'] ?? ''}"');
+      }
+    }
+
+    final bytes = Uint8List.fromList(utf8.encode(buffer.toString()));
+    final fileName = isMatrix
+        ? "Student_Period_Matrix_${DateFormat('yyyyMMdd').format(_startDate)}.csv"
+        : "Student_Attendance_Logs_${DateFormat('yyyyMMdd').format(_startDate)}.csv";
+
+    await saveFile(bytes, fileName);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isMatrix
+              ? "Student Day & Period Matrix exported to CSV successfully."
+              : "Student Attendance Logs exported to CSV successfully."),
+          backgroundColor: emeraldSuccess,
+        ),
+      );
+    }
+  }
+
+  // -------------------------------------------------------------
+  // PERIOD DETAIL MODAL (Inspect Single Period Cell)
+  // -------------------------------------------------------------
+  void _showPeriodDetailModal(
+      Map<String, dynamic> studentDay, int periodNum, Map<String, dynamic> pData) {
+    final status = (pData['status'] ?? '--').toString();
+    final subjectCode = (pData['subject_code'] ?? '--').toString();
+    final subjectName = (pData['subject_name'] ?? '--').toString();
+    final facultyName = (pData['faculty_name'] ?? '--').toString();
+    final entryTime = (pData['entry_time'] ?? '--').toString();
+    final exitTime = (pData['exit_time'] ?? '--').toString();
+    final method = (pData['method'] ?? '--').toString();
+    final remarks = (pData['remarks'] ?? '').toString();
+    final conf = pData['confidence_score'];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Modal Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: brandBlue,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "Period $periodNum",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        "${studentDay['name']} (${studentDay['roll_no']})",
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: primaryNavy,
+                        ),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              const Divider(height: 20),
+
+              // Status Banner
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _getStatusBgColor(status),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: _getStatusColor(status).withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(_getStatusIcon(status),
+                        color: _getStatusColor(status), size: 22),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Status: $status",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: _getStatusColor(status),
+                          ),
+                        ),
+                        Text(
+                          "Date: ${studentDay['date']} • Dept: ${studentDay['dept']}",
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey.shade700),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Session Info Grid
+              _buildModalDetailGrid([
+                {"label": "Subject Code", "val": subjectCode},
+                {"label": "Subject Name", "val": subjectName},
+                {"label": "Faculty In-Charge", "val": facultyName},
+                {"label": "Verification Method", "val": method},
+                {"label": "Check-in Time", "val": entryTime},
+                {"label": "Check-out Time", "val": exitTime},
+                if (conf != null)
+                  {
+                    "label": "AI Confidence",
+                    "val": "${((conf as num) * 100).toStringAsFixed(1)}%"
+                  },
+                if (remarks.isNotEmpty)
+                  {"label": "Remarks / Notes", "val": remarks},
+              ]),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // -------------------------------------------------------------
+  // STUDENT DETAIL MODAL (Inspect Full Student Day)
+  // -------------------------------------------------------------
+  void _showStudentDetailModal(Map<String, dynamic> item) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final periods = (item['periods'] as Map?) ?? {};
+        final dayPct = item['day_percentage'] ?? 0.0;
+
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item['name'] ?? 'Student Profile',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: primaryNavy,
+                          ),
+                        ),
+                        Text(
+                          "Reg No: ${item['reg_no']} • Roll: ${item['roll_no']}",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const Divider(height: 20),
+
+                // Day KPI Summary
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: slateBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: cardBorder),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildMetricSummaryItem(
+                          "Date", "${item['date']}", primaryNavy),
+                      _buildMetricSummaryItem("Day %", "$dayPct%",
+                          dayPct >= 75.0 ? emeraldSuccess : roseDanger),
+                      _buildMetricSummaryItem(
+                          "Attended",
+                          "${item['attended_periods']} / ${item['total_periods']}",
+                          brandBlue),
+                      _buildMetricSummaryItem(
+                          "Status", "${item['day_status']}", primaryNavy),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // Student Demographics
+                _buildModalDetailGrid([
+                  {"label": "Department", "val": "${item['dept']}"},
+                  {"label": "Degree", "val": "${item['degree']}"},
+                  {
+                    "label": "Year / Sem",
+                    "val": "Year ${item['year_of_study']} / Sem ${item['semester']}"
+                  },
+                  {"label": "Section / Batch", "val": "Sec ${item['section']} (${item['batch']})"},
+                ]),
+                const SizedBox(height: 14),
+
+                // Periods 1 to 8 Timeline List
+                const Text(
+                  "Period Breakdown (Periods 1 to 8)",
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: primaryNavy,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ...List.generate(8, (idx) {
+                  final pNum = idx + 1;
+                  final pData = periods[pNum.toString()] as Map? ?? {};
+                  final pStatus = (pData['status'] ?? '--').toString();
+                  final pSubCode = (pData['subject_code'] ?? '--').toString();
+                  final pSubName = (pData['subject_name'] ?? '--').toString();
+                  final pFac = (pData['faculty_name'] ?? '--').toString();
+                  final pTime = (pData['entry_time'] ?? '--').toString();
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _getStatusBgColor(pStatus),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: _getStatusColor(pStatus).withValues(alpha: 0.2)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(pStatus),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            "P$pNum",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                pSubName != '--'
+                                    ? "$pSubCode • $pSubName"
+                                    : "Period $pNum (Free / Unassigned)",
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: primaryNavy,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                "Faculty: $pFac • Time: $pTime",
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(pStatus),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            pStatus,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMetricSummaryItem(String label, String val, Color valColor) {
+    return Column(
+      children: [
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+        const SizedBox(height: 2),
+        Text(
+          val,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: valColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModalDetailGrid(List<Map<String, String>> items) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: slateBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 10,
+        children: items.map((item) {
+          return SizedBox(
+            width: (MediaQuery.of(context).size.width - 76) / 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item['label']!,
+                  style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  item['val']!,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: primaryNavy,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // MAIN BUILD METHOD
+  // -------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: backgroundColor,
+      color: slateBg,
       child: RefreshIndicator(
         onRefresh: _fetchLogs,
         child: Align(
           alignment: Alignment.topCenter,
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 24),
+            padding: const EdgeInsets.only(bottom: 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-              // Header Action Banner Card
-              Container(
-                margin: const EdgeInsets.all(16),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [primaryColor, accentColor],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: primaryColor.withValues(alpha: 0.2),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.person_search_outlined,
-                              color: Colors.white, size: 26),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                "Student Attendance Log",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                widget.isAdmin
-                                    ? "Institution-wide Student Attendance & PDF Export"
-                                    : (widget.isHod
-                                        ? "Department Student Attendance & Date Range Log"
-                                        : "My Assigned & Department Students Attendance Log"),
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 12,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.picture_as_pdf, size: 18),
-                            label: const Text(
-                              "Generate PDF Report",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white,
-                              foregroundColor: primaryColor,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              elevation: 1,
-                            ),
-                            onPressed: _generatePdfReport,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        IconButton(
-                          icon: const Icon(Icons.refresh, color: Colors.white),
-                          tooltip: "Refresh Logs",
-                          onPressed: _fetchLogs,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+                // 1. Header Action Banner
+                _buildHeaderBanner(),
 
-              // Filters & Date Range Selection Card
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.04),
-                      blurRadius: 6,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Quick Date Preset Chips + Custom Range Selector
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _buildPresetChip("This Month"),
-                          _buildPresetChip("Today"),
-                          _buildPresetChip("Yesterday"),
-                          _buildPresetChip("Last 7 Days"),
-                          ActionChip(
-                            avatar: const Icon(Icons.date_range,
-                                size: 16, color: primaryColor),
-                            label: Text(
-                              "${DateFormat('dd MMM').format(_startDate)} - ${DateFormat('dd MMM yyyy').format(_endDate)}",
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                                color: primaryColor,
-                              ),
-                            ),
-                            backgroundColor: Colors.blue.shade50,
-                            onPressed: _pickCustomDateRange,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
+                // 2. Multi-Level Filter Suite
+                _buildFilterSuite(),
+                const SizedBox(height: 12),
 
-                    // Department & Status Filter Dropdowns + Search Bar
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final isMobile = constraints.maxWidth < 600;
-                        return isMobile
-                            ? Column(
-                                children: [
-                                  _buildDeptDropdown(),
-                                  const SizedBox(height: 10),
-                                  _buildStatusDropdown(),
-                                  const SizedBox(height: 10),
-                                  _buildSearchField(),
-                                ],
-                              )
-                            : Row(
-                                children: [
-                                  Expanded(child: _buildDeptDropdown()),
-                                  const SizedBox(width: 10),
-                                  Expanded(child: _buildStatusDropdown()),
-                                  const SizedBox(width: 10),
-                                  Expanded(child: _buildSearchField()),
-                                ],
-                              );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
+                // 3. Period-wise KPI Analytics Bar (Periods 1 to 8)
+                if (_periodStats.isNotEmpty) _buildPeriodKpiStrip(),
+                if (_periodStats.isNotEmpty) const SizedBox(height: 12),
 
-              // Responsive Summary Statistics Cards
-              _buildSummaryTilesSection(),
-              const SizedBox(height: 12),
+                // 4. 6-Box Summary Metric Strip
+                _buildSummaryMetricsStrip(),
+                const SizedBox(height: 12),
 
-              // Full Page Scrollable Logs List Section
-              _buildLogsListSection(),
-            ],
+                // 5. View Mode Switcher & Log Content Section
+                _buildLogsContentSection(),
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 
-  Widget _buildSummaryTilesSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isMobile = constraints.maxWidth < 600;
-          if (isMobile) {
-            return Column(
-              children: [
-                Row(
+  // -------------------------------------------------------------
+  // HEADER ACTION BANNER
+  // -------------------------------------------------------------
+  Widget _buildHeaderBanner() {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [brandBlue, accentBlue],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: brandBlue.withValues(alpha: 0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.grid_view_rounded,
+                    color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSummaryTile(
-                        "Total Logs",
-                        "${_summary['total_records'] ?? _logs.length}",
-                        Colors.blueGrey),
-                    const SizedBox(width: 8),
-                    _buildSummaryTile(
-                        "Present",
-                        "${_summary['present_count'] ?? 0} (${_summary['present_percentage'] ?? 0}%)",
-                        Colors.green),
+                    const Text(
+                      "Student Attendance Log & Period Matrix",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      "Day & Period Matrix (P1–P8), Granular Logs & Institutional Reports",
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontSize: 11.5,
+                      ),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    _buildSummaryTile(
-                        "Absent", "${_summary['absent_count'] ?? 0}", Colors.red),
-                    const SizedBox(width: 8),
-                    _buildSummaryTile(
-                        "On Leave", "${_summary['leave_count'] ?? 0}", Colors.blue),
-                  ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Export Action Buttons
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
+                icon: const Icon(Icons.picture_as_pdf,
+                    size: 16, color: Colors.white),
+                label: const Text("Export Matrix PDF",
+                    style: TextStyle(fontSize: 12, color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.2),
+                  elevation: 0,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _generatePdfReport,
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.table_view,
+                    size: 16, color: Colors.white),
+                label: const Text("Export Matrix CSV",
+                    style: TextStyle(fontSize: 12, color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.2),
+                  elevation: 0,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _exportCsvSpreadsheet,
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh, size: 16, color: Colors.white),
+                label: const Text("Refresh",
+                    style: TextStyle(fontSize: 12, color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.2),
+                  elevation: 0,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _fetchLogs,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // PERIOD-WISE KPI ANALYTICS BAR (Periods 1 to 8)
+  // -------------------------------------------------------------
+  Widget _buildPeriodKpiStrip() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.schedule, size: 16, color: brandBlue),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  "Period Attendance Performance (P1–P8)",
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: primaryNavy,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                "Active Range",
+                style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: List.generate(8, (idx) {
+                final pNum = idx + 1;
+                final pStat = _periodStats[pNum.toString()] as Map? ?? {};
+                final pTot = (pStat['total'] ?? 0) as int;
+                final pPres = (pStat['present'] ?? 0) as int;
+                final pOd = (pStat['od'] ?? 0) as int;
+                final pAbs = (pStat['absent'] ?? 0) as int;
+                final pPct = (pStat['pct'] ?? 100.0) as num;
+
+                Color cardColor = pTot == 0
+                    ? Colors.grey.shade500
+                    : (pPct >= 75.0
+                        ? emeraldSuccess
+                        : (pPct >= 65.0 ? amberWarning : roseDanger));
+
+                return Container(
+                  width: 96,
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: slateBg,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: cardColor.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            "P$pNum",
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: primaryNavy,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: cardColor.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              pTot > 0 ? "${pPct.toStringAsFixed(0)}%" : "--",
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: cardColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        pTot > 0 ? "P:${pPres + pOd} | A:$pAbs" : "No Sessions",
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // MULTI-LEVEL FILTER SUITE
+  // -------------------------------------------------------------
+  Widget _buildFilterSuite() {
+    final activeFilters = _activeFiltersCount;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Row 1: Quick Date Presets
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildDatePresetChip("Active Semester", "active_semester"),
+                const SizedBox(width: 6),
+                _buildDatePresetChip("This Month", "this_month"),
+                const SizedBox(width: 6),
+                _buildDatePresetChip("Today", "today"),
+                const SizedBox(width: 6),
+                _buildDatePresetChip("Yesterday", "yesterday"),
+                const SizedBox(width: 6),
+                _buildDatePresetChip("This Week", "this_week"),
+                const SizedBox(width: 6),
+                _buildDatePresetChip("Last 7 Days", "last_7_days"),
+                const SizedBox(width: 6),
+                ActionChip(
+                  avatar: const Icon(Icons.date_range,
+                      size: 14, color: brandBlue),
+                  label: Text(
+                    "${DateFormat('dd MMM').format(_startDate)} - ${DateFormat('dd MMM').format(_endDate)}",
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: brandBlue),
+                  ),
+                  backgroundColor: slateBg,
+                  side: const BorderSide(color: cardBorder),
+                  onPressed: _pickCustomDateRange,
                 ),
               ],
-            );
-          }
-          return Row(
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Row 2: Primary Filters (Dept, Period, Status, Search)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 600;
+              return Column(
+                children: [
+                  Row(
+                    children: [
+                      // Department
+                      Expanded(
+                        flex: isNarrow ? 1 : 2,
+                        child: _buildDeptDropdown(),
+                      ),
+                      const SizedBox(width: 8),
+                      // Period
+                      Expanded(
+                        flex: 1,
+                        child: _buildPeriodDropdown(),
+                      ),
+                      const SizedBox(width: 8),
+                      // Status
+                      Expanded(
+                        flex: 1,
+                        child: _buildStatusDropdown(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      // Search Query Field
+                      Expanded(
+                        child: _buildSearchField(),
+                      ),
+                      const SizedBox(width: 8),
+                      // Advanced Filters Toggle Button
+                      OutlinedButton.icon(
+                        icon: Icon(
+                          _isAdvancedFiltersOpen
+                              ? Icons.filter_list_off
+                              : Icons.tune,
+                          size: 16,
+                          color: _isAdvancedFiltersOpen || activeFilters > 0
+                              ? brandBlue
+                              : primaryNavy,
+                        ),
+                        label: Text(
+                          activeFilters > 0
+                              ? "Filters ($activeFilters)"
+                              : "More",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: _isAdvancedFiltersOpen || activeFilters > 0
+                                ? brandBlue
+                                : primaryNavy,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 12),
+                          side: BorderSide(
+                            color: _isAdvancedFiltersOpen || activeFilters > 0
+                                ? brandBlue
+                                : cardBorder,
+                          ),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isAdvancedFiltersOpen = !_isAdvancedFiltersOpen;
+                          });
+                        },
+                      ),
+                      if (activeFilters > 0) ...[
+                        const SizedBox(width: 6),
+                        IconButton(
+                          icon: const Icon(Icons.restart_alt,
+                              size: 20, color: roseDanger),
+                          tooltip: "Reset All Filters",
+                          onPressed: _resetAllFilters,
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+
+          // Row 3: Collapsible Advanced Filters (Degree, Year, Sem, Sec, Batch, Method)
+          if (_isAdvancedFiltersOpen) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: slateBg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Advanced Academic Filters",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: primaryNavy,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      SizedBox(width: 110, child: _buildDegreeDropdown()),
+                      SizedBox(width: 90, child: _buildYearDropdown()),
+                      SizedBox(width: 90, child: _buildSemesterDropdown()),
+                      SizedBox(width: 90, child: _buildSectionDropdown()),
+                      SizedBox(width: 120, child: _buildBatchDropdown()),
+                      SizedBox(width: 140, child: _buildMethodDropdown()),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDatePresetChip(String label, String preset) {
+    return ActionChip(
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      backgroundColor: slateBg,
+      side: const BorderSide(color: cardBorder),
+      onPressed: () => _selectDatePreset(preset),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // 6-BOX SUMMARY METRICS STRIP
+  // -------------------------------------------------------------
+  Widget _buildSummaryMetricsStrip() {
+    final isMatrixMode = _viewMode == "matrix";
+    final totalRec = _summary['total_records'] ?? _logs.length;
+    final totalStudentDays = _summary['total_student_days'] ?? _matrix.length;
+    final presentCnt = _summary['present_count'] ?? 0;
+    final absentCnt = _summary['absent_count'] ?? 0;
+    final odCnt = _summary['od_count'] ?? 0;
+    final leaveCnt = _summary['leave_count'] ?? 0;
+    final pct = _summary['present_percentage'] ?? 0.0;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 600;
+          final width = isNarrow
+              ? (constraints.maxWidth - 12) / 2
+              : (constraints.maxWidth - 40) / 6;
+
+          return Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              _buildSummaryTile(
-                  "Total Logs",
-                  "${_summary['total_records'] ?? _logs.length}",
-                  Colors.blueGrey),
-              const SizedBox(width: 8),
-              _buildSummaryTile(
-                  "Present",
-                  "${_summary['present_count'] ?? 0} (${_summary['present_percentage'] ?? 0}%)",
-                  Colors.green),
-              const SizedBox(width: 8),
-              _buildSummaryTile(
-                  "Absent", "${_summary['absent_count'] ?? 0}", Colors.red),
-              const SizedBox(width: 8),
-              _buildSummaryTile(
-                  "On Leave", "${_summary['leave_count'] ?? 0}", Colors.blue),
+              _buildMetricCard(
+                isMatrixMode ? "Student-Days" : "Total Logs",
+                isMatrixMode ? "$totalStudentDays" : "$totalRec",
+                brandBlue,
+                Icons.people_outline,
+                width,
+              ),
+              _buildMetricCard(
+                "Present Rate",
+                "$pct%",
+                emeraldSuccess,
+                Icons.check_circle_outline,
+                width,
+              ),
+              _buildMetricCard(
+                "Present",
+                "$presentCnt",
+                emeraldSuccess,
+                Icons.done_all,
+                width,
+              ),
+              _buildMetricCard(
+                "Absent",
+                "$absentCnt",
+                roseDanger,
+                Icons.highlight_off,
+                width,
+              ),
+              _buildMetricCard(
+                "On-Duty",
+                "$odCnt",
+                accentBlue,
+                Icons.badge_outlined,
+                width,
+              ),
+              _buildMetricCard(
+                "On Leave",
+                "$leaveCnt",
+                purpleAccent,
+                Icons.beach_access_outlined,
+                width,
+              ),
             ],
           );
         },
@@ -785,21 +1890,67 @@ class _StudentAttendanceLogWidgetState
     );
   }
 
-  Widget _buildLogsListSection() {
+  Widget _buildMetricCard(
+      String title, String val, Color color, IconData icon, double width) {
+    return Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(icon, size: 14, color: color),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            val,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // VIEW MODE SWITCHER & LOG CONTENT SECTION
+  // -------------------------------------------------------------
+  Widget _buildLogsContentSection() {
     if (_isLoading) {
       return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-        ),
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(40),
+        alignment: Alignment.center,
         child: const Column(
           children: [
-            CircularProgressIndicator(color: primaryColor),
+            CircularProgressIndicator(strokeWidth: 3, color: brandBlue),
             SizedBox(height: 12),
-            Text("Loading student logs...",
-                style: TextStyle(color: Colors.grey, fontSize: 13)),
+            Text("Loading student attendance records...",
+                style: TextStyle(fontSize: 12, color: primaryNavy)),
           ],
         ),
       );
@@ -807,97 +1958,739 @@ class _StudentAttendanceLogWidgetState
 
     if (_errorMessage != null) {
       return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 16),
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
+          color: const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: roseDanger.withValues(alpha: 0.3)),
         ),
         child: Column(
           children: [
-            const Icon(Icons.cloud_off, size: 48, color: Colors.grey),
-            const SizedBox(height: 12),
-            Text(_errorMessage!, style: const TextStyle(color: Colors.grey)),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: _fetchLogs,
-              child: const Text("Retry"),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_logs.isEmpty) {
-      return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          children: [
-            Icon(Icons.search_off, size: 48, color: Colors.grey.shade400),
-            const SizedBox(height: 12),
-            const Text(
-              "No student attendance records found for selected filters.",
-              style: TextStyle(color: Colors.grey),
+            const Icon(Icons.error_outline, color: roseDanger, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              _errorMessage!,
+              style: const TextStyle(fontSize: 12, color: roseDanger),
               textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: _fetchLogs,
+              style: ElevatedButton.styleFrom(backgroundColor: brandBlue),
+              child: const Text("Try Again",
+                  style: TextStyle(color: Colors.white, fontSize: 12)),
+            ),
           ],
         ),
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: ListView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: _logs.length,
-        itemBuilder: (context, index) {
-          final log = _logs[index];
-          return _buildLogCard(log, index);
-        },
+    final isEmpty = _viewMode == "matrix" ? _matrix.isEmpty : _logs.isEmpty;
+
+    if (isEmpty) {
+      return Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(32),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: cardBorder),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          children: [
+            Icon(Icons.event_busy, size: 36, color: Colors.grey.shade400),
+            const SizedBox(height: 10),
+            const Text(
+              "No student attendance records found for selected filters.",
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: primaryNavy,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "Try expanding the date range or selecting 'All Departments'.",
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.restart_alt, size: 16),
+              label: const Text("Reset Filters", style: TextStyle(fontSize: 12)),
+              onPressed: _resetAllFilters,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Section Title & 3-Way View Switcher
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _viewMode == "matrix"
+                    ? "Day & Period Matrix (${_matrix.length} Student-Days)"
+                    : (_viewMode == "table"
+                        ? "Data Table View (${_logs.length} Records)"
+                        : "Card View (${_logs.length} Records)"),
+                style: const TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                  color: primaryNavy,
+                ),
+              ),
+              // View Switcher (Matrix / Table / Cards)
+              Container(
+                decoration: BoxDecoration(
+                  color: slateBg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: cardBorder),
+                ),
+                child: Row(
+                  children: [
+                    _buildViewModeButton(
+                      mode: "matrix",
+                      icon: Icons.grid_on,
+                      label: "Period Matrix",
+                    ),
+                    _buildViewModeButton(
+                      mode: "table",
+                      icon: Icons.table_chart_outlined,
+                      label: "Table",
+                    ),
+                    _buildViewModeButton(
+                      mode: "cards",
+                      icon: Icons.view_agenda_outlined,
+                      label: "Cards",
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Content rendering based on _viewMode
+          if (_viewMode == "matrix")
+            _buildPeriodMatrixView()
+          else if (_viewMode == "table")
+            _buildDenseDataTable()
+          else
+            _buildCardsListView(),
+        ],
       ),
     );
   }
 
-  Widget _buildPresetChip(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: FilterChip(
-        label: Text(label, style: const TextStyle(fontSize: 12)),
-        selected: false,
-        onSelected: (_) => _selectDatePreset(label),
+  Widget _buildViewModeButton({
+    required String mode,
+    required IconData icon,
+    required String label,
+  }) {
+    final isSelected = _viewMode == mode;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _viewMode = mode;
+        });
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected ? brandBlue : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 13,
+              color: isSelected ? Colors.white : primaryNavy,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.white : primaryNavy,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
+  // -------------------------------------------------------------
+  // PERIOD MATRIX VIEW (Periods 1 to 8 Side-by-Side)
+  // -------------------------------------------------------------
+  Widget _buildPeriodMatrixView() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+          headingTextStyle: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: primaryNavy,
+          ),
+          dataTextStyle: const TextStyle(
+            fontSize: 11,
+            color: primaryNavy,
+          ),
+          columnSpacing: 10,
+          horizontalMargin: 12,
+          columns: [
+            const DataColumn(label: Text("#")),
+            DataColumn(
+              label: const Text("Date"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "date";
+                  _sortAscending = asc;
+                });
+                _sortMatrixList(_matrix);
+              },
+            ),
+            const DataColumn(label: Text("Roll No")),
+            DataColumn(
+              label: const Text("Student Name"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "name";
+                  _sortAscending = asc;
+                });
+                _sortMatrixList(_matrix);
+              },
+            ),
+            const DataColumn(label: Text("Dept")),
+            const DataColumn(label: Text("Sem-Sec")),
+            const DataColumn(label: Text("P1")),
+            const DataColumn(label: Text("P2")),
+            const DataColumn(label: Text("P3")),
+            const DataColumn(label: Text("P4")),
+            const DataColumn(label: Text("P5")),
+            const DataColumn(label: Text("P6")),
+            const DataColumn(label: Text("P7")),
+            const DataColumn(label: Text("P8")),
+            const DataColumn(label: Text("Att / Tot")),
+            DataColumn(
+              label: const Text("Day %"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "percentage";
+                  _sortAscending = asc;
+                });
+                _sortMatrixList(_matrix);
+              },
+            ),
+            const DataColumn(label: Text("Status")),
+            const DataColumn(label: Text("Action")),
+          ],
+          rows: _matrix.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final item = entry.value as Map<String, dynamic>;
+            final periods = (item['periods'] as Map?) ?? {};
+            final dayPct = (item['day_percentage'] ?? 0.0) as num;
+            final dayStatus = (item['day_status'] ?? '--').toString();
+
+            return DataRow(
+              cells: [
+                DataCell(Text("${idx + 1}")),
+                DataCell(Text("${item['date'] ?? '--'}")),
+                DataCell(Text(
+                  "${item['roll_no'] ?? '--'}",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                )),
+                DataCell(InkWell(
+                  onTap: () => _showStudentDetailModal(item),
+                  child: Text(
+                    "${item['name'] ?? '--'}",
+                    style: const TextStyle(
+                      color: brandBlue,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )),
+                DataCell(Text("${item['dept'] ?? '--'}")),
+                DataCell(Text("S${item['semester'] ?? '-'}-${item['section'] ?? '-'}")),
+                DataCell(_buildPeriodBadge(item, 1, periods['1'])),
+                DataCell(_buildPeriodBadge(item, 2, periods['2'])),
+                DataCell(_buildPeriodBadge(item, 3, periods['3'])),
+                DataCell(_buildPeriodBadge(item, 4, periods['4'])),
+                DataCell(_buildPeriodBadge(item, 5, periods['5'])),
+                DataCell(_buildPeriodBadge(item, 6, periods['6'])),
+                DataCell(_buildPeriodBadge(item, 7, periods['7'])),
+                DataCell(_buildPeriodBadge(item, 8, periods['8'])),
+                DataCell(Text(
+                  "${item['attended_periods'] ?? 0} / ${item['total_periods'] ?? 0}",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                )),
+                DataCell(
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: (dayPct >= 75.0
+                              ? emeraldSuccess
+                              : (dayPct >= 65.0 ? amberWarning : roseDanger))
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      "${dayPct.toStringAsFixed(1)}%",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10.5,
+                        color: dayPct >= 75.0
+                            ? emeraldSuccess
+                            : (dayPct >= 65.0 ? amberWarning : roseDanger),
+                      ),
+                    ),
+                  ),
+                ),
+                DataCell(_buildStatusPill(dayStatus)),
+                DataCell(
+                  IconButton(
+                    icon: const Icon(Icons.info_outline,
+                        size: 16, color: brandBlue),
+                    tooltip: "Inspect Full Student Day",
+                    onPressed: () => _showStudentDetailModal(item),
+                  ),
+                ),
+              ],
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPeriodBadge(
+      Map<String, dynamic> studentDay, int periodNum, dynamic pData) {
+    if (pData is! Map) {
+      return Container(
+        width: 24,
+        height: 22,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          "--",
+          style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
+        ),
+      );
+    }
+
+    final status = (pData['status'] ?? '--').toString();
+    final subCode = (pData['subject_code'] ?? '--').toString();
+
+    String label = "--";
+    if (status == 'Present') {
+      label = "P";
+    } else if (status == 'Absent') {
+      label = "A";
+    } else if (status.contains('OD') || status.contains('On-Duty')) {
+      label = "OD";
+    } else if (status.contains('Leave') || status.contains('Medical')) {
+      label = "L";
+    } else if (status.contains('Holiday')) {
+      label = "H";
+    }
+
+    final color = _getStatusColor(status);
+    final bgColor = _getStatusBgColor(status);
+
+    return InkWell(
+      onTap: () => _showPeriodDetailModal(
+          studentDay, periodNum, Map<String, dynamic>.from(pData)),
+      borderRadius: BorderRadius.circular(4),
+      child: Tooltip(
+        message: status != '--'
+            ? "P$periodNum: $status\nSubject: $subCode\nFaculty: ${pData['faculty_name'] ?? '--'}"
+            : "Period $periodNum: Free",
+        child: Container(
+          width: 28,
+          height: 22,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // DENSE DATA TABLE VIEW (Granular Period Logs)
+  // -------------------------------------------------------------
+  Widget _buildDenseDataTable() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+          headingTextStyle: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: primaryNavy,
+          ),
+          dataTextStyle: const TextStyle(
+            fontSize: 11,
+            color: primaryNavy,
+          ),
+          columnSpacing: 12,
+          horizontalMargin: 12,
+          columns: [
+            const DataColumn(label: Text("#")),
+            DataColumn(
+              label: const Text("Date"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "date";
+                  _sortAscending = asc;
+                });
+                _sortLogsList(_logs);
+              },
+            ),
+            const DataColumn(label: Text("Roll No")),
+            DataColumn(
+              label: const Text("Student Name"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "name";
+                  _sortAscending = asc;
+                });
+                _sortLogsList(_logs);
+              },
+            ),
+            const DataColumn(label: Text("Dept")),
+            const DataColumn(label: Text("Period")),
+            const DataColumn(label: Text("Subject")),
+            const DataColumn(label: Text("Faculty")),
+            DataColumn(
+              label: const Text("Status"),
+              onSort: (idx, asc) {
+                setState(() {
+                  _sortColumn = "status";
+                  _sortAscending = asc;
+                });
+                _sortLogsList(_logs);
+              },
+            ),
+            const DataColumn(label: Text("Time")),
+            const DataColumn(label: Text("Method")),
+            const DataColumn(label: Text("Action")),
+          ],
+          rows: _logs.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final log = entry.value as Map<String, dynamic>;
+            final status = (log['status'] ?? '--').toString();
+
+            return DataRow(
+              cells: [
+                DataCell(Text("${idx + 1}")),
+                DataCell(Text("${log['date'] ?? '--'}")),
+                DataCell(Text(
+                  "${log['roll_no'] ?? '--'}",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                )),
+                DataCell(Text(
+                  "${log['name'] ?? '--'}",
+                  style: const TextStyle(
+                    color: brandBlue,
+                    fontWeight: FontWeight.bold,
+                  ),
+                )),
+                DataCell(Text("${log['dept'] ?? '--'}")),
+                DataCell(Text("P${log['period_number'] ?? 1}")),
+                DataCell(Text(
+                  "${log['subject_code'] ?? '--'}",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                )),
+                DataCell(Text("${log['faculty_name'] ?? '--'}")),
+                DataCell(_buildStatusPill(status)),
+                DataCell(Text("${log['entry_time'] ?? '--'}")),
+                DataCell(Text("${log['method'] ?? 'Face'}")),
+                DataCell(
+                  IconButton(
+                    icon: const Icon(Icons.info_outline,
+                        size: 16, color: brandBlue),
+                    onPressed: () {
+                      _showPeriodDetailModal(
+                        log,
+                        log['period_number'] ?? 1,
+                        log,
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // CARD STREAM VIEW
+  // -------------------------------------------------------------
+  Widget _buildCardsListView() {
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _logs.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final log = _logs[index] as Map<String, dynamic>;
+        return _buildLogCard(log, index);
+      },
+    );
+  }
+
+  Widget _buildLogCard(Map<String, dynamic> log, int index) {
+    final status = (log['status'] ?? 'Present').toString();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: brandBlue.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  "P${log['period_number'] ?? 1}",
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: brandBlue,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      log['name'] ?? 'Student Name',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: primaryNavy,
+                      ),
+                    ),
+                    Text(
+                      "Reg: ${log['reg_no']} • Roll: ${log['roll_no']} • Dept: ${log['dept']}",
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _buildStatusPill(status),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: slateBg,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Subject: ${log['subject_code'] ?? '--'} • ${log['subject_name'] ?? '--'}",
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: primaryNavy,
+                  ),
+                ),
+                Text(
+                  "Time: ${log['entry_time'] ?? '--'}",
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // STATUS PILL & COLOR HELPERS
+  // -------------------------------------------------------------
+  Widget _buildStatusPill(String status) {
+    final color = _getStatusColor(status);
+    final bgColor = _getStatusBgColor(status);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 0.8),
+      ),
+      child: Text(
+        status,
+        style: TextStyle(
+          color: color,
+          fontSize: 9.5,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('present') || s.contains('late')) return emeraldSuccess;
+    if (s.contains('absent')) return roseDanger;
+    if (s.contains('od') || s.contains('on-duty')) return accentBlue;
+    if (s.contains('leave') || s.contains('medical')) return purpleAccent;
+    if (s.contains('holiday')) return amberWarning;
+    return Colors.grey.shade600;
+  }
+
+  Color _getStatusBgColor(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('present') || s.contains('late')) return const Color(0xFFECFDF5);
+    if (s.contains('absent')) return const Color(0xFFFEF2F2);
+    if (s.contains('od') || s.contains('on-duty')) return const Color(0xFFEFF6FF);
+    if (s.contains('leave') || s.contains('medical')) return const Color(0xFFF5F3FF);
+    if (s.contains('holiday')) return const Color(0xFFFFFBEB);
+    return Colors.grey.shade100;
+  }
+
+  IconData _getStatusIcon(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('present')) return Icons.check_circle;
+    if (s.contains('absent')) return Icons.cancel;
+    if (s.contains('od')) return Icons.badge;
+    if (s.contains('leave')) return Icons.beach_access;
+    if (s.contains('holiday')) return Icons.celebration;
+    return Icons.help_outline;
+  }
+
+  // -------------------------------------------------------------
+  // DROPDOWN FILTER BUILDERS
+  // -------------------------------------------------------------
   Widget _buildDeptDropdown() {
     return DropdownButtonFormField<String>(
       isExpanded: true,
       initialValue: _selectedDept,
       decoration: InputDecoration(
         labelText: "Department",
+        floatingLabelBehavior: FloatingLabelBehavior.always,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       ),
-      items: _departments.map((dept) {
+      items: _departments.map((d) {
         return DropdownMenuItem<String>(
-          value: dept,
+          value: d,
           child: Text(
-            dept == "ALL" ? "All Departments" : dept,
+            d == "ALL" ? "All Depts" : d,
+            style: const TextStyle(fontSize: 12),
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13),
+            maxLines: 1,
+          ),
+        );
+      }).toList(),
+      onChanged: widget.isHod
+          ? null
+          : (val) {
+              if (val != null) {
+                setState(() {
+                  _selectedDept = val;
+                });
+                _fetchLogs();
+              }
+            },
+    );
+  }
+
+  Widget _buildPeriodDropdown() {
+    final periods = ["ALL", "1", "2", "3", "4", "5", "6", "7", "8"];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedPeriod,
+      decoration: InputDecoration(
+        labelText: "Period",
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      ),
+      items: periods.map((p) {
+        return DropdownMenuItem<String>(
+          value: p,
+          child: Text(
+            p == "ALL" ? "All" : "P$p",
+            style: const TextStyle(fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
         );
       }).toList(),
       onChanged: (val) {
         if (val != null) {
           setState(() {
-            _selectedDept = val;
+            _selectedPeriod = val;
           });
           _fetchLogs();
         }
@@ -906,21 +2699,32 @@ class _StudentAttendanceLogWidgetState
   }
 
   Widget _buildStatusDropdown() {
-    final statuses = ["ALL", "Present", "Absent", "On Leave"];
+    final statuses = [
+      "ALL",
+      "Present",
+      "Absent",
+      "On-Duty",
+      "Leave",
+      "Medical Leave",
+      "Holiday"
+    ];
     return DropdownButtonFormField<String>(
       isExpanded: true,
       initialValue: _selectedStatus,
       decoration: InputDecoration(
         labelText: "Status",
+        floatingLabelBehavior: FloatingLabelBehavior.always,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       ),
-      items: statuses.map((st) {
+      items: statuses.map((s) {
         return DropdownMenuItem<String>(
-          value: st,
+          value: s,
           child: Text(
-            st == "ALL" ? "All Statuses" : st,
-            style: const TextStyle(fontSize: 13),
+            s == "ALL" ? "All" : s,
+            style: const TextStyle(fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
         );
       }).toList(),
@@ -935,15 +2739,194 @@ class _StudentAttendanceLogWidgetState
     );
   }
 
+  Widget _buildDegreeDropdown() {
+    final degrees = ["ALL", "B.E", "B.Tech", "M.E", "MBA", "MCA"];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedDegree,
+      decoration: InputDecoration(
+        labelText: "Degree",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: degrees.map((d) {
+        return DropdownMenuItem<String>(
+          value: d,
+          child: Text(d, style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedDegree = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
+  Widget _buildYearDropdown() {
+    final years = ["ALL", "1", "2", "3", "4"];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedYear,
+      decoration: InputDecoration(
+        labelText: "Year",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: years.map((y) {
+        return DropdownMenuItem<String>(
+          value: y,
+          child: Text(y == "ALL" ? "All" : "Yr $y",
+              style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedYear = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
+  Widget _buildSemesterDropdown() {
+    final sems = ["ALL", "1", "2", "3", "4", "5", "6", "7", "8"];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedSemester,
+      decoration: InputDecoration(
+        labelText: "Semester",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: sems.map((s) {
+        return DropdownMenuItem<String>(
+          value: s,
+          child: Text(s == "ALL" ? "All" : "Sem $s",
+              style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedSemester = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
+  Widget _buildSectionDropdown() {
+    final secs = ["ALL", "A", "B", "C", "D"];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedSection,
+      decoration: InputDecoration(
+        labelText: "Section",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: secs.map((s) {
+        return DropdownMenuItem<String>(
+          value: s,
+          child: Text(s == "ALL" ? "All" : "Sec $s",
+              style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedSection = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
+  Widget _buildBatchDropdown() {
+    final batches = [
+      "ALL",
+      "2022-2026",
+      "2023-2027",
+      "2024-2028",
+      "2025-2029",
+      "2026-2030"
+    ];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedBatch,
+      decoration: InputDecoration(
+        labelText: "Batch",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: batches.map((b) {
+        return DropdownMenuItem<String>(
+          value: b,
+          child: Text(b, style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedBatch = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
+  Widget _buildMethodDropdown() {
+    final methods = [
+      "ALL",
+      "Face Recognition",
+      "Biometric Kiosk",
+      "Faculty Roll Sheet",
+      "Approved Leave/OD",
+      "System Auto",
+    ];
+    return DropdownButtonFormField<String>(
+      isExpanded: true,
+      initialValue: _selectedMethod,
+      decoration: InputDecoration(
+        labelText: "Method",
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      items: methods.map((m) {
+        return DropdownMenuItem<String>(
+          value: m,
+          child: Text(m, style: const TextStyle(fontSize: 11)),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null) {
+          setState(() {
+            _selectedMethod = val;
+          });
+          _fetchLogs();
+        }
+      },
+    );
+  }
+
   Widget _buildSearchField() {
     return TextField(
       controller: _searchController,
       decoration: InputDecoration(
-        labelText: "Search Name / Reg No",
-        prefixIcon: const Icon(Icons.search, size: 20),
+        labelText: "Search Name / Reg No / Roll No",
+        prefixIcon: const Icon(Icons.search, size: 18),
         suffixIcon: _searchQuery.isNotEmpty
             ? IconButton(
-                icon: const Icon(Icons.clear, size: 18),
+                icon: const Icon(Icons.clear, size: 16),
                 onPressed: () {
                   _searchController.clear();
                   setState(() {
@@ -954,7 +2937,8 @@ class _StudentAttendanceLogWidgetState
               )
             : null,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
       onSubmitted: (val) {
         setState(() {
@@ -962,138 +2946,6 @@ class _StudentAttendanceLogWidgetState
         });
         _fetchLogs();
       },
-    );
-  }
-
-  Widget _buildSummaryTile(String label, String value, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
-        ),
-        child: Column(
-          children: [
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                value,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: color,
-                ),
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLogCard(Map<String, dynamic> log, int index) {
-    final status = (log['status'] ?? 'Present').toString();
-    Color statusColor = Colors.green;
-    IconData statusIcon = Icons.check_circle_outline;
-
-    if (status.toLowerCase() == 'absent') {
-      statusColor = Colors.red;
-      statusIcon = Icons.cancel_outlined;
-    } else if (status.toLowerCase().contains('leave')) {
-      statusColor = Colors.blue;
-      statusIcon = Icons.event_available;
-    }
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: 0.5,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.shade200),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: statusColor.withValues(alpha: 0.12),
-              child: Icon(statusIcon, color: statusColor, size: 22),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          log['name'] ?? 'Student Name',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          status,
-                          style: TextStyle(
-                            color: statusColor,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    "Reg: ${log['reg_no'] ?? ''} • Dept: ${log['dept'] ?? ''}",
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Icon(Icons.calendar_today,
-                          size: 12, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text(
-                        log['date'] ?? '',
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                      ),
-                      const SizedBox(width: 12),
-                      Icon(Icons.schedule, size: 12, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text(
-                        "${log['entry_time'] ?? '--'} - ${log['exit_time'] ?? '--'}",
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

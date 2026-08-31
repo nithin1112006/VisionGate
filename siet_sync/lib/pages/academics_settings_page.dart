@@ -1,15 +1,22 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/college_ip_config.dart';
+import '../theme/admin_theme.dart';
 import '../utils/api_response_utils.dart';
 
 class AcademicsSettingsPage extends StatefulWidget {
   final String token;
+  final bool showAppBar;
 
-  const AcademicsSettingsPage({super.key, required this.token});
+  const AcademicsSettingsPage({
+    super.key,
+    required this.token,
+    this.showAppBar = true,
+  });
 
   @override
   State<AcademicsSettingsPage> createState() => _AcademicsSettingsPageState();
@@ -362,61 +369,226 @@ class _AcademicsSettingsPageState extends State<AcademicsSettingsPage>
     final w = MediaQuery.of(context).size.width;
     final isWide = w >= 900;
     final isTablet = w >= 600;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: const Text('Academics', style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-        centerTitle: false,
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF1A237E), Color(0xFF3949AB), Color(0xFF5C6BC0)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            margin: const EdgeInsets.only(right: 8),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: IconButton(
-              onPressed: _isSaving ? null : _save,
-              icon: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.save_rounded),
-              tooltip: 'Save',
-            ),
-          ),
-        ],
-      ),
-      body: _isLoading ? _buildShimmer() : _buildBody(isWide, isTablet, Theme.of(context).brightness == Brightness.dark),
-      bottomNavigationBar: _isLoading ? null : _buildBottomBar(isTablet, Theme.of(context).brightness == Brightness.dark),
+      backgroundColor: AdminColors.getSurface(isDark),
+      extendBodyBehindAppBar: widget.showAppBar,
+      appBar: widget.showAppBar
+          ? AppBar(
+              title: const Text('Academics', style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+              centerTitle: false,
+              flexibleSpace: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF1A237E), Color(0xFF3949AB), Color(0xFF5C6BC0)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+              ),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              actions: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: IconButton(
+                    onPressed: _isSaving ? null : _save,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.save_rounded),
+                    tooltip: 'Save',
+                  ),
+                ),
+              ],
+            )
+          : null,
+      body: _isLoading ? _buildShimmer(isTablet) : _buildBody(isWide, isTablet, isDark),
+      bottomNavigationBar: _isLoading ? null : _buildBottomBar(isTablet, isDark),
     );
   }
 
-  Widget _buildShimmer() {
+  Widget _buildTopHeader(bool isDark, bool isTablet, bool isWide) {
     return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
+        color: AdminColors.getCard(isDark),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AdminColors.getBorder(isDark)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AdminColors.primarySoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.school_rounded, color: AdminColors.primary, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Academic Year & Holiday Management',
+                      style: GoogleFonts.inter(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AdminColors.getTextPrimary(isDark),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Configure institutional academic ranges, active semesters, and dynamic holiday overrides',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AdminColors.getTextSecondary(isDark),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isWide) ...[
+                OutlinedButton.icon(
+                  onPressed: _addRange,
+                  icon: const Icon(Icons.add_rounded, size: 16),
+                  label: const Text('Add Range'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AdminColors.primary,
+                    side: const BorderSide(color: AdminColors.primary),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _addHoliday,
+                  icon: const Icon(Icons.event_available_rounded, size: 16),
+                  label: const Text('Add Holiday'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AdminColors.danger,
+                    side: const BorderSide(color: AdminColors.danger),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: _loadAcademics,
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: 'Refresh Academics',
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: _isSaving ? null : _save,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.save_rounded, size: 16),
+                  label: const Text('Save Changes'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AdminColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (!isWide) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _addRange,
+                  icon: const Icon(Icons.add_rounded, size: 16),
+                  label: const Text('Add Range'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AdminColors.primary,
+                    side: const BorderSide(color: AdminColors.primary),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _addHoliday,
+                  icon: const Icon(Icons.event_available_rounded, size: 16),
+                  label: const Text('Add Holiday'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AdminColors.danger,
+                    side: const BorderSide(color: AdminColors.danger),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _loadAcademics,
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: 'Refresh Academics',
+                ),
+                ElevatedButton.icon(
+                  onPressed: _isSaving ? null : _save,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.save_rounded, size: 16),
+                  label: const Text('Save Changes'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AdminColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShimmer(bool isTablet) {
+    return Container(
+      decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [const Color(0xFFF5F7FA), const Color(0xFFE8ECF1)],
+          colors: [Color(0xFFF5F7FA), Color(0xFFE8ECF1)],
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
       ),
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, kToolbarHeight + 24, 16, 16),
+        padding: EdgeInsets.fromLTRB(
+          isTablet ? 32 : 16,
+          widget.showAppBar ? (kToolbarHeight + 24) : 16,
+          isTablet ? 32 : 16,
+          16,
+        ),
         itemCount: 6,
         itemBuilder: (_, i) => AnimatedContainer(
           duration: const Duration(milliseconds: 600),
@@ -448,12 +620,14 @@ class _AcademicsSettingsPageState extends State<AcademicsSettingsPage>
             SliverPadding(
               padding: EdgeInsets.fromLTRB(
                 isTablet ? 32 : 16,
-                kToolbarHeight + 24,
+                widget.showAppBar ? (kToolbarHeight + 24) : 16,
                 isTablet ? 32 : 16,
                 24,
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  if (!widget.showAppBar)
+                    _buildTopHeader(isDark, isTablet, isWide),
                   if (isWide)
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,

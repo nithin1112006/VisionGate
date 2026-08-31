@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../utils/platform_utils.dart';
 
 class LocationPermissionEnforcer extends StatefulWidget {
   final Widget child;
@@ -96,6 +97,11 @@ class _LocationPermissionEnforcerState extends State<LocationPermissionEnforcer>
 
   @override
   Widget build(BuildContext context) {
+    // Only enforce mobile-specific background permissions on Android/iOS
+    if (!AppPlatform.isMobile) {
+      return widget.child;
+    }
+
     if (_isChecking) {
       return const Scaffold(
         body: Center(

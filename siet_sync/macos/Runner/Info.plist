@@ -28,5 +28,11 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSCameraUsageDescription</key>
+	<string>VisionGate requires camera access for biometric face attendance verification.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>VisionGate requires location access for geofence attendance verification.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>VisionGate requires location access for continuous attendance verification.</string>
 </dict>
 </plist>

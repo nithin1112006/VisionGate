@@ -48,53 +48,75 @@ class LocationTrackingService with WidgetsBindingObserver {
   Stream<String> get warningStream => _warningController.stream;
 
   Future<void> _initLocalNotifications() async {
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestSoundPermission: true,
-      requestBadgePermission: true,
-    );
-    const initSettings = InitializationSettings(android: androidInit, iOS: iosInit);
-    await _localNotifications.initialize(initSettings);
+    try {
+      const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const iosInit = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestSoundPermission: true,
+        requestBadgePermission: true,
+      );
+      const linuxInit = LinuxInitializationSettings(
+        defaultActionName: 'Open notification',
+      );
+      const initSettings = InitializationSettings(
+        android: androidInit,
+        iOS: iosInit,
+        linux: linuxInit,
+      );
+      await _localNotifications.initialize(initSettings);
+    } catch (e) {
+      debugPrint('[Notifications] Initialization skipped on this platform: $e');
+    }
   }
 
   Future<void> _showBreachNotification(String message) async {
-    final androidDetails = AndroidNotificationDetails(
-      'geofence_breach_channel',
-      'Geofence Alerts',
-      channelDescription: 'Alerts when moving out of geofence boundaries',
-      importance: Importance.max,
-      priority: Priority.max,
-      playSound: true,
-      enableVibration: true,
-      vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 500]),
-      fullScreenIntent: true,
-      ongoing: false,
-      autoCancel: true,
-      styleInformation: BigTextStyleInformation(
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        'geofence_breach_channel',
+        'Geofence Alerts',
+        channelDescription: 'Alerts when moving out of geofence boundaries',
+        importance: Importance.max,
+        priority: Priority.max,
+        playSound: true,
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList([0, 500, 200, 500, 200, 500]),
+        fullScreenIntent: true,
+        ongoing: false,
+        autoCancel: true,
+        styleInformation: BigTextStyleInformation(
+          message,
+          htmlFormatBigText: false,
+          contentTitle: '⚠ Boundary Breach Detected!',
+          htmlFormatContentTitle: false,
+          summaryText: 'VisionGate Geofence Alert',
+        ),
+        color: const Color(0xFFFF3333),
+        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+      );
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentSound: true,
+        presentBadge: true,
+        interruptionLevel: InterruptionLevel.timeSensitive,
+      );
+      const linuxDetails = LinuxNotificationDetails(
+        urgency: LinuxNotificationUrgency.critical,
+      );
+      final details = NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+        linux: linuxDetails,
+      );
+      
+      await _localNotifications.show(
+        1001,
+        '⚠ Boundary Breach Detected!',
         message,
-        htmlFormatBigText: false,
-        contentTitle: '⚠ Boundary Breach Detected!',
-        htmlFormatContentTitle: false,
-        summaryText: 'VisionGate Geofence Alert',
-      ),
-      color: const Color(0xFFFF3333),
-      largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-    );
-    const iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentSound: true,
-      presentBadge: true,
-      interruptionLevel: InterruptionLevel.timeSensitive,
-    );
-    final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-    
-    await _localNotifications.show(
-      1001,
-      '⚠ Boundary Breach Detected!',
-      message,
-      details,
-    );
+        details,
+      );
+    } catch (e) {
+      debugPrint('[Notifications] Could not present local notification: $e');
+    }
   }
 
   String? _deviceSessionId;
@@ -112,6 +134,8 @@ class LocationTrackingService with WidgetsBindingObserver {
     
     try {
       final role = await sessionService.getUserRole();
+      // Only 'admin' role is excluded from location tracking.
+      // HOD, staff, other_staff, and student all participate.
       if (role == 'admin') {
         return false;
       }
@@ -173,15 +197,16 @@ class LocationTrackingService with WidgetsBindingObserver {
     flushAllCachesInstantly();
 
     try {
-      double latSum = 0;
-      double lngSum = 0;
-      final poly = CollegeIPConfig.geoFencePolygon;
-      for (final pt in poly) {
-        latSum += pt[0];
-        lngSum += pt[1];
+      double centerLat = 11.0396;
+      double centerLng = 77.0747;
+      final polygons = CollegeIPConfig.geoFencePolygons;
+      if (polygons.isNotEmpty && polygons.first.isNotEmpty) {
+        final poly = polygons.first;
+        final latSum = poly.fold<double>(0, (s, p) => s + p[0]);
+        final lngSum = poly.fold<double>(0, (s, p) => s + p[1]);
+        centerLat = latSum / poly.length;
+        centerLng = lngSum / poly.length;
       }
-      double centerLat = poly.isNotEmpty ? (latSum / poly.length) : 11.0396;
-      double centerLng = poly.isNotEmpty ? (lngSum / poly.length) : 77.0747;
 
       final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
       await BackgroundLocationService.start(
@@ -298,15 +323,16 @@ class LocationTrackingService with WidgetsBindingObserver {
         _trackingSuspended = false;
       }
       try {
-        double latSum = 0;
-        double lngSum = 0;
-        final poly = CollegeIPConfig.geoFencePolygon;
-        for (final pt in poly) {
-          latSum += pt[0];
-          lngSum += pt[1];
+        double centerLat = 11.0396;
+        double centerLng = 77.0747;
+        final polygons = CollegeIPConfig.geoFencePolygons;
+        if (polygons.isNotEmpty && polygons.first.isNotEmpty) {
+          final poly = polygons.first;
+          final latSum = poly.fold<double>(0, (s, p) => s + p[0]);
+          final lngSum = poly.fold<double>(0, (s, p) => s + p[1]);
+          centerLat = latSum / poly.length;
+          centerLng = lngSum / poly.length;
         }
-        double centerLat = poly.isNotEmpty ? (latSum / poly.length) : 11.0396;
-        double centerLng = poly.isNotEmpty ? (lngSum / poly.length) : 77.0747;
 
         final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
         await BackgroundLocationService.start(
@@ -360,44 +386,6 @@ class LocationTrackingService with WidgetsBindingObserver {
     return false;
   }
 
-  void _startStream() {
-    if (_trackingSuspended) return;
-    
-    final LocationSettings locationSettings;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      locationSettings = AndroidSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-        intervalDuration: const Duration(minutes: 2),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText: "Running in the background to verify location attendance.",
-          notificationTitle: "VisionGate Location Sync",
-          enableWakeLock: true,
-        ),
-      );
-    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      locationSettings = AppleSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-        activityType: ActivityType.fitness,
-        pauseLocationUpdatesAutomatically: false,
-        showBackgroundLocationIndicator: true,
-      );
-    } else {
-      locationSettings = const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-      );
-    }
-
-    _positionSub =
-        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-          (position) {
-            _queuePosition(position, source: 'stream');
-          },
-          onError: (_) {},
-        );
-  }
 
   void _startHeartbeat() {
     // Poll tracking status and flush positions every 2 minutes for dynamic updates
@@ -466,7 +454,7 @@ class LocationTrackingService with WidgetsBindingObserver {
     };
 
     final connectivityResult = await Connectivity().checkConnectivity();
-    final isOffline = connectivityResult == ConnectivityResult.none;
+    final isOffline = connectivityResult.contains(ConnectivityResult.none) || connectivityResult.isEmpty;
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -517,34 +505,53 @@ class LocationTrackingService with WidgetsBindingObserver {
   }
 
   Future<bool> _ensureLocationPermission() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return false;
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
 
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      return false;
-    }
-
-    if (permission == LocationPermission.whileInUse) {
-      final status = await Permission.locationAlways.request();
-      if (!status.isGranted) {
-        return false; // ENFORCE COMPULSORY BACKGROUND PERMISSION
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
       }
-    }
-
-    // Ensure notification permission is also granted (required for foreground notifications on Android 13+)
-    if (await Permission.notification.status.isDenied) {
-      final status = await Permission.notification.request();
-      if (!status.isGranted) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         return false;
       }
-    }
 
-    return true;
+      // Mobile-only permissions:
+      if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
+        if (permission == LocationPermission.whileInUse) {
+          final status = await Permission.locationAlways.request();
+          if (!status.isGranted) {
+            return false; // ENFORCE COMPULSORY BACKGROUND PERMISSION ON MOBILE
+          }
+        }
+
+        // Request battery-optimisation exemption so OEM battery killers cannot
+        // terminate the foreground service. Opens the system dialog once.
+        if (defaultTargetPlatform == TargetPlatform.android) {
+          try {
+            final alreadyExempt =
+                await BackgroundLocationService.isIgnoringBatteryOptimisations();
+            if (!alreadyExempt) {
+              await BackgroundLocationService.requestBatteryOptimisationExemption();
+            }
+          } catch (_) {}
+        }
+
+        // Ensure notification permission is also granted (Android 13+)
+        if (await Permission.notification.status.isDenied) {
+          final status = await Permission.notification.request();
+          if (!status.isGranted) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   Future<void> updateLocalAttendanceStatus() async {

@@ -10,6 +10,7 @@ import '../utils/wifi_check.dart';
 import '../utils/geofence_check.dart';
 import '../utils/vpn_check.dart';
 import '../services/pre_verification_service.dart';
+import '../services/client_face_prefilter.dart';
 
 String get API_URL => CollegeIPConfig.defaultURL;
 
@@ -84,10 +85,16 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
   Future<void> _initCamera() async {
     try {
       _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        setState(() => _statusMessage = "No camera found on this device");
+        return;
+      }
+      final camera = _cameras!.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => _cameras!.first,
+      );
       _controller = CameraController(
-        _cameras!.firstWhere(
-          (c) => c.lensDirection == CameraLensDirection.front,
-        ),
+        camera,
         kIsWeb ? ResolutionPreset.medium : ResolutionPreset.high,
         enableAudio: false,
       );
@@ -96,32 +103,65 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
         setState(() => _isInitialized = true);
       }
     } catch (e) {
-      setState(() => _statusMessage = "Camera error: $e");
+      if (mounted) {
+        setState(() => _statusMessage = "Camera error: $e");
+      }
     }
   }
 
   Future<void> _captureFrame() async {
-    if (_isCapturing || !_isInitialized) return;
+    if (_isCapturing || !_isInitialized || _controller == null) return;
 
     setState(() => _isCapturing = true);
     _statusMessage = "Capturing face...";
 
     try {
       final XFile imageFile = await _controller!.takePicture();
+      
+      // On-device Google ML Kit pre-filter
+      final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+        imageFile.path,
+        targetPose: FaceTargetPose.front,
+        allowMultipleFaces: false,
+      );
 
-      // Backend will detect and process the face
-      setState(() {
-        _capturedImage = imageFile;
-        _hasFace = true;
-        _statusMessage = "Face captured! Tap Register to confirm.";
-      });
+      if (!prefilter.isValid) {
+        if (mounted) {
+          setState(() {
+            _hasFace = false;
+            _statusMessage = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+          });
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _capturedImage = imageFile;
+          _hasFace = true;
+          _statusMessage = "Face captured! Tap Register to complete.";
+        });
+      }
     } catch (e) {
-      setState(() {
-        _statusMessage = "Capture failed: $e";
-      });
+      if (mounted) {
+        setState(() {
+          _statusMessage = "Capture failed: $e";
+        });
+      }
     } finally {
-      setState(() => _isCapturing = false);
+      if (mounted) setState(() => _isCapturing = false);
     }
+  }
+
+  void _retakePhoto() {
+    setState(() {
+      _capturedImage = null;
+      _hasFace = false;
+      _isRegistrationError = false;
+      _isRegistrationSuccess = false;
+      _registrationErrorMessage = '';
+      _statusMessage = "Position your face in the frame";
+    });
   }
 
   Future<void> _registerFace() async {
@@ -130,7 +170,7 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
       return;
     }
 
-    if (nameCtrl.text.isEmpty) {
+    if (nameCtrl.text.trim().isEmpty) {
       setState(() => _statusMessage = "Please fill in your name");
       return;
     }
@@ -151,26 +191,26 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
           _isRegistering = false;
           _isRegistrationError = true;
           _registrationErrorMessage = "VPN/Proxy detected. Please disconnect VPN to register your face.";
-          _statusMessage = "❌ $_registrationErrorMessage";
+          _statusMessage = _registrationErrorMessage;
         });
         return;
       }
 
       setState(() {
-        _statusMessage = "Registering face...";
+        _statusMessage = "Registering face biometrics...";
       });
 
       var request = http.MultipartRequest(
         "POST",
-        Uri.parse("${API_URL}${widget.registerEndpoint}"),
+        Uri.parse("$API_URL${widget.registerEndpoint}"),
       );
 
       final clientPlatform = kIsWeb ? 'web' : 'app';
       request.headers['Authorization'] = 'Bearer ${widget.token}';
       request.headers['X-Client-Platform'] = clientPlatform;
-      request.fields['name'] = nameCtrl.text;
-      request.fields['reg_no'] = regNoCtrl.text;
-      request.fields['dept'] = deptCtrl.text;
+      request.fields['name'] = nameCtrl.text.trim();
+      request.fields['reg_no'] = regNoCtrl.text.trim();
+      request.fields['dept'] = deptCtrl.text.trim();
       request.fields['role'] = widget.role;
       final bytes = await _capturedImage!.readAsBytes();
       request.files.add(
@@ -189,10 +229,10 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
         setState(() {
           _isRegistering = false;
           _isRegistrationSuccess = true;
-          _statusMessage = "✅ ${(json is Map ? json['message'] : null) ?? 'Registration successful'}";
+          _statusMessage = (json is Map ? json['message'] : null) ?? 'Registration successful';
         });
         widget.onSuccess?.call();
-        await Future.delayed(const Duration(seconds: 3));
+        await Future.delayed(const Duration(seconds: 2));
         if (mounted) Navigator.pop(context);
       } else {
         final errorJson = jsonDecode(body);
@@ -201,7 +241,7 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
           _isRegistrationError = true;
           _registrationErrorMessage =
               (errorJson is Map ? (errorJson['detail'] ?? errorJson['message'] ?? errorJson['error']) : null)?.toString() ?? 'Registration failed';
-          _statusMessage = "❌ ${_registrationErrorMessage}";
+          _statusMessage = _registrationErrorMessage;
         });
       }
     } catch (e) {
@@ -209,7 +249,7 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
         _isRegistering = false;
         _isRegistrationError = true;
         _registrationErrorMessage = "Error: $e";
-        _statusMessage = "❌ $_registrationErrorMessage";
+        _statusMessage = _registrationErrorMessage;
       });
     }
   }
@@ -222,404 +262,520 @@ class _FaceRegistrationWidgetState extends State<FaceRegistrationWidget> with Si
     _registerFace();
   }
 
-  Widget _buildLoadingOverlay() {
-    return Container(
-      color: Colors.black87,
-      child: Center(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 600),
-          builder: (context, value, child) {
-            return Opacity(
-              opacity: value,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 4,
-                      color: Colors.deepPurpleAccent.shade200,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    "Registering Face...",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Please keep still",
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.7),
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+  Widget _buildSafeCameraPreview(CameraController ctrl) {
+    final size = ctrl.value.previewSize;
+    if (size == null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: CameraPreview(ctrl),
+      );
+    }
+    final double previewW = kIsWeb ? size.width : (size.height < size.width ? size.height : size.width);
+    final double previewH = kIsWeb ? size.height : (size.height < size.width ? size.width : size.height);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: previewW,
+            height: previewH,
+            child: CameraPreview(ctrl),
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildSuccessOverlay() {
+  Widget _buildCameraViewfinderCard({required bool isDark, required double height}) {
+    final Color borderColor = _isRegistrationSuccess
+        ? const Color(0xFF10B981)
+        : (_isRegistrationError
+            ? const Color(0xFFEF4444)
+            : (_hasFace
+                ? const Color(0xFF10B981)
+                : (_isRegistering
+                    ? Colors.amber
+                    : const Color(0xFF2563EB))));
+
     return Container(
-      color: Colors.black87,
-      child: Center(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 800),
-          curve: Curves.elasticOut,
-          builder: (context, value, child) {
-            return Transform.scale(
-              scale: value,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 100,
-                    height: 100,
-                    decoration: BoxDecoration(
+      height: height,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.black87,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: borderColor,
+          width: 2.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: borderColor.withValues(alpha: 0.15),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: Stack(
+          fit: StackFit.expand,
+          alignment: Alignment.center,
+          children: [
+            if (_isInitialized && _controller != null && _controller!.value.isInitialized) ...[
+              if (_hasFace && _capturedImage != null)
+                FutureBuilder<Uint8List>(
+                  future: _capturedImage!.readAsBytes(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData) {
+                      return Image.memory(snapshot.data!, fit: BoxFit.cover);
+                    }
+                    return const Center(child: CircularProgressIndicator(color: Color(0xFF2563EB)));
+                  },
+                )
+              else
+                _buildSafeCameraPreview(_controller!),
+
+              // Clean Biometric Viewfinder Painter (Zero Text)
+              CustomPaint(
+                painter: FaceScannerMaskPainter(
+                  scanProgress: _animationController.value,
+                  faceDetected: _hasFace,
+                  faceQuality: _isRegistrationSuccess ? 1.0 : (_hasFace ? 0.95 : 0.0),
+                ),
+              ),
+            ] else
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: Color(0xFF2563EB)),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Starting camera...",
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Top-right control: Retake photo when captured
+            if (_isInitialized && _hasFace)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+                    tooltip: "Retake Photo",
+                    onPressed: _retakePhoto,
+                  ),
+                ),
+              ),
+
+            // Processing Loading Indicator in center
+            if (_isCapturing || _isRegistering)
+              Container(
+                color: Colors.black.withValues(alpha: 0.4),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: _isRegistering ? const Color(0xFF10B981) : const Color(0xFF2563EB),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _isRegistering ? "Registering Biometrics..." : "Capturing...",
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Success Confirmation Overlay
+            if (_isRegistrationSuccess)
+              Container(
+                color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF10B981),
                       shape: BoxShape.circle,
-                      color: Colors.green.withValues(alpha: 0.2),
-                      border: Border.all(
-                        color: Colors.green,
-                        width: 3,
-                      ),
                     ),
-                    child: const Icon(
-                      Icons.check_rounded,
-                      color: Colors.green,
-                      size: 60,
-                    ),
+                    child: const Icon(Icons.check_rounded, color: Colors.white, size: 36),
                   ),
-                  const SizedBox(height: 24),
-                  Text(
-                    _statusMessage.replaceAll("✅ ", ""),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Redirecting...",
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.6),
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+                ),
               ),
-            );
-          },
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildErrorOverlay() {
+  Widget _buildCleanStatusChip(bool isDark) {
+    final Color color = _isRegistrationSuccess
+        ? const Color(0xFF10B981)
+        : (_isRegistrationError
+            ? const Color(0xFFEF4444)
+            : (_hasFace
+                ? const Color(0xFF10B981)
+                : (_isRegistering
+                    ? Colors.amber
+                    : const Color(0xFF2563EB))));
+
+    final IconData icon = _isRegistrationSuccess
+        ? Icons.check_circle_rounded
+        : (_isRegistrationError
+            ? Icons.error_outline_rounded
+            : (_hasFace
+                ? Icons.verified_user_rounded
+                : (_isRegistering
+                    ? Icons.hourglass_top_rounded
+                    : Icons.face_retouching_natural_rounded)));
+
+    final message = _registrationErrorMessage.isNotEmpty
+        ? _registrationErrorMessage
+        : (_isRegistering
+            ? "Enrolling biometric embeddings into secure database..."
+            : (_isRegistrationSuccess
+                ? "Face biometrics registered successfully!"
+                : (_hasFace
+                    ? "Face frame captured ready for enrollment"
+                    : _statusMessage)));
+
     return Container(
-      color: Colors.black87,
-      child: Center(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 400),
-          builder: (context, value, child) {
-            return Opacity(
-              opacity: value,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.red.withValues(alpha: 0.2),
-                      border: Border.all(color: Colors.red, width: 3),
-                    ),
-                    child: const Icon(
-                      Icons.close_rounded,
-                      color: Colors.red,
-                      size: 50,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    _statusMessage.replaceAll("❌ ", ""),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: _retryRegistration,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text("Try Again"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                        vertical: 14,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (_isRegistering)
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            )
+          else
+            Icon(icon, color: color, size: 18),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              message,
+              style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildCameraPreview() {
-    if (!_isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.deepPurpleAccent),
+  Widget _buildActionButtons(bool isDark) {
+    if (_isRegistrationError) {
+      return ElevatedButton.icon(
+        onPressed: _retryRegistration,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2563EB),
+          foregroundColor: Colors.white,
+          minimumSize: const Size(double.infinity, 52),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        icon: const Icon(Icons.refresh_rounded, size: 20),
+        label: const Text("Retry Registration", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
       );
     }
 
-    return GestureDetector(
-      onTap: (_isRegistering || _isRegistrationSuccess) ? null : _captureFrame,
-      child: Stack(
-        children: [
-          SizedBox.expand(child: CameraPreview(_controller!)),
-          // Transparent overlay to capture taps on web (video element blocks gestures)
-          if (!_isRegistering && !_isRegistrationSuccess)
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: _captureFrame,
-                behavior: HitTestBehavior.translucent,
-                child: Container(color: Colors.transparent),
-              ),
+    if (!_hasFace) {
+      return ElevatedButton.icon(
+        onPressed: (_isInitialized && !_isCapturing) ? _captureFrame : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2563EB),
+          foregroundColor: Colors.white,
+          minimumSize: const Size(double.infinity, 52),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 2,
+        ),
+        icon: _isCapturing
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+            : const Icon(Icons.camera_alt_rounded, size: 20),
+        label: const Text("Capture Face Frame", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          flex: 4,
+          child: OutlinedButton.icon(
+            onPressed: (!_isRegistering && !_isRegistrationSuccess) ? _retakePhoto : null,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              side: BorderSide(color: isDark ? Colors.white38 : Colors.grey.shade400),
             ),
-          
-          // Animated Scanning Mask
-          if (!_isRegistering && !_isRegistrationSuccess)
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _animationController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    painter: FaceScannerMaskPainter(
-                      scanProgress: _animationController.value,
-                      faceDetected: _hasFace,
-                      faceQuality: _hasFace ? 1.0 : 0.0,
-                    ),
-                  );
-                },
-              ),
+            icon: const Icon(Icons.restart_alt_rounded, size: 18),
+            label: const Text("Retake", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 6,
+          child: ElevatedButton.icon(
+            onPressed: (!_isRegistering && !_isRegistrationSuccess) ? _registerFace : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF10B981),
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 52),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 2,
             ),
-
-          if (_isCapturing)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black54,
-                child: const Center(
-                  child: CircularProgressIndicator(color: Colors.deepPurpleAccent),
-                ),
-              ),
+            icon: _isRegistering
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.check_circle_rounded, size: 20),
+            label: Text(
+              _isRegistering ? "Registering..." : (_isRegistrationSuccess ? "Completed" : "Submit & Register"),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
             ),
+          ),
+        ),
+      ],
+    );
+  }
 
-          if (_isRegistering)
-            Positioned.fill(child: _buildLoadingOverlay()),
+  Widget _buildUserInfoCard(bool isDark) {
+    final roleName = widget.role.toUpperCase();
+    final roleColor = widget.role.toLowerCase() == 'admin'
+        ? const Color(0xFF2563EB)
+        : (widget.role.toLowerCase() == 'hod' ? const Color(0xFF0D9488) : const Color(0xFF4F46E5));
 
-          if (_isRegistrationSuccess)
-            Positioned.fill(child: _buildSuccessOverlay()),
-
-          if (_isRegistrationError)
-            Positioned.fill(child: _buildErrorOverlay()),
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                "Biometric Profile Details",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: roleColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  roleName,
+                  style: TextStyle(color: roleColor, fontWeight: FontWeight.bold, fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: regNoCtrl,
+            enabled: false,
+            decoration: InputDecoration(
+              labelText: "Registration / Staff ID",
+              prefixIcon: const Icon(Icons.badge_outlined, size: 20),
+              filled: true,
+              fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: nameCtrl,
+            decoration: InputDecoration(
+              labelText: "Full Name",
+              prefixIcon: const Icon(Icons.person_outline, size: 20),
+              filled: true,
+              fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+            ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: const [
+              'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
+            ].contains(deptCtrl.text.trim().toUpperCase())
+                ? deptCtrl.text.trim().toUpperCase()
+                : 'CSE',
+            decoration: InputDecoration(
+              labelText: "Department",
+              prefixIcon: const Icon(Icons.school_outlined, size: 20),
+              filled: true,
+              fillColor: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+            ),
+            items: const [
+              'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
+            ].map((d) => DropdownMenuItem<String>(value: d, child: Text(d))).toList(),
+            onChanged: (val) {
+              if (val != null) {
+                setState(() {
+                  deptCtrl.text = val;
+                });
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuidelinesCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.shield_outlined, color: Color(0xFF2563EB), size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Enrollment Instructions',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildInfoRow(Icons.face_retouching_natural_rounded, 'Look directly into the camera in balanced lighting.', isDark),
+          const SizedBox(height: 8),
+          _buildInfoRow(Icons.vpn_lock_outlined, 'Ensure VPN/proxy is turned off before registration.', isDark),
+          const SizedBox(height: 8),
+          _buildInfoRow(Icons.verified_outlined, 'Once submitted, biometrics are securely locked & encrypted.', isDark),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String text, bool isDark) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 15, color: const Color(0xFF2563EB)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(fontSize: 12, color: isDark ? Colors.white70 : Colors.grey.shade700, height: 1.3),
+          ),
+        ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final statusBar = Container(
-      padding: const EdgeInsets.all(16),
-      color: _hasFace
-          ? Colors.green.withValues(alpha: 0.1)
-          : Colors.grey[100]!,
-      child: Row(
-        children: [
-          Icon(
-            _hasFace ? Icons.check_circle : Icons.info,
-            color: _hasFace ? Colors.green : Colors.grey,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              _statusMessage,
-              style: TextStyle(
-                color: _hasFace ? Colors.green[700] : Colors.grey[700],
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    Widget buildForm(EdgeInsetsGeometry padding) {
-      return SingleChildScrollView(
-        padding: padding,
-        child: Column(
-          children: [
-            TextField(
-              controller: regNoCtrl,
-              decoration: InputDecoration(
-                labelText: "Registration Number",
-                prefixIcon: const Icon(Icons.badge),
-                filled: true,
-                fillColor: Colors.grey[100]!,
-                enabled: false,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: nameCtrl,
-              decoration: InputDecoration(
-                labelText: "Full Name",
-                prefixIcon: const Icon(Icons.person),
-                filled: true,
-                fillColor: Colors.grey[100]!,
-              ),
-            ),
-            DropdownButtonFormField<String>(
-              value: const [
-                'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
-              ].contains(deptCtrl.text.trim().toUpperCase())
-                  ? deptCtrl.text.trim().toUpperCase()
-                  : 'CSE',
-              decoration: InputDecoration(
-                labelText: "Department",
-                prefixIcon: const Icon(Icons.school),
-                filled: true,
-                fillColor: Colors.grey[100]!,
-              ),
-              items: const [
-                'CSE', 'IT', 'AIDS', 'AIML', 'CYBER', 'ECE', 'EEE', 'VLSI', 'MECH', 'BME', 'BT', 'FT', 'AGRI', 'CIVIL'
-              ].map((d) => DropdownMenuItem<String>(value: d, child: Text(d))).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() {
-                    deptCtrl.text = val;
-                  });
-                }
-              },
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton.icon(
-                onPressed: (_hasFace && !_isRegistering && !_isRegistrationSuccess) ? _registerFace : null,
-                icon: const Icon(Icons.face),
-                label: Text(_isRegistering ? "Registering..." : _isRegistrationSuccess ? "Success!" : "Register Face"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isRegistrationSuccess ? Colors.green : Colors.deepPurple,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-            if (!_hasFace) ...[
-              const SizedBox(height: 16),
-              Text(
-                "Tap the camera to capture your face",
-                style: TextStyle(color: Colors.grey[600]!, fontSize: 12),
-              ),
-            ],
-          ],
-        ),
-      );
-    }
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isWide = MediaQuery.of(context).size.width >= 900;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Face Registration"),
-        backgroundColor: Colors.deepPurple,
+        title: Text(
+          "${widget.role.toUpperCase()} Face Registration",
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
+        backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFF2563EB),
         foregroundColor: Colors.white,
+        elevation: 0,
         actions: [
-          TextButton(
-            onPressed: widget.onCancel,
-            child: const Text("Cancel", style: TextStyle(color: Colors.white)),
-          ),
+          if (widget.onCancel != null)
+            TextButton(
+              onPressed: widget.onCancel,
+              child: const Text("Cancel", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final isWide = constraints.maxWidth >= 900;
-
-          if (!isWide) {
-            return Column(
-              children: [
-                Expanded(flex: 3, child: _buildCameraPreview()),
-                statusBar,
-                Expanded(flex: 2, child: buildForm(const EdgeInsets.all(16))),
-              ],
-            );
-          }
-
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+      body: isWide
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Left Column: Hero Viewfinder & Controls
                   Expanded(
-                    flex: 6,
+                    flex: 5,
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: Container(
-                              color: Colors.black,
-                              child: _buildCameraPreview(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        statusBar,
+                        _buildCameraViewfinderCard(isDark: isDark, height: 420),
+                        const SizedBox(height: 14),
+                        _buildCleanStatusChip(isDark),
+                        const SizedBox(height: 14),
+                        _buildActionButtons(isDark),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 24),
+                  // Right Column: Profile Form & Guidelines
                   Expanded(
                     flex: 5,
-                    child: Card(
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: buildForm(const EdgeInsets.all(20)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildUserInfoCard(isDark),
+                        const SizedBox(height: 16),
+                        _buildGuidelinesCard(isDark),
+                      ],
                     ),
                   ),
                 ],
               ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCameraViewfinderCard(isDark: isDark, height: 360),
+                  const SizedBox(height: 12),
+                  _buildCleanStatusChip(isDark),
+                  const SizedBox(height: 14),
+                  _buildActionButtons(isDark),
+                  const SizedBox(height: 16),
+                  _buildUserInfoCard(isDark),
+                  const SizedBox(height: 14),
+                  _buildGuidelinesCard(isDark),
+                ],
+              ),
             ),
-          );
-        },
-      ),
     );
   }
 }
@@ -660,32 +816,34 @@ class _StaffFaceRegistrationWidgetState
   Future<void> _checkFaceStatus() async {
     try {
       final response = await http.get(
-        Uri.parse("${API_URL}/face/status/${widget.regNo}"),
+        Uri.parse("$API_URL/face/status/${widget.regNo}"),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        if (mounted) {
+          setState(() {
+            _isRegistered = data['face_registered'] ?? false;
+            _hasPermission = data['can_reregister'] ?? false;
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
         setState(() {
-          _isRegistered = data['face_registered'] ?? false;
-          _hasPermission = data['can_reregister'] ?? false;
+          _message = "Error checking status: $e";
           _isLoading = false;
         });
       }
-    } catch (e) {
-      setState(() {
-        _message = "Error checking status: $e";
-        _isLoading = false;
-      });
     }
   }
 
   void _navigateToRegistration() {
     if (_isRegistered && !_hasPermission) {
-      // Staff users need to contact HOD for permission
       setState(
-        () =>
-            _message = "Please contact your HOD for permission to re-register.",
+        () => _message = "Please contact your HOD for permission to re-register.",
       );
       return;
     }
@@ -708,94 +866,129 @@ class _StaffFaceRegistrationWidgetState
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator(color: Color(0xFF2563EB)));
     }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Icon(
-                  _isRegistered ? Icons.check_circle : Icons.warning,
-                  color: _isRegistered ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "Face Registration",
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        _isRegistered
-                            ? "Your face is registered"
-                            : "Face not registered yet",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isRegistered
-                              ? Colors.green[700]
-                              : Colors.orange[700],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                FilledButton.icon(
-                  onPressed: _navigateToRegistration,
-                  icon: Icon(_isRegistered ? Icons.refresh : Icons.add),
-                  label: Text(_isRegistered ? "Re-register" : "Register"),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _isRegistered
-                        ? Colors.orange
-                        : Colors.green,
-                  ),
-                ),
-              ],
-            ),
-            if (_message.isNotEmpty) ...[
-              const SizedBox(height: 12),
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: _isRegistered
+              ? const Color(0xFF10B981).withValues(alpha: 0.3)
+              : const Color(0xFFF59E0B).withValues(alpha: 0.3),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
+                  color: (_isRegistered ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
+                      .withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
                 ),
-                child: Text(
-                  _message,
-                  style: const TextStyle(color: Colors.red, fontSize: 12),
+                child: Icon(
+                  _isRegistered ? Icons.verified_user_rounded : Icons.face_retouching_natural_rounded,
+                  color: _isRegistered ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                  size: 26,
                 ),
               ),
-            ],
-            if (_isRegistered && _hasPermission) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.info, color: Colors.blue),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "You have permission to re-register your face",
-                        style: TextStyle(color: Colors.blue, fontSize: 12),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Face Biometrics Status",
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _isRegistered ? "Biometrics Active & Enrolled" : "No face registered yet",
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: _isRegistered ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                       ),
                     ),
                   ],
                 ),
               ),
+              ElevatedButton.icon(
+                onPressed: _navigateToRegistration,
+                icon: Icon(_isRegistered ? Icons.refresh_rounded : Icons.camera_alt_rounded, size: 16),
+                label: Text(_isRegistered ? "Re-register" : "Register"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isRegistered ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+              ),
             ],
+          ),
+          if (_message.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.25)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Color(0xFFEF4444), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _message,
+                      style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
-        ),
+          if (_isRegistered && _hasPermission) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.25)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_outline_rounded, color: Color(0xFF2563EB), size: 16),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "HOD Permission Granted: You are eligible to update face biometrics.",
+                      style: TextStyle(color: Color(0xFF2563EB), fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -808,6 +1001,7 @@ class FaceVerificationWidget extends StatefulWidget {
   final String name;
   final String dept;
   final VoidCallback? onVerified;
+  final Function(Map<String, dynamic> data)? onVerifiedData;
   final VoidCallback? onCancel;
 
   const FaceVerificationWidget({
@@ -817,6 +1011,7 @@ class FaceVerificationWidget extends StatefulWidget {
     required this.name,
     required this.dept,
     this.onVerified,
+    this.onVerifiedData,
     this.onCancel,
   });
 
@@ -854,10 +1049,16 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
   Future<void> _initCamera() async {
     try {
       _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        setState(() => _statusMessage = "No camera found on this device");
+        return;
+      }
+      final camera = _cameras!.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => _cameras!.first,
+      );
       _controller = CameraController(
-        _cameras!.firstWhere(
-          (c) => c.lensDirection == CameraLensDirection.front,
-        ),
+        camera,
         kIsWeb ? ResolutionPreset.medium : ResolutionPreset.high,
         enableAudio: false,
       );
@@ -866,12 +1067,14 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         setState(() => _isInitialized = true);
       }
     } catch (e) {
-      setState(() => _statusMessage = "Camera error: $e");
+      if (mounted) {
+        setState(() => _statusMessage = "Camera error: $e");
+      }
     }
   }
 
   Future<void> _verifyFace() async {
-    if (_isVerifying || !_isInitialized) return;
+    if (_isVerifying || !_isInitialized || _controller == null) return;
 
     setState(() {
       _isVerifying = true;
@@ -879,13 +1082,9 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
     });
 
     try {
-      // ── Use pre-verified background cache (VPN + WiFi + Geofence) ──────────
-      // getOrRefresh() returns the cached status if it is fresh (< 90 s old).
-      // If the cache is stale it runs a synchronous re-check before continuing.
-      // This eliminates per-attempt location/wifi/vpn latency.
       final preVerif = await PreVerificationService.instance.getOrRefresh();
 
-      // VPN Check (runs on ALL platforms including web)
+      // VPN Check
       if (preVerif.vpnError != null) {
         setState(() {
           _statusMessage = "Error: ${preVerif.vpnError}";
@@ -903,7 +1102,7 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         return;
       }
 
-      // WiFi check (app only — web uses geofence)
+      // WiFi check
       if (!kIsWeb &&
           CollegeIPConfig.isWifiCheckEnabled &&
           !AppSettings.allowAnyNetwork &&
@@ -919,7 +1118,6 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         return;
       }
 
-      // Resolve effective geo decision for position forwarding
       final effectiveGeoDecision = geoDecision ??
           const GeoFenceDecision(
             enforced: false,
@@ -928,25 +1126,37 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
             error: null,
           );
 
-      setState(() => _statusMessage = "Verifying face...");
+      setState(() => _statusMessage = "Verifying biometrics...");
 
       final XFile imageFile = await _controller!.takePicture();
 
-      // Send to backend for verification
+      // On-device Google ML Kit edge pre-filter (fast mobile check)
+      final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+        imageFile.path,
+        targetPose: FaceTargetPose.any,
+        allowMultipleFaces: false,
+      );
+
+      if (!prefilter.isValid) {
+        if (mounted) {
+          setState(() {
+            _hasFace = false;
+            _statusMessage = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+          });
+        }
+        return;
+      }
+
       var request = http.MultipartRequest(
         "POST",
-        Uri.parse("${API_URL}/mark_attendance"),
+        Uri.parse("$API_URL/mark_attendance"),
       );
 
       request.headers['Authorization'] = 'Bearer ${widget.token}';
       request.fields['reg_no'] = widget.regNo;
 
-      // Attach client location for server-side geofence enforcement.
-      // Use the position cached by PreVerificationService (updated every 30 s),
-      // falling back to the static GeoFenceChecker cache.
       Position? position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
 
-      // For web: if no cached position and geofence is enforced, try one fresh fetch
       if (position == null && kIsWeb && effectiveGeoDecision.enforced) {
         try {
           position = await Geolocator.getCurrentPosition(
@@ -962,33 +1172,28 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         if (position == null) {
           setState(() {
             _statusMessage =
-                "Error: Unable to get your location. Please:\n1. Refresh the page\n2. Click location icon in browser address bar\n3. Select \"Allow\" for this site\n4. Ensure you are on HTTPS";
+                "Error: Unable to get location. Please allow browser location access.";
           });
           return;
         }
       }
 
-      // If geofence is enforced but no position is resolved, block as safety net.
       if (effectiveGeoDecision.enforced && position == null) {
         setState(() {
-          _statusMessage = "Error: Unable to verify your location. Please try again.";
+          _statusMessage = "Error: Unable to verify location.";
         });
-        _showGeofenceWarningDialog("Unable to verify your location. Please enable GPS/location services and try again.");
+        _showGeofenceWarningDialog("Unable to verify your location. Please enable GPS and try again.");
         return;
       }
 
-      // Always send client platform — backend relies on this to distinguish web vs app
       final clientPlatform = kIsWeb ? 'web' : 'app';
       request.fields['client_platform'] = clientPlatform;
       request.headers['X-Client-Platform'] = clientPlatform;
 
-      // ALWAYS send coordinates when geofencing is enforced — backend uses
-      // these as second-layer verification even after client-side geofence passed.
       if (effectiveGeoDecision.enforced && position != null) {
         request.fields['client_lat'] = position.latitude.toString();
         request.fields['client_lng'] = position.longitude.toString();
       }
-
 
       final bytes = await imageFile.readAsBytes();
       request.files.add(
@@ -1004,32 +1209,32 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
 
       if (response.statusCode == 200) {
         final json = jsonDecode(body);
+        final resMap = json is Map<String, dynamic> ? json : <String, dynamic>{'message': json.toString()};
+        final serverMsg = resMap['message']?.toString() ?? 'Attendance marked successfully!';
         setState(() {
           _hasFace = true;
           _isVerified = true;
-          _statusMessage =
-              "✅ ${(json is Map ? json['message'] : null) ?? 'Attendance marked successfully!'}";
+          _statusMessage = serverMsg;
         });
+        widget.onVerifiedData?.call(resMap);
         widget.onVerified?.call();
         await Future.delayed(const Duration(seconds: 2));
         if (mounted) Navigator.pop(context);
       } else {
-        // Handle both 'error' (new format) and 'detail' (legacy format)
         String errorMsg = 'Verification failed';
         try {
           final errorJson = jsonDecode(body);
           errorMsg =
               (errorJson is Map ? (errorJson['error'] ?? errorJson['detail'] ?? errorJson['message']) : null)?.toString() ??
               'Verification failed';
-        } catch (e) {
-          // If JSON parsing fails, use a generic message
+        } catch (_) {
           errorMsg = response.statusCode == 500
               ? "Server error. Please try again."
               : "Verification failed";
         }
         setState(() {
           _hasFace = true;
-          _statusMessage = "❌ $errorMsg";
+          _statusMessage = errorMsg;
         });
       }
     } catch (e) {
@@ -1037,7 +1242,7 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
         _statusMessage = "Error: $e";
       });
     } finally {
-      setState(() => _isVerifying = false);
+      if (mounted) setState(() => _isVerifying = false);
     }
   }
 
@@ -1047,8 +1252,8 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.gpp_bad_rounded, color: Colors.redAccent, size: 28),
             SizedBox(width: 10),
             Text(
@@ -1074,9 +1279,9 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.orange.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
@@ -1103,62 +1308,181 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
     );
   }
 
-  Widget _buildCameraPreview() {
-    if (!_isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.deepPurpleAccent),
+  Widget _buildSafeCameraPreview(CameraController ctrl) {
+    final size = ctrl.value.previewSize;
+    if (size == null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: CameraPreview(ctrl),
       );
     }
+    final double previewW = kIsWeb ? size.width : (size.height < size.width ? size.height : size.width);
+    final double previewH = kIsWeb ? size.height : (size.height < size.width ? size.width : size.height);
 
-    return GestureDetector(
-      onTap: _isVerifying ? null : _verifyFace,
-      child: Stack(
-        children: [
-          SizedBox.expand(child: CameraPreview(_controller!)),
-          // Transparent overlay to capture taps on web (video element blocks gestures)
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: _isVerifying ? null : _verifyFace,
-              behavior: HitTestBehavior.translucent,
-              child: Container(color: Colors.transparent),
-            ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: previewW,
+            height: previewH,
+            child: CameraPreview(ctrl),
           ),
-          
-          // Animated Scanning Mask
-          Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _animationController,
-              builder: (context, child) {
-                return CustomPaint(
-                  painter: FaceScannerMaskPainter(
-                    scanProgress: _animationController.value,
-                    faceDetected: _hasFace,
-                    faceQuality: _isVerified ? 1.0 : (_hasFace ? 0.75 : 0.0),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCameraViewfinderCard({required bool isDark, required double height}) {
+    final Color borderColor = _isVerified
+        ? const Color(0xFF10B981)
+        : (_isVerifying ? const Color(0xFFF59E0B) : const Color(0xFF2563EB));
+
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.black87,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderColor, width: 2.5),
+        boxShadow: [
+          BoxShadow(
+            color: borderColor.withValues(alpha: 0.15),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: Stack(
+          fit: StackFit.expand,
+          alignment: Alignment.center,
+          children: [
+            if (_isInitialized && _controller != null && _controller!.value.isInitialized) ...[
+              _buildSafeCameraPreview(_controller!),
+              CustomPaint(
+                painter: FaceScannerMaskPainter(
+                  scanProgress: _animationController.value,
+                  faceDetected: _hasFace,
+                  faceQuality: _isVerified ? 1.0 : (_hasFace ? 0.8 : 0.0),
+                ),
+              ),
+            ] else
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: Color(0xFF2563EB)),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Starting camera...",
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Top-right Refresh button
+            if (_isInitialized)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    shape: BoxShape.circle,
                   ),
-                );
-              },
-            ),
-          ),
+                  child: IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+                    tooltip: "Refresh Camera",
+                    onPressed: () => _initCamera(),
+                  ),
+                ),
+              ),
 
-          if (_isVerifying)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black54,
+            // Processing overlay
+            if (_isVerifying)
+              Container(
+                color: Colors.black.withValues(alpha: 0.4),
                 child: const Center(
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      CircularProgressIndicator(color: Colors.deepPurpleAccent),
-                      const SizedBox(height: 16),
+                      CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF2563EB)),
+                      SizedBox(height: 12),
                       Text(
-                        "Verifying...",
-                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        "Verifying Face Biometrics...",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                     ],
                   ),
                 ),
               ),
+
+            // Success Confirmation Overlay
+            if (_isVerified)
+              Container(
+                color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF10B981),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.check_rounded, color: Colors.white, size: 36),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCleanStatusChip(bool isDark) {
+    final Color color = _isVerified
+        ? const Color(0xFF10B981)
+        : (_statusMessage.toLowerCase().contains("error") || _statusMessage.toLowerCase().contains("failed")
+            ? const Color(0xFFEF4444)
+            : (_isVerifying ? const Color(0xFFF59E0B) : const Color(0xFF2563EB)));
+
+    final IconData icon = _isVerified
+        ? Icons.check_circle_rounded
+        : (_statusMessage.toLowerCase().contains("error") || _statusMessage.toLowerCase().contains("failed")
+            ? Icons.error_outline_rounded
+            : (_isVerifying ? Icons.hourglass_top_rounded : Icons.face_retouching_natural_rounded));
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (_isVerifying)
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            )
+          else
+            Icon(icon, color: color, size: 18),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              _statusMessage,
+              style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
+          ),
         ],
       ),
     );
@@ -1166,24 +1490,39 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isWide = MediaQuery.of(context).size.width >= 900;
+
     final userInfo = Container(
-      padding: const EdgeInsets.all(16),
-      color: Colors.deepPurple.withValues(alpha: 0.1),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+      ),
       child: Row(
         children: [
-          const Icon(Icons.person, color: Colors.deepPurple),
-          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB).withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.person_rounded, color: Color(0xFF2563EB), size: 24),
+          ),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   widget.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                 ),
+                const SizedBox(height: 2),
                 Text(
-                  "${widget.regNo} â€¢ ${widget.dept}",
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  "${widget.regNo} • ${widget.dept}",
+                  style: TextStyle(color: isDark ? Colors.white60 : Colors.grey.shade600, fontSize: 12),
                 ),
               ],
             ),
@@ -1192,172 +1531,90 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
       ),
     );
 
-    final statusBar = Container(
-      padding: const EdgeInsets.all(16),
-      color: _isVerified
-          ? Colors.green.withValues(alpha: 0.1)
-          : _hasFace
-          ? Colors.blue.withValues(alpha: 0.1)
-          : Colors.grey[100]!,
-      child: Row(
-        children: [
-          Icon(
-            _isVerified
-                ? Icons.check_circle
-                : _hasFace
-                ? Icons.face
-                : Icons.info,
-            color: _isVerified
-                ? Colors.green
-                : _hasFace
-                ? Colors.blue
-                : Colors.grey,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              _statusMessage,
-              style: TextStyle(
-                color: _isVerified
-                    ? Colors.green[700]
-                    : _hasFace
-                    ? Colors.blue[700]
-                    : Colors.grey[700],
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
+    final actionButton = ElevatedButton.icon(
+      onPressed: (_isInitialized && !_isVerifying && !_isVerified) ? _verifyFace : null,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
+        minimumSize: const Size(double.infinity, 52),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        elevation: 2,
       ),
-    );
-
-    final instructions = Container(
-      padding: const EdgeInsets.all(16),
-      color: Colors.grey[100]!,
-      child: Column(
-        children: [
-          Text(
-            "Tap the camera to verify your face for attendance",
-            style: TextStyle(color: Colors.grey[600], fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildStepIcon(1, "Position Face", Icons.face),
-              _buildStepIcon(2, "Tap to Capture", Icons.touch_app),
-              _buildStepIcon(3, "Verify", Icons.check_circle),
-            ],
-          ),
-        ],
+      icon: _isVerifying
+          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : const Icon(Icons.check_circle_rounded, size: 20),
+      label: Text(
+        _isVerifying ? "Verifying..." : (_isVerified ? "Verified!" : "Mark Attendance"),
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
       ),
     );
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Face Verification"),
-        backgroundColor: Colors.deepPurple,
+        title: const Text("Face Verification", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFF2563EB),
         foregroundColor: Colors.white,
+        elevation: 0,
         actions: [
-          TextButton(
-            onPressed: widget.onCancel,
-            child: const Text("Cancel", style: TextStyle(color: Colors.white)),
-          ),
+          if (widget.onCancel != null)
+            TextButton(
+              onPressed: widget.onCancel,
+              child: const Text("Cancel", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final isWide = constraints.maxWidth >= 900;
-
-          if (!isWide) {
-            return Column(
-              children: [
-                userInfo,
-                Expanded(flex: 3, child: _buildCameraPreview()),
-                statusBar,
-                instructions,
-              ],
-            );
-          }
-
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+      body: isWide
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    flex: 6,
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: Container(
-                              color: Colors.black,
-                              child: _buildCameraPreview(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        statusBar,
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
                   Expanded(
                     flex: 5,
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildCameraViewfinderCard(isDark: isDark, height: 420),
+                        const SizedBox(height: 14),
+                        _buildCleanStatusChip(isDark),
+                        const SizedBox(height: 14),
+                        actionButton,
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 24),
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         userInfo,
-                        const SizedBox(height: 12),
-                        instructions,
                       ],
                     ),
                   ),
                 ],
               ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  userInfo,
+                  const SizedBox(height: 14),
+                  _buildCameraViewfinderCard(isDark: isDark, height: 360),
+                  const SizedBox(height: 12),
+                  _buildCleanStatusChip(isDark),
+                  const SizedBox(height: 14),
+                  actionButton,
+                ],
+              ),
             ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildStepIcon(int step, String label, IconData icon) {
-    final isActive = _isVerified ? step <= 3 : step == 1;
-    return Row(
-      children: [
-        Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isActive ? Colors.deepPurple : Colors.grey[300],
-          ),
-          child: Icon(
-            icon,
-            color: isActive ? Colors.white : Colors.grey[500],
-            size: 16,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: isActive ? Colors.deepPurple : Colors.grey[400],
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-        if (step < 3) const SizedBox(width: 16),
-      ],
     );
   }
 }
 
-/// Custom painter for futuristic scanning HUD with oval mask
+/// Custom painter for sleek biometric scanning HUD with corner brackets and oval mask
 class FaceScannerMaskPainter extends CustomPainter {
   final double scanProgress;
   final bool faceDetected;
@@ -1371,17 +1628,16 @@ class FaceScannerMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final maskPaint = Paint()
-      ..color = Colors.black.withOpacity(0.70)
-      ..style = PaintingStyle.fill;
-
     // Dimensions of the viewport scanning oval
     final ovalWidth = size.width * 0.68;
-    final ovalHeight = ovalWidth * 1.28;
-    final center = Offset(size.width / 2, size.height / 2 - 40);
+    final ovalHeight = ovalWidth * 1.25;
+    final center = Offset(size.width / 2, size.height / 2);
     final rect = Rect.fromCenter(center: center, width: ovalWidth, height: ovalHeight);
 
-    // Screen backdrop mask
+    // Subtle dark backdrop outside oval
+    final maskPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.25)
+      ..style = PaintingStyle.fill;
     final backgroundPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
     final cutoutPath = Path()..addOval(rect);
     final maskPath = Path.combine(PathOperation.difference, backgroundPath, cutoutPath);
@@ -1390,66 +1646,78 @@ class FaceScannerMaskPainter extends CustomPainter {
     // Dynamic scanning ring colors
     final Color ringColor = faceDetected
         ? (faceQuality > 0.75 ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
-        : const Color(0xFF6366F1); // Green, Orange, Indigo
+        : const Color(0xFF3B82F6);
 
-    // Draw scanning border ring
+    // Draw subtle oval guide
     final borderPaint = Paint()
-      ..color = ringColor
+      ..color = ringColor.withValues(alpha: 0.45)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
+      ..strokeWidth = 1.8;
     canvas.drawOval(rect, borderPaint);
 
-    // Draw futuristic corner brackets around the scanner
+    // Draw modern corner brackets
     final cornerPaint = Paint()
       ..color = ringColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 5.0
+      ..strokeWidth = 3.5
       ..strokeCap = StrokeCap.round;
 
-    // Top-Left corner bracket
-    canvas.drawArc(Rect.fromLTWH(rect.left - 10, rect.top - 10, 40, 40), 3.14, 1.57, false, cornerPaint);
-    // Top-Right corner bracket
-    canvas.drawArc(Rect.fromLTWH(rect.right - 30, rect.top - 10, 40, 40), 4.71, 1.57, false, cornerPaint);
-    // Bottom-Left corner bracket
-    canvas.drawArc(Rect.fromLTWH(rect.left - 10, rect.bottom - 30, 40, 40), 1.57, 1.57, false, cornerPaint);
-    // Bottom-Right corner bracket
-    canvas.drawArc(Rect.fromLTWH(rect.right - 30, rect.bottom - 30, 40, 40), 0.0, 1.57, false, cornerPaint);
+    final bracketSize = math.min(ovalWidth * 0.16, 28.0);
+    // Top-Left
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.left, rect.top + bracketSize)
+        ..lineTo(rect.left, rect.top)
+        ..lineTo(rect.left + bracketSize, rect.top),
+      cornerPaint,
+    );
+    // Top-Right
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.right - bracketSize, rect.top)
+        ..lineTo(rect.right, rect.top)
+        ..lineTo(rect.right, rect.top + bracketSize),
+      cornerPaint,
+    );
+    // Bottom-Left
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.left, rect.bottom - bracketSize)
+        ..lineTo(rect.left, rect.bottom)
+        ..lineTo(rect.left + bracketSize, rect.bottom),
+      cornerPaint,
+    );
+    // Bottom-Right
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.right - bracketSize, rect.bottom)
+        ..lineTo(rect.right, rect.bottom)
+        ..lineTo(rect.right, rect.bottom - bracketSize),
+      cornerPaint,
+    );
 
-    // Draw active scanning line moving down the oval viewport
-    if (faceDetected) {
-      final double laserY = rect.top + (rect.height * scanProgress);
+    // Subtle laser beam moving across oval
+    final double laserY = rect.top + (rect.height * scanProgress);
+    final double distFromCenterY = (laserY - center.dy).abs();
+    final double ratioY = distFromCenterY / (ovalHeight / 2);
+    if (ratioY < 1.0) {
+      final double factorX = math.sqrt(1.0 - ratioY * ratioY);
+      final double boundX = (ovalWidth / 2) * factorX;
+      final double actualX1 = center.dx - (boundX * 0.85);
+      final double actualX2 = center.dx + (boundX * 0.85);
 
-      // Verify that coordinates lie within the oval curve bound width
-      final double distFromCenterY = (laserY - center.dy).abs();
-      final double ratioY = distFromCenterY / (ovalHeight / 2);
-      if (ratioY < 1.0) {
-        final double factorX = math.sqrt(1.0 - ratioY * ratioY);
-        final double boundX = (ovalWidth / 2) * factorX;
-        final double actualX1 = center.dx - (boundX * 0.85);
-        final double actualX2 = center.dx + (boundX * 0.85);
+      final laserPaint = Paint()
+        ..shader = LinearGradient(
+          colors: [
+            ringColor.withValues(alpha: 0.0),
+            ringColor.withValues(alpha: 0.8),
+            ringColor.withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromLTRB(actualX1, laserY - 2, actualX2, laserY + 2))
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
 
-        final laserPaint = Paint()
-          ..shader = LinearGradient(
-            colors: [
-              ringColor.withOpacity(0.0),
-              ringColor.withOpacity(0.85),
-              ringColor.withOpacity(0.0),
-            ],
-          ).createShader(Rect.fromLTRB(actualX1, laserY - 2, actualX2, laserY + 2))
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3.5;
-
-        canvas.drawLine(Offset(actualX1, laserY), Offset(actualX2, laserY), laserPaint);
-
-        // Scan reflection glow
-        final glowPaint = Paint()
-          ..color = ringColor.withOpacity(0.12)
-          ..style = PaintingStyle.fill;
-        canvas.drawOval(
-          Rect.fromCenter(center: Offset(center.dx, laserY), width: (actualX2 - actualX1), height: 16),
-          glowPaint,
-        );
-      }
+      canvas.drawLine(Offset(actualX1, laserY), Offset(actualX2, laserY), laserPaint);
     }
   }
 
@@ -1460,4 +1728,5 @@ class FaceScannerMaskPainter extends CustomPainter {
         oldDelegate.faceQuality != faceQuality;
   }
 }
+
 

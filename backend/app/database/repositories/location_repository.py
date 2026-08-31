@@ -5,6 +5,7 @@ import asyncpg
 from datetime import datetime
 from decimal import Decimal
 from ..connection import db_pool
+from .base_repository import BaseRepository
 from ..models import UserLocationLog, UserLatestLocation
 
 logger = logging.getLogger(__name__)

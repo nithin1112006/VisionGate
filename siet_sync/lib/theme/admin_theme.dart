@@ -121,6 +121,12 @@ class AdminTextStyles {
         color: color ?? AdminColors.getTextPrimary(isDark),
       );
 
+  static TextStyle bodySm(bool isDark, {Color? color}) => GoogleFonts.inter(
+        fontSize: 13,
+        fontWeight: FontWeight.w400,
+        color: color ?? AdminColors.getTextSecondary(isDark),
+      );
+
   static TextStyle labelSm(bool isDark, {Color? color}) => GoogleFonts.inter(
         fontSize: 12,
         fontWeight: FontWeight.w500,

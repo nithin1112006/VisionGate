@@ -7,6 +7,7 @@ import '../utils/geofence_check.dart';
 import '../utils/wifi_check.dart';
 import '../utils/api_response_utils.dart';
 import 'pre_verification_service.dart';
+import 'client_face_prefilter.dart';
 
 /// Secure face verification service with liveness detection and audit logging
 class FaceVerificationService {
@@ -158,6 +159,14 @@ class FaceVerificationService {
           error: null,
         );
 
+    // On-device Google ML Kit edge pre-filter (fast mobile check)
+    final prefilter = await ClientFacePreFilterService.evaluateImagePath(imageFile.path);
+    if (!prefilter.isValid) {
+      final errorMsg = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg, 'face_invalid': true};
+    }
+
     try {
       // Read image bytes
       final bytes = await imageFile.readAsBytes();
@@ -206,8 +215,8 @@ class FaceVerificationService {
       final response = await request.send();
       final responseBody = await response.stream.bytesToString();
 
-      print("DEBUG: Mark attendance response status: ${response.statusCode}");
-      print("DEBUG: Mark attendance response body: $responseBody");
+      debugPrint("DEBUG: Mark attendance response status: ${response.statusCode}");
+      debugPrint("DEBUG: Mark attendance response body: $responseBody");
 
       // Parse JSON response - handle case where response is not JSON
       Map<String, dynamic> result;
@@ -466,6 +475,18 @@ class FaceVerificationService {
     VoidCallback? onSuccess,
     Function(String)? onError,
   }) async {
+    // On-device Google ML Kit edge pre-filter (fast mobile check)
+    final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+      image.path,
+      targetPose: FaceTargetPose.any,
+      allowMultipleFaces: false,
+    );
+    if (!prefilter.isValid) {
+      final errorMsg = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg, 'face_invalid': true};
+    }
+
     try {
       final request = http.MultipartRequest(
         'POST',
@@ -502,6 +523,486 @@ class FaceVerificationService {
       final errorMsg = ApiResponseUtils.sanitize(e);
       onError?.call(errorMsg);
       return {'success': false, 'error': errorMsg};
+    }
+  }
+
+  /// Mark Student Attendance with Biometric Face & Geofence Verification
+  static Future<Map<String, dynamic>> markStudentAttendance({
+    required String token,
+    required XFile imageFile,
+    VoidCallback? onVerificationComplete,
+    VoidCallback? onVerificationFailed,
+    Function(String)? onError,
+  }) async {
+    // 1. Check pre-verification cache (VPN + WiFi + Geofence)
+    final preVerif = await PreVerificationService.instance.getOrRefresh();
+
+    if (preVerif.vpnError != null) {
+      onError?.call(preVerif.vpnError!);
+      return {'success': false, 'error': preVerif.vpnError, 'vpn_blocked': true};
+    }
+
+    // On-device Google ML Kit edge pre-filter (fast mobile check)
+    final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+      imageFile.path,
+      targetPose: FaceTargetPose.any,
+      allowMultipleFaces: false,
+    );
+    if (!prefilter.isValid) {
+      final errorMsg = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg, 'face_invalid': true};
+    }
+
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final clientPlatform = kIsWeb ? 'web' : 'app';
+
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse("$API_URL/student/mark-attendance"),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.headers['X-Client-Platform'] = clientPlatform;
+      request.fields['client_platform'] = clientPlatform;
+
+      final position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
+      if (position != null) {
+        request.fields['client_lat'] = position.latitude.toString();
+        request.fields['client_lng'] = position.longitude.toString();
+      }
+
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: 'stu_face_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        ),
+      );
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+
+      Map<String, dynamic> result;
+      try {
+        result = jsonDecode(responseBody);
+      } catch (e) {
+        final errorMsg = _statusDefaultMessage(response.statusCode);
+        onError?.call(errorMsg);
+        return {'success': false, 'error': errorMsg};
+      }
+
+      if (response.statusCode == 200) {
+        onVerificationComplete?.call();
+        return {
+          'success': true,
+          'message': result['message'] ?? 'Attendance marked successfully',
+          'data': result,
+          'summary': result['summary'],
+          'session': result['session'],
+          'session_display': result['session_display'],
+          'time': result['time'],
+          'confidence_score': result['confidence_score'],
+        };
+      } else {
+        onVerificationFailed?.call();
+        final rawError = (result['detail'] ?? result['error'] ?? 'Attendance marking failed').toString();
+        final friendlyError = _friendlyAttendanceError(
+          statusCode: response.statusCode,
+          rawError: rawError,
+        );
+        onError?.call(friendlyError);
+        return {
+          'success': false,
+          'error': friendlyError,
+          'statusCode': response.statusCode,
+        };
+      }
+    } catch (e) {
+      final errorMsg = ApiResponseUtils.sanitize(e);
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg};
+    }
+  }
+
+  /// Mark student biometric face check-out
+  static Future<Map<String, dynamic>> markStudentCheckout({
+    required String token,
+    required XFile imageFile,
+    String? sessionId,
+    VoidCallback? onVerificationComplete,
+    VoidCallback? onVerificationFailed,
+    Function(String)? onError,
+  }) async {
+    // 1. Check pre-verification cache (VPN + WiFi + Geofence)
+    final preVerif = await PreVerificationService.instance.getOrRefresh();
+
+    if (preVerif.vpnError != null) {
+      onError?.call(preVerif.vpnError!);
+      return {'success': false, 'error': preVerif.vpnError, 'vpn_blocked': true};
+    }
+
+    // On-device Google ML Kit edge pre-filter (fast mobile check)
+    final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+      imageFile.path,
+      targetPose: FaceTargetPose.any,
+      allowMultipleFaces: false,
+    );
+    if (!prefilter.isValid) {
+      final errorMsg = prefilter.message ?? "Face not detected clearly. Position your face in center.";
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg, 'face_invalid': true};
+    }
+
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final clientPlatform = kIsWeb ? 'web' : 'app';
+
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse("$API_URL/api/v1/class-session/student-checkout"),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.headers['X-Client-Platform'] = clientPlatform;
+      request.fields['client_platform'] = clientPlatform;
+      if (sessionId != null && sessionId.isNotEmpty) {
+        request.fields['session_id'] = sessionId;
+      }
+
+      final position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
+      if (position != null) {
+        request.fields['client_lat'] = position.latitude.toString();
+        request.fields['client_lng'] = position.longitude.toString();
+      }
+
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: 'stu_checkout_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        ),
+      );
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+
+      Map<String, dynamic> result;
+      try {
+        result = jsonDecode(responseBody);
+      } catch (e) {
+        final errorMsg = _statusDefaultMessage(response.statusCode);
+        onError?.call(errorMsg);
+        return {'success': false, 'error': errorMsg};
+      }
+
+      if (response.statusCode == 200) {
+        onVerificationComplete?.call();
+        return {
+          'success': true,
+          'message': result['message'] ?? 'Check-Out marked successfully',
+          'data': result,
+          'checkout_time': result['checkout_time'],
+          'session_display': result['session_display'],
+          'time': result['time'],
+          'confidence_score': result['confidence_score'],
+          'is_checkout': true,
+        };
+      } else {
+        onVerificationFailed?.call();
+        final rawError = (result['detail'] ?? result['error'] ?? 'Check-Out verification failed').toString();
+        final friendlyError = _friendlyAttendanceError(
+          statusCode: response.statusCode,
+          rawError: rawError,
+        );
+        onError?.call(friendlyError);
+        return {'success': false, 'error': friendlyError};
+      }
+    } catch (e) {
+      final errorMsg = 'Check-Out connection error: ${ApiResponseUtils.sanitize(e)}';
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg};
+    }
+  }
+
+  /// Submit 3 Multi-Angle Biometric Face Samples & Register Profile
+  static Future<Map<String, dynamic>> submitStudentFaceRegistration({
+    required String token,
+    required List<XFile> imageFiles,
+    String notes = '',
+    String requestType = 'FIRST_TIME_SELF_ENROLLMENT',
+    Function(String)? onError,
+  }) async {
+    // Validate each angle with on-device ML Kit
+    if (imageFiles.length >= 3) {
+      const poses = [FaceTargetPose.front, FaceTargetPose.left, FaceTargetPose.right];
+      const poseLabels = ['Front', 'Left', 'Right'];
+      for (int i = 0; i < 3; i++) {
+        final prefilter = await ClientFacePreFilterService.evaluateImagePath(
+          imageFiles[i].path,
+          targetPose: poses[i],
+          allowMultipleFaces: false,
+        );
+        if (!prefilter.isValid) {
+          final errorMsg = "${poseLabels[i]} sample: ${prefilter.message ?? 'Invalid face alignment.'}";
+          onError?.call(errorMsg);
+          return {'success': false, 'error': errorMsg, 'face_invalid': true};
+        }
+      }
+    }
+
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse("$API_URL/student/face-registration/submit"),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.fields['notes'] = notes;
+      request.fields['request_type'] = requestType;
+
+      for (int i = 0; i < imageFiles.length; i++) {
+        final bytes = await imageFiles[i].readAsBytes();
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'image${i + 1}',
+            bytes,
+            filename: 'pose_${i + 1}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          ),
+        );
+      }
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+
+      Map<String, dynamic> result;
+      try {
+        result = jsonDecode(responseBody);
+      } catch (e) {
+        final errorMsg = _statusDefaultMessage(response.statusCode);
+        onError?.call(errorMsg);
+        return {'success': false, 'error': errorMsg};
+      }
+
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'message': result['message'] ?? 'Face biometric profile registered successfully.',
+          'is_first_time': result['is_first_time'] ?? false,
+          'status': result['status'] ?? 'AUTO_APPROVED',
+          'data': result,
+        };
+      } else {
+        final err = (result['detail'] ?? result['error'] ?? 'Registration failed').toString();
+        onError?.call(err);
+        return {'success': false, 'error': err, 'statusCode': response.statusCode};
+      }
+    } catch (e) {
+      final errorMsg = ApiResponseUtils.sanitize(e);
+      onError?.call(errorMsg);
+      return {'success': false, 'error': errorMsg};
+    }
+  }
+
+  /// Fetch Student Face Registration & Prototype Status from Server
+  static Future<Map<String, dynamic>> getStudentFaceRegistrationStatus({
+    required String token,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse("$API_URL/student/face-registration/status"),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      return {'success': false};
+    } catch (e) {
+      debugPrint("Error fetching face registration status: $e");
+      return {'success': false};
+    }
+  }
+
+  /// Request Permission to Re-register Face from Class Advisor
+  static Future<Map<String, dynamic>> requestFaceReregistrationPermission({
+    required String token,
+    required String reason,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse("$API_URL/student/face-registration/request-reregistration"),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'notes': reason}),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      final err = jsonDecode(res.body);
+      return {'success': false, 'message': err['detail'] ?? 'Failed to submit re-registration request'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Request In-Person Face Registration Session with Class Advisor
+  static Future<Map<String, dynamic>> requestAdvisorEnrollmentSession({
+    required String token,
+    required String notes,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse("$API_URL/student/face-registration/request-advisor-session"),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'notes': notes}),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      return {'success': false, 'message': 'Failed to submit request'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Toggle Face Re-registration Permission for a student (Advisor / HOD / Admin)
+  static Future<Map<String, dynamic>> toggleStudentReregisterPermission({
+    required String token,
+    required String regNo,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse("$API_URL/api/v1/students/$regNo/toggle-reregister-permission"),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      final err = jsonDecode(res.body);
+      return {'success': false, 'message': err['detail'] ?? 'Failed to toggle permission'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Fetch list of Student Face Requests for Staff / Advisor / HOD / Admin
+  static Future<Map<String, dynamic>> getStaffStudentFaceRequests({
+    required String token,
+    String? status,
+    String? requestType,
+    String? search,
+    String? dept,
+    String? batch,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    try {
+      final queryParams = <String, String>{
+        'limit': limit.toString(),
+        'offset': offset.toString(),
+      };
+      if (status != null && status.isNotEmpty && status != 'ALL') {
+        queryParams['status'] = status;
+      }
+      if (requestType != null && requestType.isNotEmpty && requestType != 'ALL') {
+        queryParams['request_type'] = requestType;
+      }
+      if (search != null && search.trim().isNotEmpty) {
+        queryParams['search'] = search.trim();
+      }
+      if (dept != null && dept.isNotEmpty && dept != 'ALL') {
+        queryParams['dept'] = dept;
+      }
+      if (batch != null && batch.isNotEmpty && batch != 'ALL') {
+        queryParams['batch'] = batch;
+      }
+
+      final uri = Uri.parse("$API_URL/api/v1/staff/student-face-requests").replace(
+        queryParameters: queryParams,
+      );
+
+      final res = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      return {'success': false, 'requests': [], 'stats': {}};
+    } catch (e) {
+      debugPrint("Error fetching staff face requests: $e");
+      return {'success': false, 'requests': [], 'stats': {}, 'error': e.toString()};
+    }
+  }
+
+  /// Review (Approve / Reject) a Student Face Request (Advisor / HOD / Admin)
+  static Future<Map<String, dynamic>> reviewStudentFaceRequest({
+    required String token,
+    required int requestId,
+    required String action,
+    String? feedback,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse("$API_URL/api/v1/staff/student-face-requests/$requestId/review"),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'action': action.toUpperCase(),
+          'feedback': feedback ?? '',
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      final err = jsonDecode(res.body);
+      return {'success': false, 'message': err['detail'] ?? 'Failed to review request'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Bulk Review multiple Student Face Requests at once
+  static Future<Map<String, dynamic>> bulkReviewStudentFaceRequests({
+    required String token,
+    required List<int> requestIds,
+    required String action,
+    String? feedback,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse("$API_URL/api/v1/staff/student-face-requests/bulk-review"),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'request_ids': requestIds,
+          'action': action.toUpperCase(),
+          'feedback': feedback ?? '',
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body);
+      }
+      final err = jsonDecode(res.body);
+      return {'success': false, 'message': err['detail'] ?? 'Failed to bulk review requests'};
+    } catch (e) {
+      return {'success': false, 'message': e.toString()};
     }
   }
 }
