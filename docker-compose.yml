@@ -1,6 +1,7 @@
 # ==============================================================================
 # VisionGate / Attenda - Docker Compose Production Stack
 # Optimized for Ubuntu 24.04 LTS + NVIDIA GeForce RTX 5070 GPU (sm_120)
+# Supports Cloudflare DNS Proxy & Cloudflare Zero-Trust Tunnel
 # ==============================================================================
 
 services:
@@ -89,6 +90,22 @@ services:
       start_period: 10s
     networks:
       - attenda-network
+
+  # Optional Cloudflare Tunnel Service (Zero-Trust)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: attenda-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      nginx:
+        condition: service_healthy
+    networks:
+      - attenda-network
+    profiles:
+      - tunnel
 
 networks:
   attenda-network:
