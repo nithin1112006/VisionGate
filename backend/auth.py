@@ -1,66 +1,75 @@
 # Authentication and Authorization Module
 # Extracted from main.py for better organization
 
-from fastapi import HTTPException, Request
+import os
 import base64
 import bcrypt
-from datetime import datetime, timedelta
 import secrets
 import jwt
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
+from fastapi import HTTPException, Request
 
-# Import shared components
-from .database import db
-from .cache import _face_profile_cache
+import pg_adapter
+cursor = pg_adapter.cursor
 
-# JWT Configuration
-JWT_SECRET = "your-secret-key-change-in-production"  # Should be from environment
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
+# JWT Configuration - loaded from environment variables
+JWT_SECRET = os.environ.get("JWT_SECRET", "visiongate_default_jwt_secret_change_in_production")
+JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "24"))
+
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
+    """Hash a password using bcrypt."""
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
+
 def verify_password(password: str, hashed: str) -> bool:
-    """Verify a password against its hash"""
-    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    """Verify a password against its hash."""
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
 
 def create_jwt_token(user_data: dict) -> str:
-    """Create JWT token for user authentication"""
+    """Create JWT token for user authentication."""
     expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
     to_encode = user_data.copy()
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
+
 def verify_jwt_token(token: str) -> Optional[dict]:
-    """Verify and decode JWT token"""
+    """Verify and decode JWT token."""
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.PyJWTError:
         return None
 
+
 def extract_token_from_request(request: Request) -> Optional[str]:
-    """Extract token from request headers or query parameters"""
-    # Try Authorization header
+    """Extract token from request headers or query parameters."""
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]  # Remove "Bearer " prefix
+        return auth_header[7:]
 
-    # Try token in query parameters
     return request.query_params.get("token")
 
+
 def get_user_by_username(username: str):
-    """Get user by username"""
+    """Get user by username."""
     cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
     return cursor.fetchone()
 
+
 def get_user_by_reg_no(reg_no: str):
-    """Get user by registration number (case-insensitive)"""
+    """Get user by registration number (case-insensitive)."""
     cursor.execute("SELECT * FROM users WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
     return cursor.fetchone()
+
 
 # Other staff functions
 OTHER_STAFF_ROLES = (
@@ -71,17 +80,20 @@ OTHER_STAFF_ROLES = (
     "office_staff",
 )
 
+
 def get_other_staff_by_username(username: str):
-    """Get other_staff by username"""
+    """Get other_staff by username."""
     cursor.execute("SELECT * FROM other_staff WHERE username = ?", (username,))
     return cursor.fetchone()
 
+
 def get_other_staff_by_reg_no(reg_no: str):
-    """Get other_staff by registration number (case-insensitive)"""
+    """Get other_staff by registration number (case-insensitive)."""
     cursor.execute(
         "SELECT * FROM other_staff WHERE LOWER(reg_no) = LOWER(?)", (reg_no,)
     )
     return cursor.fetchone()
+
 
 def get_default_department_for_role(role: str) -> Optional[str]:
     """Return the default department for roles that should never have an empty department."""
@@ -94,21 +106,28 @@ def get_default_department_for_role(role: str) -> Optional[str]:
     }
     return role_defaults.get((role or "").strip().lower())
 
+
 # Authentication verification functions
 def verify_staff_token(request: Request) -> dict:
-    """Verify staff authentication token"""
+    """Verify staff authentication token."""
     token = extract_token_from_request(request)
     if not token:
         raise HTTPException(status_code=401, detail="Authentication token required")
 
-    # For demo purposes, accept base64 encoded username:password
+    # Accept base64 encoded username:password or JWT token
     try:
+        # Check JWT first
+        jwt_payload = verify_jwt_token(token)
+        if jwt_payload:
+            return jwt_payload
+
+        # Fallback to Base64 credential token
         decoded = base64.b64decode(token).decode("utf-8")
         username, password = decoded.split(":", 1)
 
         # Try users table first
         user = get_user_by_username(username)
-        if user and verify_password(password, user[2]):  # password_hash is at index 2
+        if user and verify_password(password, user[2]):
             return {
                 "id": user[0],
                 "username": user[1],
@@ -135,22 +154,25 @@ def verify_staff_token(request: Request) -> dict:
 
     raise HTTPException(status_code=401, detail="Invalid authentication token")
 
+
 def verify_admin_token(request: Request) -> dict:
-    """Verify admin authentication token"""
+    """Verify admin authentication token."""
     user = verify_staff_token(request)
     if user.get("role") not in ["admin", "hod"]:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+
 def verify_hod_token(request: Request) -> dict:
-    """Verify HOD authentication token"""
+    """Verify HOD authentication token."""
     user = verify_staff_token(request)
     if user.get("role") not in ["hod", "admin"]:
         raise HTTPException(status_code=403, detail="HOD access required")
     return user
 
+
 def verify_user_token(request: Request) -> Optional[dict]:
-    """Verify general user token (for any authenticated user)"""
+    """Verify general user token (for any authenticated user)."""
     try:
         return verify_staff_token(request)
     except HTTPException:

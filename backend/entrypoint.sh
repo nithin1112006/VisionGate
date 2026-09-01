@@ -17,11 +17,11 @@ PG_USER="${PG_USER:-attenda}"
 PG_DB="${PG_DB:-attenda}"
 PORT="${PORT:-8001}"
 
-echo "[1/3] Waiting for PostgreSQL database at ${PG_HOST}:${PG_PORT}..."
+echo "[1/4] Waiting for PostgreSQL database at ${PG_HOST}:${PG_PORT}..."
 MAX_RETRIES=60
 RETRY_COUNT=0
 
-until nc -z -v -w3 "$PG_HOST" "$PG_PORT" >/dev/null 2>&1; do
+until nc -z -w3 "$PG_HOST" "$PG_PORT" >/dev/null 2>&1; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
         echo "ERROR: Timed out waiting for PostgreSQL at ${PG_HOST}:${PG_PORT} after ${MAX_RETRIES} attempts." >&2
@@ -31,9 +31,12 @@ until nc -z -v -w3 "$PG_HOST" "$PG_PORT" >/dev/null 2>&1; do
     sleep 1
 done
 
-echo "  -> Database connection established successfully."
+echo "  -> Database network port is open and ready."
 
-echo "[2/3] Verifying Hardware & GPU Runtime Acceleration..."
+echo "[2/4] Executing Database Migrations & Initial Setup..."
+python3 run_migrations.py
+
+echo "[3/4] Verifying Hardware & GPU Runtime Acceleration..."
 python3 -c "
 import sys
 import torch
@@ -62,7 +65,7 @@ except Exception as e:
     print('  -> ONNX Runtime diagnostic warning:', e)
 "
 
-echo "[3/3] Launching Uvicorn Server on 0.0.0.0:${PORT}..."
+echo "[4/4] Launching Uvicorn Server on 0.0.0.0:${PORT}..."
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port "${PORT}" \

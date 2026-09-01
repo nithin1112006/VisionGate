@@ -75,6 +75,6 @@ EXPOSE 8001
 
 # Container healthcheck
 HEALTHCHECK --interval=20s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8001/ || exit 1
+    CMD curl -f http://localhost:8001/health || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]

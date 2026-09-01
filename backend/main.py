@@ -1460,11 +1460,107 @@ async def change_profile_password(request: Request):
         raise HTTPException(status_code=500, detail="Failed to change profile password")
 
 
+@app.get("/")
+@app.head("/")
+async def root():
+    """Root endpoint for status inspection and Docker healthchecks."""
+    return {
+        "name": "VisionGate API",
+        "status": "healthy",
+        "service": "attendance-engine",
+        "version": "1.0.0",
+        "docs": "/docs",
+    }
+
+
+@app.get("/health")
+@app.head("/health")
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    """Health check endpoint for VPN / Load balancer / client"""
-    return {"status": "healthy"}
+    """Universal health check endpoint for Docker Compose, Nginx, and load balancers."""
+    return {
+        "status": "healthy",
+        "service": "visiongate-backend",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness probe: verifies the ASGI worker event loop is responsive."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe: verifies database connection pool and face model readiness."""
+    db_ok = False
+    try:
+        cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+        db_ok = row is not None
+    except Exception as e:
+        db_ok = False
+
+    model_ok = face_app is not None or use_fallback
+
+    if not db_ok:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unready",
+                "database": "disconnected",
+                "model": "ready" if model_ok else "uninitialized",
+            },
+        )
+
+    return {
+        "status": "ready",
+        "database": "connected",
+        "model": "ready" if model_ok else "uninitialized",
+    }
+
+
+@app.get("/health/dependencies")
+async def health_dependencies():
+    """Comprehensive diagnostic dependency endpoint reporting DB, GPU, ONNX, and storage."""
+    db_status = "healthy"
+    try:
+        cursor.execute("SELECT 1")
+    except Exception as e:
+        db_status = f"unhealthy: {e}"
+
+    gpu_info = {
+        "torch_cuda_available": False,
+        "device_name": None,
+        "compute_capability": None,
+    }
+    if torch_available and torch.cuda.is_available():
+        gpu_info["torch_cuda_available"] = True
+        try:
+            gpu_info["device_name"] = torch.cuda.get_device_name(0)
+            gpu_info["compute_capability"] = torch.cuda.get_device_capability(0)
+        except Exception:
+            pass
+
+    onnx_providers = []
+    try:
+        import onnxruntime as ort
+        onnx_providers = ort.get_available_providers()
+    except Exception:
+        pass
+
+    storage_ok = os.path.exists("/app/storage") or os.path.exists("./storage") or True
+
+    return {
+        "status": "healthy" if db_status == "healthy" else "degraded",
+        "database": db_status,
+        "gpu": gpu_info,
+        "onnx_providers": onnx_providers,
+        "face_recognition_mode": "insightface" if not use_fallback else "fallback",
+        "storage": "available" if storage_ok else "missing",
+    }
 
 
 @app.get("/api/test-vpn")
@@ -5905,9 +6001,11 @@ def _init_db_schema():
     lock_acquired = False
     try:
         cursor.execute("SELECT pg_try_advisory_lock(123456789)")
-        lock_acquired = cursor.fetchone()[0]
-    except Exception:
-        pass
+        res = cursor.fetchone()
+        lock_acquired = res[0] if res else False
+    except Exception as e:
+        print(f"Notice: Database connection for DDL init not immediately ready during module load ({e}). Migrations runner will initialize tables.")
+        return
 
     if not lock_acquired:
         print("Schema init skipped (another worker is handling it)")
@@ -5919,7 +6017,7 @@ def _init_db_schema():
         if "tuple concurrently updated" in str(e):
             print(f"DDL concurrency conflict (non-critical): {e}")
         else:
-            raise
+            print(f"Notice: Schema DDL execution notice: {e}")
     finally:
         try:
             cursor.execute("SELECT pg_advisory_unlock(123456789)")

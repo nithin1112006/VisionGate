@@ -25,7 +25,7 @@ def run():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS student_academic_day_status (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             student_reg_no VARCHAR(64) NOT NULL,
             date DATE NOT NULL,
             day_type VARCHAR(30) NOT NULL DEFAULT 'NORMAL',

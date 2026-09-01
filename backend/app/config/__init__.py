@@ -15,11 +15,32 @@ class Settings(BaseSettings):
     # Database settings
     PG_HOST: str = Field(default="localhost")
     PG_PORT: int = Field(default=5432)
-    PG_USER: str = Field(default="postgres")
-    PG_PASSWORD: str = Field(default="")
+    PG_USER: str = Field(default="attenda")
+    PG_PASSWORD: str = Field(default="attenda_password")
     PG_DB: str = Field(default="attenda")
     PG_POOL_MIN_SIZE: int = Field(default=5)
     PG_POOL_MAX_SIZE: int = Field(default=20)
+
+    # Database alias properties for backward/migration compatibility
+    @property
+    def DB_HOST(self) -> str:
+        return self.PG_HOST
+
+    @property
+    def DB_PORT(self) -> int:
+        return self.PG_PORT
+
+    @property
+    def DB_USER(self) -> str:
+        return self.PG_USER
+
+    @property
+    def DB_PASSWORD(self) -> str:
+        return self.PG_PASSWORD
+
+    @property
+    def DB_NAME(self) -> str:
+        return self.PG_DB
 
     # Redis settings
     REDIS_HOST: str = Field(default="localhost")
@@ -28,13 +49,14 @@ class Settings(BaseSettings):
     REDIS_DB: int = Field(default=0)
 
     # Security settings
-    SECRET_KEY: str = Field(default="")
+    SECRET_KEY: str = Field(default="visiongate_default_jwt_secret_change_in_production")
+    JWT_SECRET: Optional[str] = Field(default=None)
     ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
     # App settings
-    APP_ENV: str = Field(default="development")
-    DEBUG: bool = Field(default=True)
+    APP_ENV: str = Field(default="production")
+    DEBUG: bool = Field(default=False)
     LOG_LEVEL: str = Field(default="INFO")
     WORKERS: int = Field(default=4)
 
@@ -62,7 +84,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_BURST: int = Field(default=10)
 
     # Paths
-    MODELS_DIR: str = Field(default_factory=lambda: os.path.expanduser("~/.insightface/models"))
+    MODELS_DIR: str = Field(default_factory=lambda: os.environ.get("INSIGHTFACE_HOME", os.path.expanduser("~/.insightface")))
 
     @property
     def database_url(self) -> str:

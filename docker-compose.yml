@@ -63,7 +63,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8001/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

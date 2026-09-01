@@ -19,11 +19,11 @@ async def backfill_attendance_values():
     """Recalculate attendance values for all existing records."""
     
     conn = await asyncpg.connect(
-        host=settings.DB_HOST,
-        port=settings.DB_PORT,
-        database=settings.DB_NAME,
-        user=settings.DB_USER,
-        password=settings.DB_PASSWORD
+        host=settings.PG_HOST,
+        port=settings.PG_PORT,
+        database=settings.PG_DB,
+        user=settings.PG_USER,
+        password=settings.PG_PASSWORD
     )
     
     try:
