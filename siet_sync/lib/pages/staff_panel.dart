@@ -467,6 +467,12 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
         label: 'Students',
         sectionHeader: 'Academic & Teaching',
       ),
+      if (_isKioskEnabled)
+        const NavDestination(
+          icon: Icons.storefront_outlined,
+          selectedIcon: Icons.storefront,
+          label: 'Kiosk',
+        ),
       const NavDestination(
         icon: Icons.calendar_month_outlined,
         selectedIcon: Icons.calendar_month_rounded,
@@ -478,11 +484,12 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
         label: 'My Face',
         sectionHeader: 'Leave & Biometrics',
       ),
-      const NavDestination(
-        icon: Icons.verified_user_outlined,
-        selectedIcon: Icons.verified_user_rounded,
-        label: 'Permissions',
-      ),
+      if (_isKioskEnabled)
+        const NavDestination(
+          icon: Icons.verified_user_outlined,
+          selectedIcon: Icons.verified_user_rounded,
+          label: 'Permissions',
+        ),
       const NavDestination(
         icon: Icons.event_note_outlined,
         selectedIcon: Icons.event_note_rounded,
@@ -542,20 +549,14 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
         sectionHeader: 'System',
       ),
     ];
-    if (_isKioskEnabled) {
-      list.insert(
-        3,
-        const NavDestination(
-          icon: Icons.storefront_outlined,
-          selectedIcon: Icons.storefront,
-          label: 'Kiosk',
-        ),
-      );
-    }
     return list;
   }
 
   void _rebuildPages() {
+    final currentTitle = (_titles.isNotEmpty && _selectedIndex < _titles.length)
+        ? _titles[_selectedIndex]
+        : null;
+
     _titles.clear();
     _pages.clear();
 
@@ -598,9 +599,21 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
       ),
     );
 
+    _titles.add('My Face');
+    _pages.add(StaffFaceRegisterTab(token: widget.token, user: widget.user));
+
+    if (_isKioskEnabled) {
+      _titles.add('Student Permissions');
+      _pages.add(
+        StaffStudentPermissionsWidget(
+          staffRegNo: (widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString(),
+          staffDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
+          sessionToken: widget.token,
+        ),
+      );
+    }
+
     _titles.addAll([
-      'My Face',
-      'Student Permissions',
       'Staff Leave',
       'Student Leave & OD Endorsements',
       'Student Face Requests',
@@ -615,12 +628,6 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
     ]);
 
     _pages.addAll([
-      StaffFaceRegisterTab(token: widget.token, user: widget.user),
-      StaffStudentPermissionsWidget(
-        staffRegNo: (widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString(),
-        staffDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
-        sessionToken: widget.token,
-      ),
       StaffLeaveRequestTab(token: widget.token),
       StudentLeaveODManagementTab(
         token: widget.token,
@@ -668,6 +675,18 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
       ),
       UserSettingsTab(title: 'Staff Settings', token: widget.token),
     ]);
+
+    // Restore selected tab by matching title, or safely reset to Dashboard if the tab was removed
+    if (currentTitle != null) {
+      final newIndex = _titles.indexOf(currentTitle);
+      if (newIndex != -1) {
+        _selectedIndex = newIndex;
+      } else {
+        _selectedIndex = 0;
+      }
+    } else if (_selectedIndex >= _pages.length) {
+      _selectedIndex = 0;
+    }
   }
 
 
@@ -723,19 +742,17 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (mounted) {
-          setState(() {
-            _isKioskEnabled = data['kiosk_enabled'] == true;
-            _rebuildPages();
-          });
+          final bool newKioskStatus = data['kiosk_enabled'] == true;
+          if (_isKioskEnabled != newKioskStatus) {
+            setState(() {
+              _isKioskEnabled = newKioskStatus;
+              _rebuildPages();
+            });
+          }
         }
       }
     } catch (_) {
-      if (mounted && !_isKioskEnabled) {
-        setState(() {
-          _isKioskEnabled = true;
-          _rebuildPages();
-        });
-      }
+      // Retain current kiosk setting on connection drop
     }
   }
 
@@ -743,6 +760,7 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _isKioskEnabled = widget.user['kiosk_enabled'] != false;
     _rebuildPages();
     _checkKioskPermission();
     _checkOfflineViolations();
@@ -795,11 +813,13 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
     final iOSBlue = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    final safeIndex = (_selectedIndex >= 0 && _selectedIndex < _pages.length) ? _selectedIndex : 0;
+
     final scaffold = AdaptiveScaffold(
-      title: _titles.isNotEmpty && _selectedIndex < _titles.length
-          ? _titles[_selectedIndex]
+      title: _titles.isNotEmpty && safeIndex < _titles.length
+          ? _titles[safeIndex]
           : 'Staff Panel',
-      selectedIndex: _selectedIndex < _navDestinations.length ? _selectedIndex : 0,
+      selectedIndex: safeIndex < _navDestinations.length ? safeIndex : 0,
       onDestinationSelected: (index) {
         _onTabSelected(index);
       },
@@ -880,9 +900,10 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
             ),
           ],
           Positioned.fill(
-            child: (_pages[_selectedIndex] is StaffMultiUserKioskTab ||
-                    _pages[_selectedIndex] is StaffStudentPermissionsWidget)
-                ? _pages[_selectedIndex]
+            child: (_pages.isNotEmpty &&
+                    (_pages[safeIndex] is StaffMultiUserKioskTab ||
+                     _pages[safeIndex] is StaffStudentPermissionsWidget))
+                ? _pages[safeIndex]
                 : RefreshIndicator(
                     onRefresh: () async {
                       setState(() {
@@ -891,7 +912,7 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
                       await Future.delayed(const Duration(milliseconds: 100));
                     },
                     color: iOSBlue,
-                    child: _pages[_selectedIndex],
+                    child: _pages.isNotEmpty ? _pages[safeIndex] : const SizedBox.shrink(),
                   ),
           ),
         ],
@@ -1218,20 +1239,25 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
         DrawerItem(index: 5, icon: Icons.face_rounded, title: 'My Face'),
         DrawerItem(
           index: 6,
+          icon: Icons.verified_user_rounded,
+          title: 'Permissions',
+        ),
+        DrawerItem(
+          index: 7,
           icon: Icons.event_note_rounded,
           title: 'Leave Requests',
         ),
         DrawerItem(
-          index: 7,
+          index: 10,
           icon: Icons.history_edu_rounded,
           title: 'Attendance Log',
         ),
         DrawerItem(
-          index: 8,
+          index: 11,
           icon: Icons.person_search_rounded,
           title: 'Student Log',
         ),
-        DrawerItem(index: 15, icon: Icons.settings_rounded, title: 'Settings'),
+        DrawerItem(index: 17, icon: Icons.settings_rounded, title: 'Settings'),
       ];
     }
     return const [
@@ -1257,16 +1283,16 @@ class _StaffDashboardTabState extends State<StaffDashboardTab> {
         title: 'Leave Requests',
       ),
       DrawerItem(
-        index: 6,
+        index: 8,
         icon: Icons.history_edu_rounded,
         title: 'Attendance Log',
       ),
       DrawerItem(
-        index: 7,
+        index: 9,
         icon: Icons.person_search_rounded,
         title: 'Student Log',
       ),
-      DrawerItem(index: 14, icon: Icons.settings_rounded, title: 'Settings'),
+      DrawerItem(index: 15, icon: Icons.settings_rounded, title: 'Settings'),
     ];
   }
 

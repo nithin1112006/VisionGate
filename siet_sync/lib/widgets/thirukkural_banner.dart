@@ -17,13 +17,23 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
   @override
   void initState() {
     super.initState();
+    _isLoading = AppSettings.enableThirukkural;
     _initAndLoad();
   }
 
   Future<void> _initAndLoad() async {
+    await AppSettings.hydrateThirukkuralFlag();
+    if (!AppSettings.enableThirukkural) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+      return;
+    }
     await AppSettings.loadSettings();
-    if (mounted) {
+    if (mounted && AppSettings.enableThirukkural) {
       await _loadDailyKural();
+    } else if (mounted) {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -41,16 +51,18 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
         // Use modulo to cycle through the 1330 kurals
         final int kuralIndex = daysSinceEpoch % kurals.length;
 
-        setState(() {
-          _dailyKural = kurals[kuralIndex];
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _dailyKural = kurals[kuralIndex];
+            _isLoading = false;
+          });
+        }
       } else {
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
       }
     } catch (e) {
       debugPrint('Error loading Thirukkural: $e');
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -61,6 +73,10 @@ class _ThirukkuralBannerState extends State<ThirukkuralBanner> {
       builder: (context, enabled, child) {
         if (!enabled) {
           return const SizedBox.shrink();
+        }
+
+        if (_dailyKural == null && !_isLoading) {
+          _loadDailyKural();
         }
 
         if (_isLoading) {

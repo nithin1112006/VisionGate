@@ -23149,6 +23149,18 @@ def grant_student_permission(req: GrantPermissionRequest, request: Request):
     grantor_reg_no = grantor["reg_no"]
     grantee_reg_no = req.grantee_staff_reg_no.strip()
 
+    # Kiosk mode check: permissions are tied to kiosk attendance capability
+    global_kiosk = _app_settings.get("multi_user_kiosk_mode", True)
+    if not global_kiosk:
+        raise HTTPException(status_code=403, detail="Multi-user kiosk mode is disabled by administrator")
+
+    cursor.execute("SELECT kiosk_enabled FROM users WHERE LOWER(reg_no) = LOWER(?)", (grantor_reg_no,))
+    k_row = cursor.fetchone()
+    if k_row:
+        val = k_row.get("kiosk_enabled") if isinstance(k_row, dict) else k_row[0]
+        if val is False or val == 0 or val == "0":
+            raise HTTPException(status_code=403, detail="Kiosk mode capability is disabled for your account")
+
     if grantor_reg_no.lower() == grantee_reg_no.lower():
         raise HTTPException(status_code=400, detail="Cannot delegate permissions to yourself")
 

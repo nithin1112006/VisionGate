@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/college_ip_config.dart';
 import 'vpn_check.dart';
 
@@ -19,14 +20,47 @@ class AppSettings {
   static bool _isLoaded = false;
   static DateTime? _lastLoaded;
   static const Duration _cacheExpiry = Duration(seconds: 10);
+  static const String _prefThirukkuralKey = 'app_config_enable_thirukkural';
 
-  static void updateThirukkural(bool value) {
+  /// Persist the Thirukkural flag locally and notify all listeners
+  static Future<void> persistThirukkuralFlag(bool value) async {
     enableThirukkural = value;
     thirukkuralNotifier.value = value;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefThirukkuralKey, value);
+    } catch (e) {
+      debugPrint('[AppSettings] Failed to persist Thirukkural flag: $e');
+    }
+  }
+
+  /// Hydrate the Thirukkural flag from local storage immediately
+  static Future<bool> hydrateThirukkuralFlag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.containsKey(_prefThirukkuralKey)) {
+        final saved = prefs.getBool(_prefThirukkuralKey) ?? true;
+        enableThirukkural = saved;
+        thirukkuralNotifier.value = saved;
+        return saved;
+      }
+    } catch (e) {
+      debugPrint('[AppSettings] Failed to hydrate Thirukkural flag: $e');
+    }
+    return enableThirukkural;
+  }
+
+  static void updateThirukkural(bool value) {
+    persistThirukkuralFlag(value);
   }
 
   /// Fetch settings from server
   static Future<void> loadSettings({bool forceRefresh = false}) async {
+    // Hydrate cached local flag first so offline / cold boot state is respected
+    if (!_isLoaded) {
+      await hydrateThirukkuralFlag();
+    }
+
     if (_isLoaded && !forceRefresh) {
       if (_lastLoaded != null &&
           DateTime.now().difference(_lastLoaded!) < _cacheExpiry) {
@@ -38,13 +72,7 @@ class AppSettings {
       final url = '${CollegeIPConfig.defaultURL}/settings/allow_any_network';
       final response = await http
           .get(Uri.parse(url))
-          .timeout(
-            const Duration(seconds: 3),
-            onTimeout: () => http.Response(
-              '{"allow_any_network": false, "college_ssid": "", "enforce_geo_fence": true, "enforce_app_geo_fence": true, "enforce_vpn_blocking": true, "multi_user_kiosk_mode": false, "enable_thirukkural": true}',
-              200,
-            ),
-          );
+          .timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final data = Map<String, dynamic>.from(
@@ -56,19 +84,16 @@ class AppSettings {
         enforceAppGeoFence = data['enforce_app_geo_fence'] ?? true;
         enforceVpnBlocking = data['enforce_vpn_blocking'] ?? true;
         multiUserKioskMode = data['multi_user_kiosk_mode'] ?? false;
-        enableThirukkural = data['enable_thirukkural'] ?? true;
-        thirukkuralNotifier.value = enableThirukkural;
+        
+        if (data.containsKey('enable_thirukkural')) {
+          final serverVal = data['enable_thirukkural'] == true;
+          await persistThirukkuralFlag(serverVal);
+        }
       }
     } catch (e) {
+      // Offline / network failure: keep the persisted local flag; do not clobber with hardcoded true
       if (!_isLoaded) {
-        allowAnyNetwork = false;
-        collegeSSID = '';
-        enforceGeoFence = true;
-        enforceAppGeoFence = true;
-        enforceVpnBlocking = true;
-        multiUserKioskMode = false;
-        enableThirukkural = true;
-        thirukkuralNotifier.value = true;
+        await hydrateThirukkuralFlag();
       }
     }
     _isLoaded = true;
