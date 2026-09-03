@@ -138,7 +138,7 @@ class _DayManagementDialogState extends State<DayManagementDialog> with SingleTi
     try {
       // 1. Fetch current config first to preserve timings & breaks
       final getRes = await http.get(
-        Uri.parse('${CollegeIPConfig.defaultURL}/api/v1/academics/period-config?dept=${Uri.encodeComponent(widget.dept)}'),
+        Uri.parse('${CollegeIPConfig.defaultURL}/api/v1/academics/period-config?dept=${Uri.encodeComponent(widget.dept)}&batch=${Uri.encodeComponent(widget.batch)}&semester=${widget.semester}&section=${Uri.encodeComponent(widget.section)}'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       Map<String, dynamic> existing = {};
@@ -151,6 +151,10 @@ class _DayManagementDialogState extends State<DayManagementDialog> with SingleTi
         headers: {'Authorization': 'Bearer ${widget.token}', 'Content-Type': 'application/json'},
         body: jsonEncode({
           'dept': widget.dept,
+          'batch': widget.batch,
+          'semester': widget.semester,
+          'section': widget.section,
+          'scope': 'class',
           'semester_type': 'all',
           'start_time': existing['start_time'] ?? '08:45',
           'total_periods': existing['total_periods'] ?? 7,
@@ -347,13 +351,15 @@ class _DayManagementDialogState extends State<DayManagementDialog> with SingleTi
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.of(context).size.width < 640;
 
     return Dialog(
       backgroundColor: AdminColors.getCard(isDark),
+      insetPadding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
-        width: 580,
-        padding: const EdgeInsets.all(24),
+        width: isMobile ? double.infinity : 580,
+        padding: EdgeInsets.all(isMobile ? 16 : 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

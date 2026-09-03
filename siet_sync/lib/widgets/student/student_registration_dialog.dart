@@ -83,10 +83,227 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
   String _selectedQuota = "Govt";
   final _mentorCtrl = TextEditingController();
 
+  // Comprehensive Indian States & Districts mapping (State -> District)
+  static const Map<String, List<String>> indianStatesAndDistricts = {
+    'Tamil Nadu': [
+      'Ariyalur',
+      'Chengalpattu',
+      'Chennai',
+      'Coimbatore',
+      'Cuddalore',
+      'Dharmapuri',
+      'Dindigul',
+      'Erode',
+      'Kallakurichi',
+      'Kanchipuram',
+      'Kanyakumari',
+      'Karur',
+      'Krishnagiri',
+      'Madurai',
+      'Mayiladuthurai',
+      'Nagapattinam',
+      'Namakkal',
+      'Nilgiris',
+      'Perambalur',
+      'Pudukkottai',
+      'Ramanathapuram',
+      'Ranipet',
+      'Salem',
+      'Sivaganga',
+      'Tenkasi',
+      'Thanjavur',
+      'Theni',
+      'Thoothukudi',
+      'Tiruchirappalli',
+      'Tirunelveli',
+      'Tirupathur',
+      'Tiruppur',
+      'Tiruvallur',
+      'Tiruvannamalai',
+      'Tiruvarur',
+      'Vellore',
+      'Viluppuram',
+      'Virudhunagar',
+    ],
+    'Kerala': [
+      'Alappuzha',
+      'Ernakulam',
+      'Idukki',
+      'Kannur',
+      'Kasaragod',
+      'Kollam',
+      'Kottayam',
+      'Kozhikode',
+      'Malappuram',
+      'Palakkad',
+      'Pathanamthitta',
+      'Thiruvananthapuram',
+      'Thrissur',
+      'Wayanad',
+    ],
+    'Karnataka': [
+      'Bagalkot',
+      'Ballari',
+      'Belagavi',
+      'Bengaluru Rural',
+      'Bengaluru Urban',
+      'Bidar',
+      'Chamarajanagar',
+      'Chikkaballapur',
+      'Chikkamagaluru',
+      'Chitradurga',
+      'Dakshina Kannada',
+      'Davanagere',
+      'Dharwad',
+      'Gadag',
+      'Hassan',
+      'Haveri',
+      'Kalaburagi',
+      'Kodagu',
+      'Kolar',
+      'Koppal',
+      'Mandya',
+      'Mysuru',
+      'Raichur',
+      'Ramanagara',
+      'Shivamogga',
+      'Tumakuru',
+      'Udupi',
+      'Uttara Kannada',
+      'Vijayapura',
+      'Yadgir',
+    ],
+    'Andhra Pradesh': [
+      'Alluri Sitharama Raju',
+      'Anakapalli',
+      'Ananthapuramu',
+      'Annamayya',
+      'Bapatla',
+      'Chittoor',
+      'Dr. B.R. Ambedkar Konaseema',
+      'East Godavari',
+      'Eluru',
+      'Guntur',
+      'Kakinada',
+      'Krishna',
+      'Kurnool',
+      'Nandyal',
+      'NTR',
+      'Palnadu',
+      'Parvathipuram Manyam',
+      'Prakasam',
+      'SPSR Nellore',
+      'Sri Sathya Sai',
+      'Srikakulam',
+      'Tirupati',
+      'Visakhapatnam',
+      'Vizianagaram',
+      'West Godavari',
+      'YSR Kadapa',
+    ],
+    'Telangana': [
+      'Adilabad',
+      'Bhadradri Kothagudem',
+      'Hyderabad',
+      'Jagtial',
+      'Jangaon',
+      'Jayashankar Bhupalpally',
+      'Jogulamba Gadwal',
+      'Kamareddy',
+      'Karimnagar',
+      'Khammam',
+      'Kumuram Bheem Asifabad',
+      'Mahabubabad',
+      'Mahabubnagar',
+      'Mancherial',
+      'Medak',
+      'Medchal-Malkajgiri',
+      'Mulugu',
+      'Nagarkurnool',
+      'Nalgonda',
+      'Narayanpet',
+      'Nirmal',
+      'Nizamabad',
+      'Peddapalli',
+      'Rajanna Sircilla',
+      'Ranga Reddy',
+      'Sangareddy',
+      'Siddipet',
+      'Suryapet',
+      'Vikarabad',
+      'Wanaparthy',
+      'Warangal',
+      'Hanamkonda',
+      'Yadadri Bhuvanagiri',
+    ],
+    'Maharashtra': [
+      'Ahmednagar',
+      'Akola',
+      'Amravati',
+      'Aurangabad',
+      'Beed',
+      'Bhandara',
+      'Buldhana',
+      'Chandrapur',
+      'Dhule',
+      'Gadchiroli',
+      'Gondia',
+      'Hingoli',
+      'Jalgaon',
+      'Jalna',
+      'Kolhapur',
+      'Latur',
+      'Mumbai City',
+      'Mumbai Suburban',
+      'Nagpur',
+      'Nanded',
+      'Nandurbar',
+      'Nashik',
+      'Osmanabad',
+      'Palghar',
+      'Parbhani',
+      'Pune',
+      'Raigad',
+      'Ratnagiri',
+      'Sangli',
+      'Satara',
+      'Sindhudurg',
+      'Solapur',
+      'Thane',
+      'Wardha',
+      'Washim',
+      'Yavatmal',
+    ],
+    'Puducherry': [
+      'Karaikal',
+      'Mahe',
+      'Puducherry',
+      'Yanam',
+    ],
+    'Delhi': [
+      'Central Delhi',
+      'East Delhi',
+      'New Delhi',
+      'North Delhi',
+      'North East Delhi',
+      'North West Delhi',
+      'Shahdara',
+      'South Delhi',
+      'South East Delhi',
+      'South West Delhi',
+      'West Delhi',
+    ],
+    'Other States': [
+      'Other District',
+    ],
+  };
+
   // Step 2: Personal & Guardian Controllers
   DateTime _selectedDob = DateTime(2004, 6, 15);
   String _selectedGender = "Male";
   String _selectedBloodGroup = "O+";
+  String _selectedState = "Tamil Nadu";
+  String _selectedDistrict = "Coimbatore";
   final _phoneCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _fatherNameCtrl = TextEditingController();
@@ -251,11 +468,24 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     if ((stu['permanent_address'] ?? stu['address'] ?? '').toString().isNotEmpty) {
       _addressCtrl.text = (stu['permanent_address'] ?? stu['address']).toString();
     }
+    if ((stu['state'] ?? '').toString().isNotEmpty) {
+      final s = stu['state'].toString();
+      if (indianStatesAndDistricts.containsKey(s)) {
+        _selectedState = s;
+      }
+      _stateCtrl.text = s;
+    }
+    if ((stu['district'] ?? stu['city'] ?? '').toString().isNotEmpty) {
+      final d = (stu['district'] ?? stu['city']).toString();
+      final dists = indianStatesAndDistricts[_selectedState] ?? [];
+      if (dists.contains(d)) {
+        _selectedDistrict = d;
+      } else if (dists.isNotEmpty) {
+        _selectedDistrict = dists.first;
+      }
+    }
     if ((stu['city'] ?? '').toString().isNotEmpty) {
       _cityCtrl.text = stu['city'].toString();
-    }
-    if ((stu['state'] ?? '').toString().isNotEmpty) {
-      _stateCtrl.text = stu['state'].toString();
     }
     if ((stu['pincode'] ?? '').toString().isNotEmpty) {
       _pincodeCtrl.text = stu['pincode'].toString();
@@ -496,8 +726,9 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
       "permanent_address": _addressCtrl.text.trim().isEmpty
           ? null
           : _addressCtrl.text.trim(),
-      "city": _cityCtrl.text.trim().isEmpty ? null : _cityCtrl.text.trim(),
-      "state": _stateCtrl.text.trim(),
+      "state": _selectedState,
+      "district": _selectedDistrict,
+      "city": _cityCtrl.text.trim().isEmpty ? _selectedDistrict : _cityCtrl.text.trim(),
       "pincode":
           _pincodeCtrl.text.trim().isEmpty ? null : _pincodeCtrl.text.trim(),
       "custom_password": _customPasswordCtrl.text.trim().isEmpty
@@ -1314,10 +1545,71 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
             Row(
               children: [
                 Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedState,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'State *',
+                      prefixIcon: Icon(Icons.map_outlined),
+                    ),
+                    items: indianStatesAndDistricts.keys
+                        .map((st) => DropdownMenuItem(
+                              value: st,
+                              child: Text(st, overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          _selectedState = val;
+                          final dists = indianStatesAndDistricts[val] ?? [];
+                          if (!dists.contains(_selectedDistrict)) {
+                            _selectedDistrict = dists.isNotEmpty ? dists.first : '';
+                          }
+                          _stateCtrl.text = val;
+                        });
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: (indianStatesAndDistricts[_selectedState] ?? []).contains(_selectedDistrict)
+                        ? _selectedDistrict
+                        : ((indianStatesAndDistricts[_selectedState] ?? []).isNotEmpty
+                            ? (indianStatesAndDistricts[_selectedState] ?? []).first
+                            : null),
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'District *',
+                      prefixIcon: Icon(Icons.location_on_outlined),
+                    ),
+                    items: (indianStatesAndDistricts[_selectedState] ?? [])
+                        .map((dist) => DropdownMenuItem(
+                              value: dist,
+                              child: Text(dist, overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          _selectedDistrict = val;
+                        });
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
                   child: TextFormField(
                     controller: _cityCtrl,
                     decoration: const InputDecoration(
-                      labelText: 'City',
+                      labelText: 'City / Town',
                       prefixIcon: Icon(Icons.location_city_outlined),
                     ),
                   ),
@@ -1603,6 +1895,7 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                 _buildSummaryRow('Batch / Sem / Sec',
                     '$_selectedBatch | Sem $_selectedSemester | Sec $_selectedSection'),
                 _buildSummaryRow('Class Advisor', _getAdvisorDisplayName(_mentorCtrl.text)),
+                _buildSummaryRow('State & District', '$_selectedState → $_selectedDistrict'),
                 _buildSummaryRow('Parent Contact', _parentPhoneCtrl.text),
                 _buildSummaryRow(
                     'Face Samples',

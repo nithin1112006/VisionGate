@@ -40,7 +40,7 @@ def apply_performance_indexes():
         """),
         ("idx_sa_reg_date_session", """
             CREATE INDEX IF NOT EXISTS idx_sa_reg_date_session 
-            ON student_attendance (student_reg_no, date, session)
+            ON student_attendance (reg_no, date)
         """),
         ("idx_sa_date_period", """
             CREATE INDEX IF NOT EXISTS idx_sa_date_period 
@@ -50,7 +50,7 @@ def apply_performance_indexes():
         # Face embeddings
         ("idx_sfe_reg_lower", """
             CREATE INDEX IF NOT EXISTS idx_sfe_reg_lower 
-            ON student_face_embeddings (LOWER(student_reg_no))
+            ON student_face_embeddings (LOWER(reg_no))
         """),
 
         # Timetable slots

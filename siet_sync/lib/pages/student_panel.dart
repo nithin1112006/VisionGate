@@ -191,6 +191,9 @@ class _StudentDashboardPageState extends State<StudentDashboardPage> with Widget
     } else if (state == AppLifecycleState.resumed) {
       _pollActiveClassSession();
       _startSessionPollTimer();
+      if (!kIsWeb) {
+        LocationTrackingService.instance.ensureTrackingActive();
+      }
     }
   }
 
@@ -439,7 +442,6 @@ class _StudentDashboardPageState extends State<StudentDashboardPage> with Widget
     _sessionPollTimer?.cancel();
     if (!kIsWeb) {
       _warningSub?.cancel();
-      LocationTrackingService.instance.stopTracking();
     }
     super.dispose();
   }
@@ -2340,6 +2342,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
             ),
           );
           widget.onAttendanceMarked();
+          LocationTrackingService.instance.onAttendanceMarked();
         }
       } else {
         if (mounted) {

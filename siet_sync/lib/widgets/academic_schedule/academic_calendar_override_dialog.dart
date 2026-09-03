@@ -177,12 +177,15 @@ class _AcademicCalendarOverrideDialogState
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final dateStr = DateFormat('EEEE, d MMMM yyyy').format(_selectedDate);
 
+    final isMobile = MediaQuery.of(context).size.width < 580;
+
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      insetPadding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24, vertical: 24),
       child: Container(
-        width: 520,
-        padding: const EdgeInsets.all(24),
+        width: isMobile ? double.infinity : 520,
+        padding: EdgeInsets.all(isMobile ? 16 : 24),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

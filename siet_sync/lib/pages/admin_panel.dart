@@ -18315,13 +18315,43 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
   bool _onlyBreaches = false;
   DateTime _selectedDate = DateTime.now();
 
+  // Multi-user trails & date awareness
+  Map<String, List<LatLng>> _allUserTrails = {};
+  bool _isLoadingAllTrails = false;
+  List<List<LatLng>> _campusPolygons = [];
+  String _filterRole = 'all'; // 'all', 'today', 'students', 'staff'
+
+  bool get _isViewingToday {
+    final now = DateTime.now();
+    return _selectedDate.year == now.year &&
+        _selectedDate.month == now.month &&
+        _selectedDate.day == now.day;
+  }
+
+  Color _colorForRegNo(String regNo) {
+    const palette = [
+      Color(0xFF0284C7), // sky
+      Color(0xFF0D9488), // teal
+      Color(0xFFF59E0B), // amber
+      Color(0xFF8B5CF6), // violet
+      Color(0xFFEC4899), // pink
+      Color(0xFF10B981), // emerald
+      Color(0xFF6366F1), // indigo
+      Color(0xFFF97316), // orange
+    ];
+    final hash = regNo.hashCode.abs();
+    return palette[hash % palette.length];
+  }
+
   @override
   void initState() {
     super.initState();
     _filteredLocations = [];
     _fetchLocations();
     _refreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
-      _fetchLocations(silent: true);
+      if (_isViewingToday) {
+        _fetchLocations(silent: true);
+      }
     });
   }
 
@@ -18332,6 +18362,42 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
     super.dispose();
   }
 
+  Future<void> _fetchAllTrailsForDate(DateTime date) async {
+    final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+    setState(() => _isLoadingAllTrails = true);
+    try {
+      final response = await apiClient.get(
+        '$API_URL/admin/locations/all-trails?date=$dateStr&limit_per_user=250',
+        token: widget.token,
+      );
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        final trails = body['trails'] as List? ?? [];
+        final Map<String, List<LatLng>> parsedTrails = {};
+        for (final t in trails) {
+          final reg = t['reg_no']?.toString();
+          final pts = (t['points'] as List? ?? []).map((p) {
+            double? lat = double.tryParse(p['latitude'].toString());
+            double? lng = double.tryParse(p['longitude'].toString());
+            if (lat != null && lng != null) return LatLng(lat, lng);
+            return null;
+          }).whereType<LatLng>().toList();
+          if (reg != null && pts.isNotEmpty) {
+            parsedTrails[reg] = pts;
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _allUserTrails = parsedTrails;
+          });
+        }
+      }
+    } catch (_) {}
+    finally {
+      if (mounted) setState(() => _isLoadingAllTrails = false);
+    }
+  }
+
   Future<void> _fetchLocations({bool silent = false}) async {
     if (!silent) {
       setState(() {
@@ -18340,17 +18406,42 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
       });
     }
 
+    final dateStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}";
+    final dateQuery = _isViewingToday ? '' : '&date=$dateStr';
+
     try {
       final response = await apiClient.get(
-        '$API_URL/admin/locations/live?include_stale=true&inside_outer_only=false',
+        '$API_URL/admin/locations/live?include_stale=true&inside_outer_only=false$dateQuery',
         token: widget.token,
       );
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (mounted) {
+          List<List<LatLng>> parsedCampus = [];
+          if (body['campus_polygons'] is List) {
+            final rawPolys = body['campus_polygons'] as List;
+            parsedCampus = rawPolys.map((poly) {
+              if (poly is List) {
+                return poly.map((pt) {
+                  if (pt is List && pt.length >= 2) {
+                    final lat = double.tryParse(pt[0].toString());
+                    final lng = double.tryParse(pt[1].toString());
+                    if (lat != null && lng != null) return LatLng(lat, lng);
+                  }
+                  return null;
+                }).whereType<LatLng>().toList();
+              }
+              return <LatLng>[];
+            }).where((p) => p.isNotEmpty).toList();
+          }
+          if (parsedCampus.isEmpty) {
+            parsedCampus = CollegeIPConfig.geoFencePolygons.map((p) => p.map((pt) => LatLng(pt[0], pt[1])).toList()).toList();
+          }
+
           setState(() {
             _locations = body['locations'] ?? [];
+            _campusPolygons = parsedCampus;
             _filterLocations();
             _isLoading = false;
             _error = null;
@@ -18386,8 +18477,45 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
     }
   }
 
+  void _fitMapBounds() {
+    final List<LatLng> pointsToFit = [];
+    for (final poly in _campusPolygons) {
+      pointsToFit.addAll(poly);
+    }
+    for (final loc in _filteredLocations) {
+      double? lat = double.tryParse(loc['latitude'].toString());
+      double? lng = double.tryParse(loc['longitude'].toString());
+      if (lat != null && lng != null) pointsToFit.add(LatLng(lat, lng));
+    }
+    if (_trailPoints.isNotEmpty) {
+      pointsToFit.addAll(_trailPoints);
+    }
+    if (pointsToFit.isNotEmpty) {
+      try {
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints(pointsToFit),
+            padding: const EdgeInsets.all(36),
+          ),
+        );
+      } catch (_) {
+        _mapController.move(_mapCenter(), 15.0);
+      }
+    } else {
+      _mapController.move(_mapCenter(), 15.0);
+    }
+  }
+
   void _filterLocations() {
     var temp = List.from(_locations);
+
+    if (_filterRole == 'today') {
+      temp = temp.where((item) => item['is_today'] == true).toList();
+    } else if (_filterRole == 'students') {
+      temp = temp.where((item) => item['role']?.toString().toLowerCase() == 'student').toList();
+    } else if (_filterRole == 'staff') {
+      temp = temp.where((item) => item['role']?.toString().toLowerCase() != 'student').toList();
+    }
 
     if (_searchQuery.isNotEmpty) {
       final query = _searchQuery.toLowerCase();
@@ -18426,22 +18554,25 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
     final regNo = item['reg_no']?.toString();
     if (regNo == null) return;
     
+    final preloadedTrail = _allUserTrails[regNo] ?? [];
+
     setState(() {
       _selectedUserRegNo = regNo;
       _outPermissionEnabledForSelected = item['out_permission_enabled'] == true;
-      _trailPoints = [];
-      _isTrailLoading = true;
+      _trailPoints = preloadedTrail;
+      _isTrailLoading = preloadedTrail.isEmpty;
     });
+
+    double? lat = double.tryParse(item['latitude'].toString());
+    double? lng = double.tryParse(item['longitude'].toString());
+    if (lat != null && lng != null) {
+      _mapController.move(LatLng(lat, lng), 16.0);
+    }
 
     await _fetchUserHistory(regNo);
   }
 
   Future<void> _fetchUserHistory(String regNo) async {
-    setState(() {
-      _isTrailLoading = true;
-      _trailPoints = [];
-    });
-
     final dateStr = "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}";
     try {
       final response = await apiClient.get(
@@ -18460,9 +18591,11 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
           return null;
         }).whereType<LatLng>().toList();
         
-        setState(() {
-          _trailPoints = points.reversed.toList();
-        });
+        if (points.isNotEmpty && mounted) {
+          setState(() {
+            _trailPoints = points.reversed.toList();
+          });
+        }
       }
     } catch (_) {
     } finally {
@@ -18593,48 +18726,67 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
           if (lat == null || lng == null) return null;
 
           final name = item['name']?.toString() ?? item['reg_no']?.toString() ?? 'User';
+          final role = (item['role']?.toString() ?? 'student').toLowerCase();
+          final Color roleColor = switch (role) {
+            'staff' => const Color(0xFF4F46E5),
+            'hod' => const Color(0xFFD97706),
+            'other_staff' => const Color(0xFF0D9488),
+            _ => const Color(0xFF2563EB),
+          };
           final isWarning = item['boundary_warning'] == true;
           final isSelected = item['reg_no'] == _selectedUserRegNo;
+          final lastSeenRel = item['last_seen_relative']?.toString() ?? '';
 
           return Marker(
             point: LatLng(lat, lng),
-            width: 120,
-            height: 60,
-            child: Tooltip(
-              message: isWarning 
-                  ? '$name (${item['role'] ?? 'user'}) - BREACH: ${item['warning_message'] ?? 'Outside movement limit!'}'
-                  : '$name (${item['role'] ?? 'user'})',
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
+            width: 130,
+            height: 64,
+            child: GestureDetector(
+              onTap: () => _selectUser(item),
+              child: Tooltip(
+                message: isWarning 
+                    ? '$name ($role) • $lastSeenRel • BREACH: ${item['warning_message'] ?? 'Outside boundary!'}'
+                    : '$name ($role) • $lastSeenRel',
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected 
+                            ? Colors.deepPurpleAccent.shade700 
+                            : (isWarning ? Colors.redAccent.shade700 : roleColor.withValues(alpha: 0.90)),
+                        borderRadius: BorderRadius.circular(12),
+                        border: isSelected 
+                            ? Border.all(color: Colors.amberAccent, width: 2) 
+                            : (isWarning ? Border.all(color: Colors.white, width: 1.5) : null),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
                     ),
-                    decoration: BoxDecoration(
+                    Icon(
+                      isWarning ? Icons.warning_rounded : Icons.location_on,
                       color: isSelected 
-                          ? Colors.deepPurpleAccent.shade700 
-                          : (isWarning ? Colors.redAccent.shade700 : Colors.black.withValues(alpha: 0.72)),
-                      borderRadius: BorderRadius.circular(12),
-                      border: isSelected 
-                          ? Border.all(color: Colors.amberAccent, width: 2) 
-                          : (isWarning ? Border.all(color: Colors.white, width: 1.5) : null),
+                          ? Colors.amberAccent 
+                          : (isWarning ? Colors.redAccent.shade700 : roleColor),
+                      size: 28,
                     ),
-                    child: Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Icon(
-                    isWarning ? Icons.warning_rounded : Icons.location_on,
-                    color: isSelected 
-                        ? Colors.deepPurpleAccent 
-                        : (isWarning ? Colors.redAccent.shade700 : Colors.red),
-                    size: 28,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           );
@@ -18741,6 +18893,66 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
+                ChoiceChip(
+                  label: Text('All (${_locations.length})', style: const TextStyle(fontSize: 12)),
+                  selected: _filterRole == 'all',
+                  onSelected: (val) {
+                    if (val) {
+                      setState(() => _filterRole = 'all');
+                      _filterLocations();
+                    }
+                  },
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: Text(
+                    'Active Today (${_locations.where((l) => l['is_today'] == true).length})',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: _filterRole == 'today',
+                  onSelected: (val) {
+                    if (val) {
+                      setState(() => _filterRole = 'today');
+                      _filterLocations();
+                    }
+                  },
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: Text(
+                    'Students (${_locations.where((l) => (l['role']?.toString().toLowerCase() == 'student')).length})',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: _filterRole == 'students',
+                  onSelected: (val) {
+                    if (val) {
+                      setState(() => _filterRole = 'students');
+                      _filterLocations();
+                    }
+                  },
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: Text(
+                    'Staff (${_locations.where((l) => (l['role']?.toString().toLowerCase() != 'student')).length})',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: _filterRole == 'staff',
+                  onSelected: (val) {
+                    if (val) {
+                      setState(() => _filterRole = 'staff');
+                      _filterLocations();
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
@@ -18784,9 +18996,7 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                     "${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}",
                     style: const TextStyle(fontSize: 12),
                   ),
-                  selected: _selectedDate.day != DateTime.now().day ||
-                      _selectedDate.month != DateTime.now().month ||
-                      _selectedDate.year != DateTime.now().year,
+                  selected: !_isViewingToday,
                   selectedColor: primaryColor.withValues(alpha: 0.25),
                   checkmarkColor: primaryColor,
                   avatar: Icon(Icons.calendar_month_rounded, size: 16, color: primaryColor),
@@ -18801,13 +19011,37 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                     if (picked != null) {
                       setState(() {
                         _selectedDate = picked;
+                        _selectedUserRegNo = null;
+                        _trailPoints = [];
+                        _allUserTrails = {};
                       });
-                      if (_selectedUserRegNo != null) {
-                        _fetchUserHistory(_selectedUserRegNo!);
+                      await _fetchLocations();
+                      final isPickedToday = picked.year == DateTime.now().year &&
+                          picked.month == DateTime.now().month &&
+                          picked.day == DateTime.now().day;
+                      if (!isPickedToday) {
+                        await _fetchAllTrailsForDate(picked);
                       }
                     }
                   },
                 ),
+                if (!_isViewingToday) ...[
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    avatar: const Icon(Icons.today_rounded, size: 16, color: Colors.deepPurpleAccent),
+                    label: const Text('Back to Today', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.deepPurpleAccent)),
+                    backgroundColor: Colors.deepPurpleAccent.withValues(alpha: 0.15),
+                    onPressed: () async {
+                      setState(() {
+                        _selectedDate = DateTime.now();
+                        _selectedUserRegNo = null;
+                        _trailPoints = [];
+                        _allUserTrails = {};
+                      });
+                      await _fetchLocations();
+                    },
+                  ),
+                ],
               ],
             ),
           ),
@@ -18860,18 +19094,39 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                   panBuffer: 3,
                   errorImage: const AssetImage('assets/images/map_error.png'),
                 ),
-                if (_trailPoints.isNotEmpty)
-                  PolylineLayer(
-                    polylines: [
+                // Render campus boundary polygon (geofence area)
+                if (_campusPolygons.isNotEmpty)
+                  PolygonLayer(
+                    polygons: _campusPolygons.map((pts) => Polygon(
+                      points: pts,
+                      color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                      borderColor: const Color(0xFF059669),
+                      borderStrokeWidth: 2.2,
+                    )).toList(),
+                  ),
+                PolylineLayer(
+                  polylines: [
+                    // Render multi-user historical trails for the selected date
+                    for (final entry in _allUserTrails.entries)
+                      if (entry.key != _selectedUserRegNo && entry.value.length > 1)
+                        Polyline(
+                          points: entry.value,
+                          strokeWidth: 3.2,
+                          color: _colorForRegNo(entry.key).withValues(alpha: 0.70),
+                          borderStrokeWidth: 0.8,
+                          borderColor: Colors.black26,
+                        ),
+                    // Render selected user trail highlighted on top
+                    if (_trailPoints.length > 1)
                       Polyline(
                         points: _trailPoints,
-                        strokeWidth: 4.5,
+                        strokeWidth: 5.0,
                         color: Colors.deepPurpleAccent,
-                        borderStrokeWidth: 1.5,
+                        borderStrokeWidth: 2.0,
                         borderColor: Colors.white,
                       ),
-                    ],
-                  ),
+                  ],
+                ),
                 MarkerLayer(markers: markers),
                 Positioned(
                   bottom: 10,
@@ -18887,6 +19142,69 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                 ),
               ],
             ),
+            if (_filteredLocations.isEmpty)
+              Positioned(
+                top: 56,
+                left: 16,
+                right: 16,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.82),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.shield_outlined, color: Color(0xFF10B981), size: 16),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Campus boundary loaded • No users active in this filter',
+                          style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _fetchLocations(),
+                          child: const Icon(Icons.refresh_rounded, color: Colors.white70, size: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (!_isViewingToday)
+              Positioned(
+                top: 12,
+                left: 12,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.82),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.history_toggle_off_rounded, color: Colors.amberAccent, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'History: ${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year} (${_filteredLocations.length} Tracked)',
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        if (_isLoadingAllTrails) ...[
+                          const SizedBox(width: 8),
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               top: 12,
               right: 12,
@@ -18900,6 +19218,16 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        IconButton(
+                          tooltip: 'Fit All Markers & Campus',
+                          icon: Icon(Icons.crop_free_rounded, color: primaryColor, size: 20),
+                          onPressed: _fitMapBounds,
+                        ),
+                        Container(
+                          width: 1,
+                          height: 24,
+                          color: (isDark ? Colors.white24 : Colors.black12),
+                        ),
                         IconButton(
                           tooltip: 'Recenter Map',
                           icon: Icon(Icons.my_location, color: primaryColor, size: 20),
@@ -18987,7 +19315,7 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
               Icon(Icons.radar_rounded, color: primaryColor, size: 28),
               const SizedBox(width: 8),
               Text(
-                'Live Terminals',
+                _isViewingToday ? 'Live Terminals' : 'Historical Tracking',
                 style: TextStyle(
                   color: isDark ? Colors.white : Colors.black87,
                   fontSize: 22,
@@ -19003,7 +19331,7 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  '${_filteredLocations.length} Online',
+                  _isViewingToday ? '${_filteredLocations.length} Online' : '${_filteredLocations.length} Tracked',
                   style: TextStyle(
                     color: primaryColor,
                     fontWeight: FontWeight.bold,
@@ -19029,7 +19357,9 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                     Text(
                       _searchQuery.isNotEmpty
                           ? 'No active terminals match your filters.'
-                          : 'No active terminals are currently transmitting coordinate beacons.',
+                          : (_isViewingToday
+                              ? 'No active terminals are currently transmitting coordinate beacons.'
+                              : 'No location tracking records found for this date.'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
                     ),
@@ -19051,6 +19381,7 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
             final isOutPermissionEnabled = item['out_permission_enabled'] == true;
             final warningMsg = item['warning_message']?.toString() ?? 'Outside movement limit';
             final isSelected = _selectedUserRegNo == regNo;
+            final totalPoints = item['total_points'] is num ? (item['total_points'] as num).toInt() : 1;
 
             return GestureDetector(
               onTap: () => _selectUser(item),
@@ -19099,6 +19430,23 @@ class _LiveLocationsTabState extends State<LiveLocationsTab> {
                                   ),
                                 ),
                               ),
+                              if (totalPoints > 1)
+                                Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.purple.withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '$totalPoints pts',
+                                    style: const TextStyle(
+                                      color: Colors.purpleAccent,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
                               if (isOutPermissionEnabled)
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

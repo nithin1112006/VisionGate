@@ -14,6 +14,13 @@ import '../config/college_ip_config.dart';
 import 'api_client.dart';
 import 'session_service.dart';
 
+enum TrackingLifecycleState {
+  standbyWaitingCheckIn, // Before check-in: waiting for user to mark attendance
+  activeInWindow,        // Checked in & within tracking window duration
+  completedForToday,     // Checked out or passed end of tracking window
+  pausedError,           // Checked in & in window, but service was paused or died
+}
+
 class LocationTrackingService with WidgetsBindingObserver {
   LocationTrackingService._() {
     _initLocalNotifications();
@@ -30,6 +37,11 @@ class LocationTrackingService with WidgetsBindingObserver {
     }
   }
   static final LocationTrackingService instance = LocationTrackingService._();
+
+  final ValueNotifier<TrackingLifecycleState> lifecycleState =
+      ValueNotifier<TrackingLifecycleState>(TrackingLifecycleState.standbyWaitingCheckIn);
+  final ValueNotifier<String?> windowEndTime = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> statusDetailMessage = ValueNotifier<String?>(null);
 
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
   StreamSubscription<Position>? _positionSub;
@@ -121,12 +133,43 @@ class LocationTrackingService with WidgetsBindingObserver {
 
   String? _deviceSessionId;
 
+  /// Ensures that tracking is running and auto-heals/restarts the native service if stopped.
+  Future<bool> ensureTrackingActive() async {
+    if (kIsWeb) return false;
+    if (_running && _activeToken != null) {
+      try {
+        final status = await BackgroundLocationService.getServiceStatus();
+        if (!status.running) {
+          await BackgroundLocationService.restart();
+        }
+      } catch (_) {}
+      return true;
+    }
+
+    try {
+      final session = await sessionService.getSession();
+      if (session != null && session.token.isNotEmpty) {
+        return await startTracking(
+          token: session.token,
+          user: session.user,
+        );
+      }
+    } catch (_) {}
+    return false;
+  }
+
   Future<bool> startTracking({
     required String token,
     required Map<String, dynamic> user,
   }) async {
     if (kIsWeb) return false;
     if (_running && _activeToken == token) {
+      try {
+        final status = await BackgroundLocationService.getServiceStatus();
+        if (!status.running) {
+          await BackgroundLocationService.restart();
+        }
+      } catch (_) {}
       return true;
     }
 
@@ -156,21 +199,15 @@ class LocationTrackingService with WidgetsBindingObserver {
     }
 
     _running = true;
-    await updateLocalAttendanceStatus();
     _trackingSuspended = false;
+    await updateLocalAttendanceStatus();
 
-    // Check if tracking should be active dynamically
-    final active = await checkTrackingActive();
+    bool active = false;
     try {
+      active = await checkTrackingActive();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('last_tracking_active', active);
     } catch (_) {}
-
-    if (!active) {
-      _trackingSuspended = true;
-    } else {
-      _trackingSuspended = false;
-    }
     _startHeartbeat();
 
     // Start App Live Ping and Cache-Flush timer
@@ -196,29 +233,31 @@ class LocationTrackingService with WidgetsBindingObserver {
     // Flush any pending data instantly on start tracking
     flushAllCachesInstantly();
 
-    try {
-      double centerLat = 11.0396;
-      double centerLng = 77.0747;
-      final polygons = CollegeIPConfig.geoFencePolygons;
-      if (polygons.isNotEmpty && polygons.first.isNotEmpty) {
-        final poly = polygons.first;
-        final latSum = poly.fold<double>(0, (s, p) => s + p[0]);
-        final lngSum = poly.fold<double>(0, (s, p) => s + p[1]);
-        centerLat = latSum / poly.length;
-        centerLng = lngSum / poly.length;
-      }
+    if (active) {
+      try {
+        double centerLat = 11.0396;
+        double centerLng = 77.0747;
+        final polygons = CollegeIPConfig.geoFencePolygons;
+        if (polygons.isNotEmpty && polygons.first.isNotEmpty) {
+          final poly = polygons.first;
+          final latSum = poly.fold<double>(0, (s, p) => s + p[0]);
+          final lngSum = poly.fold<double>(0, (s, p) => s + p[1]);
+          centerLat = latSum / poly.length;
+          centerLng = lngSum / poly.length;
+        }
 
-      final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
-      await BackgroundLocationService.start(
-        baseUrl: CollegeIPConfig.defaultURL,
-        geofenceLat: centerLat,
-        geofenceLng: centerLng,
-        geofenceRadius: 250.0,
-        token: _activeToken!,
-        regNo: regNo.toString(),
-        deviceSessionId: _deviceSessionId ?? '',
-      );
-    } catch (_) {}
+        final regNo = _activeUser!['regNo'] ?? _activeUser!['reg_no'] ?? '';
+        await BackgroundLocationService.start(
+          baseUrl: CollegeIPConfig.defaultURL,
+          geofenceLat: centerLat,
+          geofenceLng: centerLng,
+          geofenceRadius: 250.0,
+          token: _activeToken!,
+          regNo: regNo.toString(),
+          deviceSessionId: _deviceSessionId ?? '',
+        );
+      } catch (_) {}
+    }
     return true;
   }
 
@@ -312,6 +351,11 @@ class LocationTrackingService with WidgetsBindingObserver {
   Future<void> onAttendanceMarked() async {
     if (!_running || _activeToken == null) return;
     await updateLocalAttendanceStatus();
+    
+    // Instantly capture and flush current location on check-in
+    await _captureAndQueue(source: 'checkin_attendance_mark');
+    await flushAllCachesInstantly();
+
     final active = await checkTrackingActive();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -322,6 +366,7 @@ class LocationTrackingService with WidgetsBindingObserver {
       if (_trackingSuspended) {
         _trackingSuspended = false;
       }
+      lifecycleState.value = TrackingLifecycleState.activeInWindow;
       try {
         double centerLat = 11.0396;
         double centerLng = 77.0747;
@@ -346,12 +391,7 @@ class LocationTrackingService with WidgetsBindingObserver {
         );
       } catch (_) {}
     } else {
-      if (!_trackingSuspended) {
-        _trackingSuspended = true;
-      }
-      try {
-        await BackgroundLocationService.stop();
-      } catch (_) {}
+      _trackingSuspended = false;
     }
   }
 
@@ -366,26 +406,48 @@ class LocationTrackingService with WidgetsBindingObserver {
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (body['reason'] == 'device_mismatch') {
-          // A new device has logged in, stop tracking on this device immediately
           await stopTracking();
+          lifecycleState.value = TrackingLifecycleState.pausedError;
+          statusDetailMessage.value = 'Device session mismatch';
           return false;
         }
         
         final active = body['tracking_active'] == true;
+        final state = body['state']?.toString() ?? '';
+        final winEnd = body['window_end']?.toString();
+        windowEndTime.value = winEnd;
+
+        if (state == 'waiting_for_check_in') {
+          lifecycleState.value = TrackingLifecycleState.standbyWaitingCheckIn;
+          statusDetailMessage.value = 'Starts automatically upon check-in';
+        } else if (state == 'window_ended' || state == 'checked_out') {
+          lifecycleState.value = TrackingLifecycleState.completedForToday;
+          statusDetailMessage.value = state == 'checked_out'
+              ? 'Checked out for today'
+              : 'Tracking completed at ${winEnd ?? 'end time'}';
+          try {
+            await BackgroundLocationService.stop();
+          } catch (_) {}
+        } else if (active) {
+          lifecycleState.value = TrackingLifecycleState.activeInWindow;
+          statusDetailMessage.value = 'Tracking active until ${winEnd ?? '17:30'}';
+        } else {
+          lifecycleState.value = TrackingLifecycleState.standbyWaitingCheckIn;
+        }
+
         if (active && body['force_update'] == true) {
-          // Instantly capture and flush location
           _captureAndQueue(source: 'force_update_instant').then((_) => _flushPending());
         }
         
         return active;
       } else if (response.statusCode == 403) {
         await stopTracking();
+        lifecycleState.value = TrackingLifecycleState.pausedError;
         return false;
       }
     } catch (_) {}
     return false;
   }
-
 
   void _startHeartbeat() {
     // Poll tracking status and flush positions every 2 minutes for dynamic updates
@@ -398,6 +460,13 @@ class LocationTrackingService with WidgetsBindingObserver {
         if (_trackingSuspended) {
           _trackingSuspended = false;
         }
+        // Auto-heal native service if interrupted
+        try {
+          final status = await BackgroundLocationService.getServiceStatus();
+          if (!status.running) {
+            await BackgroundLocationService.restart();
+          }
+        } catch (_) {}
       } else {
         if (!_trackingSuspended) {
           _trackingSuspended = true;
@@ -518,13 +587,15 @@ class LocationTrackingService with WidgetsBindingObserver {
         return false;
       }
 
-      // Mobile-only permissions:
+      // Mobile permissions:
       if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
         if (permission == LocationPermission.whileInUse) {
-          final status = await Permission.locationAlways.request();
-          if (!status.isGranted) {
-            return false; // ENFORCE COMPULSORY BACKGROUND PERMISSION ON MOBILE
-          }
+          try {
+            // Best-effort request for locationAlways
+            await Permission.locationAlways.request();
+          } catch (_) {}
+          // Note: On Android, a Foreground Service declared with foregroundServiceType="location"
+          // is officially foreground access and operates with whileInUse permission.
         }
 
         // Request battery-optimisation exemption so OEM battery killers cannot

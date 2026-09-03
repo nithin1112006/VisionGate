@@ -40,6 +40,16 @@ class BackgroundLocationService {
     } catch (_) {}
   }
 
+  /// Restart the background service using stored native session credentials.
+  static Future<bool> restart() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('restartService');
+      return result ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Returns `true` if Android battery optimisation is disabled for this app.
   /// Always returns `true` on non-Android platforms.
   static Future<bool> isIgnoringBatteryOptimisations() async {

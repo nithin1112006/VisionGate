@@ -440,7 +440,7 @@ class StaffDashboardPage extends StatefulWidget {
   State<StaffDashboardPage> createState() => _StaffDashboardPageState();
 }
 
-class _StaffDashboardPageState extends State<StaffDashboardPage> {
+class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   bool _isKioskEnabled = true;
   StreamSubscription<String>? _warningSub;
@@ -742,6 +742,7 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _rebuildPages();
     _checkKioskPermission();
     _checkOfflineViolations();
@@ -762,6 +763,13 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !kIsWeb) {
+      LocationTrackingService.instance.ensureTrackingActive();
+    }
+  }
+
   void _logout() async {
     if (!kIsWeb) {
       await _warningSub?.cancel();
@@ -775,9 +783,9 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
       _warningSub?.cancel();
-      LocationTrackingService.instance.stopTracking();
     }
     super.dispose();
   }

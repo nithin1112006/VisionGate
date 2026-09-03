@@ -1,5 +1,6 @@
 package com.example.faculty_sphere
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -86,18 +87,46 @@ class MainActivity : FlutterActivity() {
                     val pm = getSystemService(POWER_SERVICE) as PowerManager
                     val batteryExempt = pm.isIgnoringBatteryOptimizations(packageName)
 
-                    // Check if AttendanceForegroundService is in the running services list
-                    @Suppress("DEPRECATION")
-                    val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-                    @Suppress("DEPRECATION")
-                    val running = activityManager.getRunningServices(50).any {
-                        it.service.className == AttendanceForegroundService::class.java.name
-                    }
+                    val prefs = getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE)
+                    val prefsRunning = prefs.getBoolean("service_running", false)
+                    val lastHeartbeat = prefs.getLong("last_heartbeat_ms", 0L)
+                    val isHeartbeatFresh = (System.currentTimeMillis() - lastHeartbeat) < (5 * 60 * 1000L)
+
+                    var legacyRunning = false
+                    try {
+                        @Suppress("DEPRECATION")
+                        val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+                        @Suppress("DEPRECATION")
+                        legacyRunning = activityManager.getRunningServices(50).any {
+                            it.service.className == AttendanceForegroundService::class.java.name
+                        }
+                    } catch (_: Exception) {}
+
+                    val running = AttendanceForegroundService.isRunning || (prefsRunning && isHeartbeatFresh) || legacyRunning
 
                     result.success(mapOf(
                         "running" to running,
                         "batteryExempt" to batteryExempt
                     ))
+                }
+
+                // ── Restart the foreground location service ─────────────────────
+                "restartService" -> {
+                    val prefs = getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE)
+                    val token = prefs.getString("token", "") ?: ""
+                    if (token.isNotEmpty()) {
+                        val serviceIntent = Intent(this, AttendanceForegroundService::class.java).apply {
+                            action = AttendanceForegroundService.ACTION_START
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
+                        }
+                        result.success(true)
+                    } else {
+                        result.success(false)
+                    }
                 }
 
                 // ── OEM battery / autostart deeplink ──────────────────────────

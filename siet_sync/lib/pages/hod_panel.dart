@@ -460,7 +460,7 @@ class HODDashboardPage extends StatefulWidget {
   State<HODDashboardPage> createState() => _HODDashboardPageState();
 }
 
-class _HODDashboardPageState extends State<HODDashboardPage> {
+class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   StreamSubscription<String>? _warningSub;
 
@@ -537,6 +537,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkOfflineViolations();
     if (!kIsWeb) {
       LocationTrackingService.instance.startTracking(
@@ -647,6 +648,13 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
   }
 
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !kIsWeb) {
+      LocationTrackingService.instance.ensureTrackingActive();
+    }
+  }
+
   void _logout() async {
     if (!kIsWeb) {
       await _warningSub?.cancel();
@@ -660,8 +668,9 @@ class _HODDashboardPageState extends State<HODDashboardPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
-      LocationTrackingService.instance.stopTracking();
+      _warningSub?.cancel();
     }
     super.dispose();
   }

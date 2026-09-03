@@ -454,7 +454,7 @@ class OtherStaffDashboardPage extends StatefulWidget {
       _OtherStaffDashboardPageState();
 }
 
-class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
+class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   StreamSubscription<String>? _warningSub;
   Map<String, dynamic>? dashboardData;
@@ -518,6 +518,7 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkOfflineViolations();
     if (!kIsWeb) {
       LocationTrackingService.instance.startTracking(
@@ -563,6 +564,13 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
     _loadDashboard();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !kIsWeb) {
+      LocationTrackingService.instance.ensureTrackingActive();
+    }
+  }
+
   void _loadDashboard() {
     // Dashboard loaded
   }
@@ -580,9 +588,9 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
       _warningSub?.cancel();
-      LocationTrackingService.instance.stopTracking();
     }
     super.dispose();
   }
@@ -2394,9 +2402,11 @@ class _OtherStaffMarkAttendanceTabState
               ),
             );
             _checkTodayAttendance();
+            LocationTrackingService.instance.onAttendanceMarked();
           },
           onVerified: () {
             _checkTodayAttendance();
+            LocationTrackingService.instance.onAttendanceMarked();
           },
           onCancel: () => Navigator.pop(context),
         ),

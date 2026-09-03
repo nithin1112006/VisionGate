@@ -195,15 +195,54 @@ def resolve_academic_date(target_date: date) -> Dict[str, Any]:
 # PERIOD TIMINGS TIMELINE GENERATOR
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_period_timings_map(dept: str = "CSE") -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
-    """Fetch period schedule configuration for department and generate 12h/24h timing map."""
+def get_period_timings_map(
+    dept: str = "CSE",
+    batch: Optional[str] = "all",
+    semester: Optional[int] = 0,
+    section: Optional[str] = "all",
+) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+    """Fetch period schedule configuration for class or department and generate 12h/24h timing map."""
+    target_batch = (batch or "all").strip()
+    try:
+        target_sem = int(semester or 0)
+    except Exception:
+        target_sem = 0
+    target_sec = (section or "all").strip()
+
     cursor.execute("""
-        SELECT start_time, total_periods, period_duration_mins, breaks_json
+        SELECT start_time, total_periods, period_duration_mins, breaks_json,
+               (
+                   CASE
+                       WHEN LOWER(batch) = LOWER(?) AND semester = ? AND LOWER(section) = LOWER(?) 
+                            AND batch != 'all' AND semester != 0 AND LOWER(section) != 'all' THEN 40
+                       WHEN LOWER(batch) = LOWER(?) AND semester = ? AND (LOWER(section) = 'all' OR section IS NULL)
+                            AND batch != 'all' AND semester != 0 THEN 30
+                       WHEN LOWER(batch) = LOWER(?) AND (semester = 0 OR semester IS NULL) AND (LOWER(section) = 'all' OR section IS NULL)
+                            AND batch != 'all' THEN 20
+                       WHEN (LOWER(batch) = 'all' OR batch IS NULL) AND (semester = 0 OR semester IS NULL) AND (LOWER(section) = 'all' OR section IS NULL) THEN 10
+                       ELSE 1
+                   END
+               ) as match_score
         FROM academic_period_configs
         WHERE LOWER(dept) = LOWER(?)
+          AND (LOWER(batch) = LOWER(?) OR LOWER(batch) = 'all' OR batch IS NULL)
+          AND (semester = ? OR semester = 0 OR semester IS NULL)
+          AND (LOWER(section) = LOWER(?) OR LOWER(section) = 'all' OR section IS NULL)
+        ORDER BY match_score DESC, updated_at DESC NULLS LAST
         LIMIT 1
-    """, (dept,))
+    """, (
+        target_batch, target_sem, target_sec,
+        target_batch, target_sem,
+        target_batch,
+        dept,
+        target_batch,
+        target_sem,
+        target_sec,
+    ))
     row = cursor.fetchone()
+    if not row:
+        cursor.execute("SELECT start_time, total_periods, period_duration_mins, breaks_json, 1 FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1", (dept,))
+        row = cursor.fetchone()
 
     start_time = "08:45"
     total_periods = 7

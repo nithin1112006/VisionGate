@@ -18,7 +18,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
-      - "${PG_HOST_PORT:-5432}:5432"
+      - "${PG_HOST_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-attenda} -d ${PG_DB:-attenda}"]
       interval: 5s
@@ -44,9 +44,18 @@ services:
       PORT: "8001"
       PYTHONUNBUFFERED: "1"
       PYTHONIOENCODING: "utf-8"
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Hardware GPU passthrough
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
+      - ./backend:/app
       - attenda_storage:/app/storage
       - ./backend/debug_images:/app/debug_images
       - insightface_models:/root/.insightface
@@ -55,19 +64,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 20
+      start_period: 180s
     networks:
       - attenda-network
 
@@ -91,14 +93,19 @@ services:
     networks:
       - attenda-network
 
-  # Optional Cloudflare Tunnel Service (Zero-Trust)
+  # Cloudflare Tunnel Service (Zero-Trust & Quick Tunnels)
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: attenda-cloudflared
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command:
+      - tunnel
+      - --config
+      - /etc/cloudflared/config.yml
+      - run
+      - 27b90fd6-f11b-4f35-b160-47bcc2e2ed9e
+    volumes:
+      - ./docker/cloudflared:/etc/cloudflared:ro
     depends_on:
       nginx:
         condition: service_healthy

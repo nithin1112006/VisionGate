@@ -343,6 +343,9 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
       builder: (ctx) => PeriodConfigDialog(
         token: widget.token,
         dept: _selectedDept,
+        batch: _selectedBatch,
+        semester: _selectedSemester,
+        section: _selectedSection,
         onSaved: _loadAllData,
       ),
     );

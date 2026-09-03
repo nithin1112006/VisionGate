@@ -339,10 +339,12 @@ class _ManageFacilityCategoriesDialogState extends State<ManageFacilityCategorie
       return name.contains(q) || code.contains(q) || desc.contains(q);
     }).toList();
 
+    final isMobile = MediaQuery.of(context).size.width < 640;
+
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isMobile ? 16 : 24)),
       backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      insetPadding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 24, vertical: isMobile ? 12 : 24),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 960, maxHeight: 720),
         child: ClipRRect(

@@ -41,7 +41,7 @@ def run():
     for idx_sql in [
         "CREATE INDEX IF NOT EXISTS idx_sads_reg_date ON student_academic_day_status (student_reg_no, date)",
         "CREATE INDEX IF NOT EXISTS idx_sads_date ON student_academic_day_status (date, day_type)",
-        "CREATE INDEX IF NOT EXISTS idx_stu_att_period ON student_attendance (student_reg_no, date, period_number)",
+        "CREATE INDEX IF NOT EXISTS idx_stu_att_period ON student_attendance (reg_no, date, period_number)",
     ]:
         try:
             cursor.execute(idx_sql)

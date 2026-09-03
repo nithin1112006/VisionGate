@@ -1,9 +1,10 @@
 # ==============================================================================
-# VisionGate / Attenda - High Performance GPU Backend Container
-# Target: Ubuntu 24.04 LTS | Intel Core Ultra 9 285K | NVIDIA RTX 5070 (sm_120)
+# VisionGate / Attenda - High Performance GPU/CPU Backend Container
+# Base: CUDA 12.2 — compatible with NVIDIA driver >= 535 (Windows >= 537.13)
+# Automatic CPU fallback when no compatible GPU is detected at runtime
 # ==============================================================================
 
-FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -12,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH="/opt/venv/bin:$PATH" \
     INSIGHTFACE_HOME="/root/.insightface"
 
-# Install system dependencies, Python 3.12, OpenCV/FFmpeg shared libraries, and networking utilities
+# Install system dependencies, Python 3.10, OpenCV/FFmpeg shared libraries, and networking utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -44,21 +45,29 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 
-# Install base dependencies (excluding torch and onnxruntime-gpu which need CUDA 13 wheels)
-RUN grep -v "onnxruntime-gpu" requirements.txt > /tmp/requirements_base.txt && \
-    pip install --no-cache-dir -r /tmp/requirements_base.txt && \
+# Install base dependencies (excluding torch and onnxruntime-gpu)
+RUN grep -vE "onnxruntime|torch" requirements.txt > /tmp/requirements_base.txt && \
+    pip install --no-cache-dir --retries 5 --timeout 60 -r /tmp/requirements_base.txt && \
     rm /tmp/requirements_base.txt
 
-# Install PyTorch built against CUDA 13.0 (for Blackwell sm_120 support)
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+# Install PyTorch CUDA 12.1 wheels — compatible with CUDA 12.2 runtime and driver 537.x
+RUN pip install --no-cache-dir --retries 5 --timeout 60 \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
 
-# Install ONNX Runtime GPU (CUDA 13 build)
-RUN pip install --no-cache-dir coloredlogs flatbuffers packaging protobuf sympy && \
-    pip install --no-cache-dir --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
+# Install ONNX Runtime GPU (standard PyPI, supports CUDA 12.x)
+# Falls back to CPU-only onnxruntime if GPU wheel is unavailable
+RUN pip install --no-cache-dir --retries 5 --timeout 60 \
+    coloredlogs flatbuffers packaging protobuf sympy && \
+    (pip install --no-cache-dir --retries 5 --timeout 60 onnxruntime-gpu || \
+     pip install --no-cache-dir --retries 5 --timeout 60 onnxruntime)
 
 # Ensure InsightFace is installed and pre-cache buffalo_s model files into image
 RUN pip install --no-cache-dir insightface==0.7.3 && \
-    python3 -c "import insightface; from insightface.app import FaceAnalysis; app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider']); app.prepare(ctx_id=-1, det_size=(640, 640)); print('InsightFace buffalo_s model pre-cached successfully.')"
+    python3 -c "import insightface; from insightface.app import FaceAnalysis; \
+    app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider']); \
+    app.prepare(ctx_id=-1, det_size=(640, 640)); \
+    print('InsightFace buffalo_s model pre-cached successfully.')"
 
 # Copy application source code
 COPY . /app

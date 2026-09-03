@@ -105,13 +105,13 @@ fi
 
 # 4. Test Database Schema & pgvector Extension Inside Container
 echo -e "\n${BOLD}[4/7] PostgreSQL Schema & pgvector Verification${NC}"
-if docker exec -t attenda-postgres psql -U "${PG_USER:-attenda}" -d "${PG_DB:-attenda}" -c "\dx vector" | grep -q "vector"; then
+if docker exec -i attenda-postgres psql -U "${PG_USER:-attenda}" -d "${PG_DB:-attenda}" -c "\dx vector" | grep -q "vector"; then
     report_test "pgvector extension installed in PostgreSQL" 0 "Extension active"
 else
     report_test "pgvector extension installed in PostgreSQL" 1 "Extension 'vector' not found in database"
 fi
 
-TABLE_COUNT=$(docker exec -t attenda-postgres psql -U "${PG_USER:-attenda}" -d "${PG_DB:-attenda}" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' \r\n')
+TABLE_COUNT=$(docker exec -i attenda-postgres psql -U "${PG_USER:-attenda}" -d "${PG_DB:-attenda}" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' \r\n')
 if [ "$TABLE_COUNT" -gt 10 ]; then
     report_test "Schema Tables Initialized (${TABLE_COUNT} public tables)" 0 "Tables present"
 else
@@ -157,9 +157,9 @@ fi
 
 NGINX_PROXY_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${NGINX_URL}/health" || echo "000")
 if [ "$NGINX_PROXY_CODE" -eq 200 ]; then
-    report_test "Nginx $\rightarrow$ Backend Proxy Routing (/health)" 0 "HTTP 200 OK"
+    report_test "Nginx -> Backend Proxy Routing (/health)" 0 "HTTP 200 OK"
 else
-    report_test "Nginx $\rightarrow$ Backend Proxy Routing (/health)" 1 "Received HTTP ${NGINX_PROXY_CODE}"
+    report_test "Nginx -> Backend Proxy Routing (/health)" 1 "Received HTTP ${NGINX_PROXY_CODE}"
 fi
 
 # Summary

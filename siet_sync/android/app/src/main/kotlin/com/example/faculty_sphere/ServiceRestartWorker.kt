@@ -39,14 +39,9 @@ class ServiceRestartWorker(
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         sdf.timeZone = TimeZone.getTimeZone("GMT+5:30")
         val today = sdf.format(Date())
-        val startDay = prefs.getString("startDay", "") ?: ""
+        prefs.edit().putString("startDay", today).apply()
 
-        if (today != startDay) {
-            Log.d(TAG, "Different day ($startDay vs $today) — not restarting service.")
-            return Result.success()
-        }
-
-        Log.d(TAG, "Restarting AttendanceForegroundService via WorkManager.")
+        Log.d(TAG, "Restarting AttendanceForegroundService via WorkManager for day=$today.")
         val intent = Intent(context, AttendanceForegroundService::class.java).apply {
             action = AttendanceForegroundService.ACTION_START
         }

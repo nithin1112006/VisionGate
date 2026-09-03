@@ -45,9 +45,9 @@ echo -e "  ${GREEN}✓${NC} Docker Version: $(docker --version)"
 
 # Step 3: Test NVIDIA GPU Passthrough with Docker
 echo -e "\n${BOLD}${YELLOW}[3/4] Testing GPU passthrough in temporary test container...${NC}"
-if docker run --rm --gpus all nvidia/cuda:12.8.0-runtime-ubuntu24.04 nvidia-smi &> /dev/null; then
+if docker run --rm --gpus all nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
     echo -e "  ${GREEN}✓ Standard Docker '--gpus all' passthrough is OPERATIONAL.${NC}"
-elif docker run --rm --runtime=nvidia nvidia/cuda:12.8.0-runtime-ubuntu24.04 nvidia-smi &> /dev/null; then
+elif docker run --rm --runtime=nvidia nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
     echo -e "  ${GREEN}✓ Docker NVIDIA runtime passthrough is OPERATIONAL.${NC}"
 else
     echo -e "  ${YELLOW}! GPU container passthrough test did not succeed.${NC}"

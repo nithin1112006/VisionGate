@@ -39,16 +39,10 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
-        // Only restart if the service was tracking on the same calendar day (IST)
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         sdf.timeZone = TimeZone.getTimeZone("GMT+5:30")
         val today = sdf.format(Date())
-        val startDay = prefs.getString("startDay", "") ?: ""
-
-        if (today != startDay) {
-            Log.d(TAG, "startDay ($startDay) ≠ today ($today) — skipping restart.")
-            return
-        }
+        prefs.edit().putString("startDay", today).apply()
 
         Log.d(TAG, "Boot detected. Restarting AttendanceForegroundService for day=$today.")
         val serviceIntent = Intent(context, AttendanceForegroundService::class.java).apply {

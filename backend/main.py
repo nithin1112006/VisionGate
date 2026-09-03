@@ -865,10 +865,11 @@ app = FastAPI(title="VisionGate - Automated Face Attendance System", lifespan=li
 # Add CORS middleware for web access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (you can restrict this in production)
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Add GZip compression middleware (compresses responses >= 500 bytes by 75-90%)
@@ -2503,7 +2504,7 @@ async def check_attendance_window():
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled = 1
+        WHERE is_enabled IS TRUE
         ORDER BY slot_number ASC
     """)
     rows = cursor.fetchall()
@@ -2762,7 +2763,7 @@ async def save_ccl_custom_dates(request: Request):
             cursor.execute("""
                 SELECT slot_number, start_time, duration_minutes, slot_type 
                 FROM attendance_duration_settings 
-                WHERE is_enabled = 1
+                WHERE is_enabled IS TRUE
             """)
             duration_slots = cursor.fetchall()
             
@@ -2874,7 +2875,7 @@ async def save_ccl_settings(request: Request):
         cursor.execute("""
             SELECT slot_number, start_time, duration_minutes, slot_type 
             FROM attendance_duration_settings 
-            WHERE is_enabled = 1
+            WHERE is_enabled IS TRUE
         """)
         duration_slots = cursor.fetchall()
         
@@ -4822,25 +4823,16 @@ def _get_student_timetable_periods_for_day(dept: str, batch: str, semester: int,
         # Compute period timing
         dept_timings = {}
         try:
-            cursor.execute(
-                "SELECT start_time, total_periods, period_duration_mins, breaks_json FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-                (dept.strip(),)
+            p_cfg = get_academic_period_config_for_class(
+                dept=dept.strip(),
+                batch=batch.strip() if batch else "all",
+                semester=semester,
+                section=section.strip() if section else "all",
             )
-            cfg = cursor.fetchone()
-            s_time = "08:45"
-            t_periods = 7
-            dur = 50
-            breaks_list = [
-                {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
-                {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
-            ]
-            if cfg:
-                s_time = (cfg[0] if isinstance(cfg, (list, tuple)) else cfg.get("start_time")) or s_time
-                t_periods = int((cfg[1] if isinstance(cfg, (list, tuple)) else cfg.get("total_periods")) or t_periods)
-                dur = int((cfg[2] if isinstance(cfg, (list, tuple)) else cfg.get("period_duration_mins")) or dur)
-                import json as _json
-                bks_raw = (cfg[3] if isinstance(cfg, (list, tuple)) else cfg.get("breaks_json")) or "[]"
-                breaks_list = _json.loads(bks_raw) if isinstance(bks_raw, str) else bks_raw
+            s_time = p_cfg["start_time"]
+            t_periods = p_cfg["total_periods"]
+            dur = p_cfg["period_duration_mins"]
+            breaks_list = p_cfg["breaks"]
             slots = _compute_schedule_slots_timings(s_time, t_periods, dur, breaks_list)
             for s in slots:
                 if s.get("type") == "period":
@@ -4917,7 +4909,7 @@ def _sync_student_holiday_day_status(date_str: str, reason: str = "", declared_b
     Idempotent — uses ON CONFLICT DO UPDATE.
     """
     try:
-        cursor.execute("SELECT reg_no FROM students WHERE is_active = 1 OR is_active = TRUE")
+        cursor.execute("SELECT reg_no FROM students WHERE is_active IS TRUE")
         students = cursor.fetchall()
         count = 0
         for row in students:
@@ -5169,39 +5161,34 @@ def _process_student_period_absences(date_str: str, current_time_str: str = ""):
             if not dept:
                 continue
 
-            dept_key = dept.strip().lower()
-            if dept_key not in dept_timings:
-                s_time = "08:45"
-                t_periods = 7
-                dur = 50
-                default_breaks = [
-                    {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
-                    {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
-                ]
-                breaks_list = default_breaks
+            class_key = f"{dept.strip().lower()}_{semester}_{section.strip().lower()}"
+            if class_key not in dept_timings:
                 try:
-                    cursor.execute(
-                        "SELECT start_time, total_periods, period_duration_mins, breaks_json FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-                        (dept.strip(),)
+                    p_cfg = get_academic_period_config_for_class(
+                        dept=dept.strip(),
+                        semester=semester,
+                        section=section.strip(),
                     )
-                    cfg = cursor.fetchone()
-                    if cfg:
-                        s_time = (cfg[0] if isinstance(cfg, (list, tuple)) else cfg.get("start_time")) or s_time
-                        t_periods = int((cfg[1] if isinstance(cfg, (list, tuple)) else cfg.get("total_periods")) or t_periods)
-                        dur = int((cfg[2] if isinstance(cfg, (list, tuple)) else cfg.get("period_duration_mins")) or dur)
-                        import json as _json
-                        bks_raw = (cfg[3] if isinstance(cfg, (list, tuple)) else cfg.get("breaks_json")) or "[]"
-                        breaks_list = _json.loads(bks_raw) if isinstance(bks_raw, str) else bks_raw
+                    s_time = p_cfg["start_time"]
+                    t_periods = p_cfg["total_periods"]
+                    dur = p_cfg["period_duration_mins"]
+                    breaks_list = p_cfg["breaks"]
                 except Exception:
-                    pass
+                    s_time = "08:45"
+                    t_periods = 7
+                    dur = 50
+                    breaks_list = [
+                        {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
+                        {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
+                    ]
 
                 slots = _compute_schedule_slots_timings(s_time, t_periods, dur, breaks_list)
-                dept_timings[dept_key] = {
+                dept_timings[class_key] = {
                     s["period_number"]: s.get("end_24h", "")
                     for s in slots if s.get("type") == "period"
                 }
 
-            period_end_map = dept_timings.get(dept_key, {})
+            period_end_map = dept_timings.get(class_key, {})
 
             # Fetch today's scheduled slots for this class group
             cursor.execute(
@@ -5403,7 +5390,7 @@ def _get_half_day_settings() -> dict:
         cursor.execute(
             """
             SELECT COUNT(*) FROM attendance_duration_settings
-            WHERE is_enabled = 1 AND slot_half IN ('first_half', 'second_half')
+            WHERE is_enabled IS TRUE AND slot_half IN ('first_half', 'second_half')
             """
         )
         row = cursor.fetchone()
@@ -6186,6 +6173,8 @@ def _run_ddl():
         "ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS id SERIAL",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS can_reregister BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS district VARCHAR(100)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS class_div VARCHAR(50)",
         "ALTER TABLE attendance_duration_settings ADD COLUMN IF NOT EXISTS slot_type VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
         "ALTER TABLE other_staff_attendance ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'check_in'",
@@ -6231,7 +6220,10 @@ def _run_ddl():
         "CREATE INDEX IF NOT EXISTS idx_user_latest_locations_reg_no ON user_latest_locations (reg_no)",
         "CREATE INDEX IF NOT EXISTS idx_user_latest_locations_dept ON user_latest_locations (dept)",
     ]:
-        cursor.execute(idx)
+        try:
+            cursor.execute(idx)
+        except Exception:
+            pass
 
     # ── ENSURE COMPREHENSIVE ATTENDANCE EXPANSION COLUMNS ─────────────
     for alter_sql in [
@@ -6552,6 +6544,8 @@ def _run_ddl():
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS permanent_address TEXT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS city VARCHAR(100)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS state VARCHAR(100) DEFAULT 'Tamil Nadu'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS district VARCHAR(100)",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS class_div VARCHAR(50)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS pincode VARCHAR(10)",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT ''",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS first_time_login BOOLEAN DEFAULT TRUE",
@@ -6846,6 +6840,9 @@ def _run_ddl():
         CREATE TABLE IF NOT EXISTS academic_period_configs (
             id SERIAL PRIMARY KEY,
             dept VARCHAR(160) NOT NULL,
+            batch VARCHAR(50) NOT NULL DEFAULT 'all',
+            semester INT NOT NULL DEFAULT 0,
+            section VARCHAR(20) NOT NULL DEFAULT 'all',
             semester_type VARCHAR(20) NOT NULL DEFAULT 'all',
             start_time VARCHAR(10) NOT NULL DEFAULT '08:45',
             total_periods INT NOT NULL DEFAULT 7,
@@ -6853,10 +6850,16 @@ def _run_ddl():
             working_days TEXT NOT NULL DEFAULT '[\"Monday\", \"Tuesday\", \"Wednesday\", \"Thursday\", \"Friday\"]',
             breaks_json TEXT NOT NULL DEFAULT '[{\"title\": \"Tea Break\", \"after_period\": 2, \"duration_mins\": 15}, {\"title\": \"Lunch Break\", \"after_period\": 4, \"duration_mins\": 45}]',
             updated_by VARCHAR(64) NOT NULL DEFAULT 'SYSTEM',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(dept, semester_type)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE academic_period_configs ADD COLUMN IF NOT EXISTS batch VARCHAR(50) NOT NULL DEFAULT 'all'")
+        cursor.execute("ALTER TABLE academic_period_configs ADD COLUMN IF NOT EXISTS semester INT NOT NULL DEFAULT 0")
+        cursor.execute("ALTER TABLE academic_period_configs ADD COLUMN IF NOT EXISTS section VARCHAR(20) NOT NULL DEFAULT 'all'")
+        conn.commit()
+    except Exception:
+        pass
 
     # 11. Subject Faculty Allocations
     cursor.execute("""
@@ -7139,31 +7142,35 @@ def _load_geo_fence_polygons_from_db():
 
 
 # Initialize/migrate geofence data into v2 if empty
-cursor.execute("SELECT COUNT(*) FROM geo_fence_coordinates_v2")
-if cursor.fetchone()[0] == 0:
-    migrated = False
-    try:
-        cursor.execute("""
-            SELECT polygon_type, latitude, longitude, point_order
-            FROM geo_fence_coordinates
-            ORDER BY polygon_type, point_order
-        """)
-        old_rows = cursor.fetchall()
-        if old_rows:
-            by_type = {"outer": [], "inner": []}
-            for row in old_rows:
-                by_type[row[0]].append((float(row[1]), float(row[2])))
-            if len(by_type["outer"]) >= 3:
-                _insert_polygon_group("outer", 1, by_type["outer"])
-            if len(by_type["inner"]) >= 3:
-                _insert_polygon_group("inner", 1, by_type["inner"])
-            migrated = True
-    except Exception:
+try:
+    cursor.execute("SELECT COUNT(*) FROM geo_fence_coordinates_v2")
+    row = cursor.fetchone()
+    if row and row[0] == 0:
         migrated = False
+        try:
+            cursor.execute("""
+                SELECT polygon_type, latitude, longitude, point_order
+                FROM geo_fence_coordinates
+                ORDER BY polygon_type, point_order
+            """)
+            old_rows = cursor.fetchall()
+            if old_rows:
+                by_type = {"outer": [], "inner": []}
+                for r in old_rows:
+                    by_type[r[0]].append((float(r[1]), float(r[2])))
+                if len(by_type.get("outer", [])) >= 3:
+                    _insert_polygon_group("outer", 1, by_type["outer"])
+                if len(by_type.get("inner", [])) >= 3:
+                    _insert_polygon_group("inner", 1, by_type["inner"])
+                migrated = True
+        except Exception:
+            migrated = False
 
-    if not migrated:
-        _insert_polygon_group("outer", 1, _default_outer_coords())
-        _insert_polygon_group("inner", 1, _default_inner_coords())
+        if not migrated:
+            _insert_polygon_group("outer", 1, _default_outer_coords())
+            _insert_polygon_group("inner", 1, _default_inner_coords())
+except Exception as e:
+    print(f"Notice: Geofence v2 initialization notice: {e}")
 
 # Refresh in-memory geofence polygons from database
 try:
@@ -8136,7 +8143,9 @@ async def get_staff_tracking_status(request: Request):
             )
             has_check_out = cursor.fetchone()[0] > 0
 
-        # Check student_attendance and daily_attendance_status if not found
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        # Check student_attendance (where date column is DATE) and daily_attendance_status (where date is TEXT)
         if not has_check_in:
             cursor.execute(
                 "SELECT COUNT(*) FROM student_attendance WHERE LOWER(student_reg_no) = LOWER(?) AND date = CURRENT_DATE AND (status = 'Present' OR status = 'OD' OR status = 'check_in')",
@@ -8145,8 +8154,8 @@ async def get_staff_tracking_status(request: Request):
             has_check_in = cursor.fetchone()[0] > 0
         if not has_check_in:
             cursor.execute(
-                "SELECT COUNT(*) FROM daily_attendance_status WHERE LOWER(reg_no) = LOWER(?) AND date = CURRENT_DATE AND (status = 'Present' OR in_time IS NOT NULL)",
-                (reg_no,)
+                "SELECT COUNT(*) FROM daily_attendance_status WHERE LOWER(reg_no) = LOWER(?) AND date = ? AND (status = 'Present' OR in_time IS NOT NULL)",
+                (reg_no, today_str)
             )
             has_check_in = cursor.fetchone()[0] > 0
 
@@ -8158,13 +8167,36 @@ async def get_staff_tracking_status(request: Request):
             has_check_out = cursor.fetchone()[0] > 0
         if not has_check_out:
             cursor.execute(
-                "SELECT COUNT(*) FROM daily_attendance_status WHERE LOWER(reg_no) = LOWER(?) AND date = CURRENT_DATE AND (out_time IS NOT NULL AND out_time != '—' AND out_time != '')",
-                (reg_no,)
+                "SELECT COUNT(*) FROM daily_attendance_status WHERE LOWER(reg_no) = LOWER(?) AND date = ? AND (out_time IS NOT NULL AND out_time != '—' AND out_time != '')",
+                (reg_no, today_str)
             )
             has_check_out = cursor.fetchone()[0] > 0
 
-        # Tracking is active ONLY if checked in AND NOT checked out
-        tracking_active = has_check_in and not has_check_out
+        # Duration window configuration from settings
+        hd = _get_half_day_settings()
+        window_start = hd.get("location_tracking_start", "08:30")
+        window_end = hd.get("location_tracking_end", "17:30")
+
+        now = datetime.now()
+        cur_hhmm = now.strftime("%H:%M")
+
+        # Tracking starts at check-in and ends at the configured location tracking window end time
+        if not has_check_in:
+            tracking_active = False
+            state = "waiting_for_check_in"
+            reason = "Waiting for attendance check-in to start location tracking"
+        elif has_check_out:
+            tracking_active = False
+            state = "checked_out"
+            reason = "User has checked out for today"
+        elif cur_hhmm > window_end:
+            tracking_active = False
+            state = "window_ended"
+            reason = f"Location tracking window ended at {window_end}"
+        else:
+            tracking_active = True
+            state = "active"
+            reason = f"Tracking active until {window_end}"
 
         # Check if force update is requested
         cursor.execute("SELECT force_update_requested FROM user_latest_locations WHERE reg_no = ?", (reg_no,))
@@ -8174,6 +8206,10 @@ async def get_staff_tracking_status(request: Request):
         return {
             "success": True,
             "tracking_active": tracking_active,
+            "state": state,
+            "reason": reason,
+            "window_start": window_start,
+            "window_end": window_end,
             "has_check_in": has_check_in,
             "has_check_out": has_check_out,
             "force_update": force_update,
@@ -8242,39 +8278,69 @@ async def request_force_location_update(request: Request, reg_no: str):
 @app.get("/admin/locations/live")
 async def admin_get_live_locations(
     request: Request,
+    date: Optional[str] = None,
     minutes: int = 180,
     include_stale: bool = False,
     online_only: bool = False,
     online_window_minutes: int = 60,
     inside_outer_only: bool = False,
 ):
-    """Get latest known location for all users (Admin/HOD only)."""
+    """Get latest known location for all users (Admin/HOD only). Supports historical date lookup."""
     verify_admin_token(request)
 
-    # Keep live locations visible for the whole day window:
-    # from today's 12:00 AM up to next day's 12:00 AM.
     now = datetime.now()
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    next_day_start = day_start + timedelta(days=1)
+    today_str = now.strftime("%Y-%m-%d")
+    is_history_date = False
+
+    if date and date != today_str:
+        try:
+            parsed_date = datetime.strptime(date, "%Y-%m-%d")
+            day_start = parsed_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            next_day_start = day_start + timedelta(days=1)
+            is_history_date = True
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+    else:
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        next_day_start = day_start + timedelta(days=1)
 
     minutes = max(1, min(minutes, 60 * 24 * 30))
     online_window_minutes = max(1, min(online_window_minutes, 120))
 
-    if include_stale and not online_only:
+    if is_history_date:
         cursor.execute(
             """
-            SELECT ul.reg_no, ul.username, ul.name, ul.dept, ul.role, ul.latitude, ul.longitude, ul.accuracy_meters,
-                   ul.speed_mps, ul.heading_deg, ul.altitude_m, ul.source, ul.app_state, ul.is_mocked,
-                   ul.device_id, ul.captured_at, ul.last_seen_at, ul.boundary_warning, ul.warning_message,
-                   u.out_permission_enabled, u.out_permission_expiry
-            FROM user_latest_locations ul
-            LEFT JOIN users u ON ul.reg_no = u.reg_no
-            WHERE ul.last_seen_at >= ? AND ul.last_seen_at < ?
-            ORDER BY ul.last_seen_at DESC
+            WITH ranked_logs AS (
+                SELECT l.reg_no, l.username, l.name, l.dept, l.role,
+                       l.latitude, l.longitude, l.accuracy_meters,
+                       l.speed_mps, l.heading_deg, l.altitude_m,
+                       l.source, l.app_state, l.is_mocked,
+                       l.device_id, l.captured_at, l.server_received_at as last_seen_at,
+                       l.boundary_warning, l.warning_message,
+                       ROW_NUMBER() OVER (PARTITION BY l.reg_no ORDER BY l.captured_at DESC) as rn,
+                       COUNT(*) OVER (PARTITION BY l.reg_no) as total_points,
+                       MAX(CASE WHEN l.boundary_warning = TRUE THEN 1 ELSE 0 END) OVER (PARTITION BY l.reg_no) as had_breach
+                FROM user_location_logs l
+                WHERE l.captured_at >= ? AND l.captured_at < ?
+            )
+            SELECT r.reg_no, r.username, r.name, r.dept, r.role,
+                   r.latitude, r.longitude, r.accuracy_meters,
+                   r.speed_mps, r.heading_deg, r.altitude_m,
+                   r.source, r.app_state, r.is_mocked,
+                   r.device_id, r.captured_at, r.last_seen_at,
+                   CASE WHEN r.had_breach = 1 THEN TRUE ELSE r.boundary_warning END as boundary_warning,
+                   r.warning_message,
+                   u.out_permission_enabled, u.out_permission_expiry,
+                   r.total_points
+            FROM ranked_logs r
+            LEFT JOIN users u ON r.reg_no = u.reg_no
+            WHERE r.rn = 1
+            ORDER BY r.captured_at DESC
         """,
             (day_start, next_day_start),
         )
-    elif online_only:
+    elif include_stale and not online_only:
+        # Include all users with known locations, preserving their latest position
         cursor.execute(
             """
             SELECT ul.reg_no, ul.username, ul.name, ul.dept, ul.role, ul.latitude, ul.longitude, ul.accuracy_meters,
@@ -8283,10 +8349,23 @@ async def admin_get_live_locations(
                    u.out_permission_enabled, u.out_permission_expiry
             FROM user_latest_locations ul
             LEFT JOIN users u ON ul.reg_no = u.reg_no
-            WHERE ul.last_seen_at >= ? AND ul.last_seen_at < ?
+            ORDER BY ul.last_seen_at DESC
+        """
+        )
+    elif online_only:
+        online_cutoff = now - timedelta(minutes=online_window_minutes)
+        cursor.execute(
+            """
+            SELECT ul.reg_no, ul.username, ul.name, ul.dept, ul.role, ul.latitude, ul.longitude, ul.accuracy_meters,
+                   ul.speed_mps, ul.heading_deg, ul.altitude_m, ul.source, ul.app_state, ul.is_mocked,
+                   ul.device_id, ul.captured_at, ul.last_seen_at, ul.boundary_warning, ul.warning_message,
+                   u.out_permission_enabled, u.out_permission_expiry
+            FROM user_latest_locations ul
+            LEFT JOIN users u ON ul.reg_no = u.reg_no
+            WHERE ul.last_seen_at >= ?
             ORDER BY ul.last_seen_at DESC
         """,
-            (day_start, next_day_start),
+            (online_cutoff,),
         )
     else:
         cursor.execute(
@@ -8312,6 +8391,26 @@ async def admin_get_live_locations(
             lat, lng, _geo_fence_outer_polygons
         ):
             continue
+        total_pts = int(row[21]) if len(row) > 21 and row[21] is not None else 1
+
+        last_seen_raw = row[16]
+        is_today = False
+        last_seen_relative = "Offline"
+        is_online = False
+        if isinstance(last_seen_raw, datetime):
+            is_today = (last_seen_raw >= day_start and last_seen_raw < next_day_start)
+            diff_sec = (now - last_seen_raw).total_seconds()
+            if diff_sec < 300:
+                last_seen_relative = "Active (Just now)"
+                is_online = True
+            elif diff_sec < 3600:
+                last_seen_relative = f"Active ({int(diff_sec / 60)}m ago)"
+                is_online = True
+            elif is_today:
+                last_seen_relative = f"Today at {last_seen_raw.strftime('%H:%M')}"
+            else:
+                last_seen_relative = last_seen_raw.strftime("%d %b %H:%M")
+
         locations.append(
             {
                 "reg_no": row[0],
@@ -8335,17 +8434,24 @@ async def admin_get_live_locations(
                 "warning_message": row[18],
                 "out_permission_enabled": bool(row[19]) if row[19] is not None else False,
                 "out_permission_expiry": row[20],
+                "total_points": total_pts,
+                "is_today": is_today,
+                "is_online": is_online,
+                "last_seen_relative": last_seen_relative,
             }
         )
 
     return {
         "success": True,
         "count": len(locations),
+        "is_history_date": is_history_date,
+        "selected_date": date or today_str,
         "minutes": minutes,
         "include_stale": include_stale,
         "online_only": online_only,
         "online_window_minutes": online_window_minutes,
         "inside_outer_only": inside_outer_only,
+        "campus_polygons": _geo_fence_outer_polygons,
         "locations": locations,
     }
 
@@ -8413,6 +8519,70 @@ async def admin_get_location_history(request: Request, reg_no: str, date: str = 
         "reg_no": reg_no,
         "count": len(history),
         "history": history,
+    }
+
+
+@app.get("/admin/locations/all-trails")
+async def admin_get_all_trails(request: Request, date: str, limit_per_user: int = 250):
+    """Get movement trails for all users tracked on a specific date (Admin/HOD only)."""
+    verify_admin_token(request)
+    limit_per_user = max(10, min(limit_per_user, 1000))
+    try:
+        parsed_date = datetime.strptime(date, "%Y-%m-%d")
+        day_start = parsed_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        next_day_start = day_start + timedelta(days=1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+
+    cursor.execute(
+        """
+        WITH user_points AS (
+            SELECT reg_no, username, name, dept, role, latitude, longitude,
+                   accuracy_meters, speed_mps, heading_deg, altitude_m,
+                   captured_at, boundary_warning, warning_message,
+                   ROW_NUMBER() OVER (PARTITION BY reg_no ORDER BY captured_at ASC) as point_seq
+            FROM user_location_logs
+            WHERE captured_at >= ? AND captured_at < ?
+        )
+        SELECT reg_no, username, name, dept, role, latitude, longitude,
+               accuracy_meters, speed_mps, heading_deg, altitude_m,
+               captured_at, boundary_warning, warning_message
+        FROM user_points
+        WHERE point_seq <= ?
+        ORDER BY reg_no, captured_at ASC
+    """,
+        (day_start, next_day_start, limit_per_user),
+    )
+    rows = cursor.fetchall()
+    trails_by_user = {}
+    for row in rows:
+        reg = row[0]
+        if reg not in trails_by_user:
+            trails_by_user[reg] = {
+                "reg_no": reg,
+                "username": row[1],
+                "name": row[2] or reg,
+                "dept": row[3],
+                "role": row[4],
+                "points": []
+            }
+        trails_by_user[reg]["points"].append({
+            "latitude": float(row[5]),
+            "longitude": float(row[6]),
+            "accuracy_meters": float(row[7]) if row[7] is not None else None,
+            "speed_mps": float(row[8]) if row[8] is not None else None,
+            "heading_deg": float(row[9]) if row[9] is not None else None,
+            "altitude_m": float(row[10]) if row[10] is not None else None,
+            "captured_at": _ts(row[11]),
+            "boundary_warning": bool(row[12]) if row[12] is not None else False,
+            "warning_message": row[13]
+        })
+
+    return {
+        "success": True,
+        "date": date,
+        "user_count": len(trails_by_user),
+        "trails": list(trails_by_user.values())
     }
 
 
@@ -9214,7 +9384,7 @@ def _get_active_attendance_slot():
         cursor.execute("""
             SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
             FROM attendance_duration_settings
-            WHERE is_enabled = 1
+            WHERE is_enabled IS TRUE
             ORDER BY slot_number ASC
         """)
         duration_rows = cursor.fetchall()
@@ -9273,7 +9443,7 @@ try:
                 if "CUDAExecutionProvider" in available_providers:
                     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                     ctx_id = 0
-                    print("GPU available, using GPU for face analysis")
+                    print("GPU available, using CUDAExecutionProvider for face analysis")
                 else:
                     gpu_available = False
                     providers = ["CPUExecutionProvider"]
@@ -9974,7 +10144,7 @@ async def mark_attendance_secure(
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled = 1
+        WHERE is_enabled IS TRUE
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -11104,7 +11274,7 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled = 1
+        WHERE is_enabled IS TRUE
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -11236,7 +11406,7 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled = 1
+        WHERE is_enabled IS TRUE
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -12571,79 +12741,93 @@ async def admin_get_users(request: Request, role: str = None):
 
 @app.post("/admin/users/create")
 async def admin_create_user(request: Request):
-    """Create new user (admin only)"""
+    """Create new user (admin only) with resilient validation, auto-provisioning and role normalization"""
     verify_admin_token(request)
 
     try:
         data = await request.json()
-        username = data.get("username")
-        password = data.get("password")
-        reg_no = data.get("reg_no")
-        name = data.get("name")
-        dept = data.get("dept")
-        role = data.get("role")
+        raw_username = data.get("username") or data.get("user_name") or data.get("email")
+        raw_password = data.get("password")
+        raw_reg_no = data.get("reg_no")
+        name = str(data.get("name") or data.get("full_name") or "").strip()
+        dept = str(data.get("dept") or data.get("department") or "General").strip()
+        role = str(data.get("role") or "staff").strip().lower()
 
-        if not all([username, password, name, role]):
-            raise HTTPException(status_code=400, detail="Missing required fields")
+        # Normalize role aliases
+        role_map = {
+            "hod": "hod",
+            "head_of_department": "hod",
+            "staff": "staff",
+            "faculty": "staff",
+            "teacher": "staff",
+            "professor": "staff",
+            "assistant_professor": "staff",
+            "associate_professor": "staff",
+            "admin": "admin",
+            "administrator": "admin",
+            "principal": "principal",
+            "vice_chancellor": "vice_chancellor",
+            "vc": "vice_chancellor",
+            "director": "director",
+            "dean": "dean",
+        }
+        normalized_role = role_map.get(role, role)
 
-        # Allow admin-defined roles: admin, hod, staff, principal, vice_chancellor, etc.
-        allowed_roles = [
-            "admin",
-            "hod",
-            "staff",
-            "principal",
-            "vice_chancellor",
-            "director",
-            "dean",
-        ]
-        if role not in allowed_roles and not role.startswith("custom_"):
-            # Allow any role that starts with 'custom_'
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid role. Allowed roles: {', '.join(allowed_roles)}",
-            )
+        # If name is empty, try to derive from username or reg_no
+        if not name:
+            name = str(raw_username or raw_reg_no or "New Staff").strip()
 
-        # Auto-generate reg_no if not provided or for hod/staff roles
-        if (
-            reg_no is None
-            or reg_no.strip() == ""
-            or role
-            in ["hod", "staff", "principal", "vice_chancellor", "director", "dean"]
-        ):
-            if role == "hod":
-                prefix = "HOD"
-            elif role == "staff":
-                prefix = "STAFF"
-            elif role == "principal":
-                prefix = "PRINCIPAL"
-            elif role == "vice_chancellor":
-                prefix = "VC"
-            elif role == "director":
-                prefix = "DIR"
-            elif role == "dean":
-                prefix = "DEAN"
-            elif role.startswith("custom_"):
-                prefix = role.replace("custom_", "").upper()[:6]
-            else:
-                prefix = "USR"
+        # Generate username if not provided
+        if not raw_username or not str(raw_username).strip():
+            base_user = name.lower().replace(" ", "_").replace(".", "")
+            base_user = "".join(c for c in base_user if c.isalnum() or c == "_")
+            if not base_user:
+                base_user = f"{normalized_role}_user"
+            username = base_user
+            suffix = 1
+            while get_user_by_username(username):
+                username = f"{base_user}_{suffix}"
+                suffix += 1
+        else:
+            username = str(raw_username).strip()
+            # If username already exists, adjust suffix to prevent failure
+            if get_user_by_username(username):
+                base_u = username
+                suffix = 1
+                while get_user_by_username(username):
+                    username = f"{base_u}_{suffix}"
+                    suffix += 1
 
-            # Get count for this role
-            cursor.execute("SELECT COUNT(*) FROM users WHERE role = ?", (role,))
-            count = cursor.fetchone()[0]
-            reg_no = f"{prefix}_{str(count + 1).zfill(4)}"
+        # Default password if omitted
+        password = str(raw_password).strip() if raw_password else "Welcome@123"
 
-            # Make sure it's unique
+        # Registration number generation / validation
+        if raw_reg_no and str(raw_reg_no).strip():
+            reg_no = str(raw_reg_no).strip()
+            if get_user_by_reg_no(reg_no):
+                base_reg = reg_no
+                suffix = 1
+                while get_user_by_reg_no(reg_no):
+                    reg_no = f"{base_reg}_{suffix}"
+                    suffix += 1
+        else:
+            prefix_map = {
+                "hod": "HOD",
+                "staff": "STAFF",
+                "principal": "PRINCIPAL",
+                "vice_chancellor": "VC",
+                "director": "DIR",
+                "dean": "DEAN",
+                "admin": "ADMIN",
+            }
+            prefix = prefix_map.get(normalized_role, normalized_role.upper()[:6])
+            cursor.execute("SELECT COUNT(*) FROM users WHERE role = ?", (normalized_role,))
+            row = cursor.fetchone()
+            count = (row[0] if row else 0) + 1
+            reg_no = f"{prefix}_{str(count).zfill(4)}"
             while get_user_by_reg_no(reg_no):
                 count += 1
                 reg_no = f"{prefix}_{str(count).zfill(4)}"
-        else:
-            if get_user_by_reg_no(reg_no):
-                raise HTTPException(
-                    status_code=400, detail="Registration number already exists"
-                )
-
-        if get_user_by_username(username):
-            raise HTTPException(status_code=400, detail="Username already exists")
 
         password_hash = hash_password(password)
 
@@ -12651,13 +12835,35 @@ async def admin_create_user(request: Request):
             """
             INSERT INTO users (username, password_hash, reg_no, name, dept, role, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-            (username, password_hash, reg_no, name, dept, role, "admin"),
+            """,
+            (username, password_hash, reg_no, name, dept, normalized_role, "admin"),
         )
         conn.commit()
 
+        # Automatically initialize leave balances
+        try:
+            cursor.execute(
+                """
+                INSERT INTO casual_leave (reg_no, user_name, total_cl_available, cl_balance, cl_used, cl_used_current_month, total_cl, role)
+                VALUES (?, ?, 12.0, 12.0, 0.0, 0.0, 12.0, ?)
+                ON CONFLICT (reg_no) DO NOTHING
+                """,
+                (reg_no, name, normalized_role),
+            )
+            cursor.execute(
+                """
+                INSERT INTO earned_leave (reg_no, user_name, dept, role, total_ccl_credited, ccl_balance, ccl_used)
+                VALUES (?, ?, ?, ?, 0.0, 0.0, 0.0)
+                ON CONFLICT (reg_no) DO NOTHING
+                """,
+                (reg_no, name, dept, normalized_role),
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"[WARN] Non-critical leave balance initialization note for {reg_no}: {e}")
+
         log_audit_event(
-            "USER_CREATED", reg_no, True, f"User {username} created with role {role}"
+            "USER_CREATED", reg_no, True, f"User {username} created with role {normalized_role}"
         )
 
         return success_response(
@@ -12667,14 +12873,14 @@ async def admin_create_user(request: Request):
                 "reg_no": reg_no,
                 "name": name,
                 "dept": dept,
-                "role": role,
+                "role": normalized_role,
             },
         )
     except HTTPException:
         raise
     except Exception as e:
         print(f"Create user error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create user")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
 
 @app.post("/admin/users/bulk-create")
@@ -13693,102 +13899,95 @@ async def admin_get_other_staff(request: Request, role: str = None):
 
 @app.post("/admin/other_staff/create")
 async def admin_create_other_staff(request: Request):
-    """Create a new other staff member (Admin only)"""
+    """Create a new other staff member (Admin only) with resilient validation"""
     try:
         admin_user = verify_admin_token(request)
         data = await request.json()
 
-        username = data.get("username")
-        password = data.get("password")
-        reg_no = data.get("reg_no")
-        name = data.get("name")
-        dob = data.get("dob")
-        role = data.get("role")
-        dept = data.get("dept")
+        raw_username = data.get("username") or data.get("user_name") or data.get("email")
+        raw_password = data.get("password")
+        raw_reg_no = data.get("reg_no")
+        name = str(data.get("name") or data.get("full_name") or "").strip()
+        dob = str(data.get("dob") or "").strip()
+        role = str(data.get("role") or "other_staff").strip().lower()
+        dept = str(data.get("dept") or data.get("department") or "").strip()
+
         default_dept = get_default_department_for_role(role)
-        if default_dept:
+        if default_dept and not dept:
             dept = default_dept
-        elif isinstance(dept, str):
-            dept = dept.strip()
+        elif not dept:
+            dept = "General"
 
-        # DEBUG: Log received data
-        print(
-            f"[DEBUG] Create other_staff request - username: {username}, reg_no: {reg_no}, name: {name}, role: {role}, dept: {dept}"
-        )
+        if not name:
+            name = str(raw_username or raw_reg_no or "Staff Member").strip()
 
-        # Validate required fields
-        if not all([username, password, name, role]):
-            print(
-                f"[DEBUG] Missing required fields - username: {username}, password: {password}, name: {name}, role: {role}"
-            )
-            raise HTTPException(status_code=400, detail="Missing required fields")
+        # Generate username if omitted or handle duplicates
+        if not raw_username or not str(raw_username).strip():
+            base_user = name.lower().replace(" ", "_").replace(".", "")
+            base_user = "".join(c for c in base_user if c.isalnum() or c == "_")
+            if not base_user:
+                base_user = f"{role}_user"
+            username = base_user
+            suffix = 1
+            while get_other_staff_by_username(username):
+                username = f"{base_user}_{suffix}"
+                suffix += 1
+        else:
+            username = str(raw_username).strip()
+            if get_other_staff_by_username(username):
+                base_u = username
+                suffix = 1
+                while get_other_staff_by_username(username):
+                    username = f"{base_u}_{suffix}"
+                    suffix += 1
 
-        # Validate role
-        allowed_roles = list(OTHER_STAFF_ROLES)
-        print(
-            f"[DEBUG] Role validation - received: '{role}', allowed: {allowed_roles}, is_valid: {role in allowed_roles}"
-        )
-        if role not in allowed_roles:
-            raise HTTPException(status_code=400, detail="Invalid role")
-
-        # Check if user already exists
-        print(
-            f"[DEBUG] Checking if user exists - username: {username}"
-        )
-        if get_other_staff_by_username(username):
-            print(f"[DEBUG] Username already exists: {username}")
-            raise HTTPException(status_code=400, detail="Username already exists")
+        password = str(raw_password).strip() if raw_password else (dob.replace("-", "") if dob else "Welcome@123")
 
         # Auto-generate reg_no if not provided
-        if not reg_no or reg_no.strip() == "":
-            if role == "principal":
-                prefix = "PRINCIPAL"
-            elif role == "placement_staff":
-                prefix = "PLACE"
-            elif role == "lab_technician":
-                prefix = "LAB"
-            elif role == "system_admin":
-                prefix = "SYS"
-            elif role == "office_staff":
-                prefix = "OFFICE"
-            else:
-                prefix = "OS"
-
+        if raw_reg_no and str(raw_reg_no).strip():
+            reg_no = str(raw_reg_no).strip()
+            if get_other_staff_by_reg_no(reg_no):
+                base_reg = reg_no
+                suffix = 1
+                while get_other_staff_by_reg_no(reg_no):
+                    reg_no = f"{base_reg}_{suffix}"
+                    suffix += 1
+        else:
+            prefix_map = {
+                "principal": "PRINCIPAL",
+                "placement_staff": "PLACE",
+                "lab_technician": "LAB",
+                "system_admin": "SYS",
+                "office_staff": "OFFICE",
+                "warden": "WARDEN",
+                "librarian": "LIB",
+                "security": "SEC",
+                "maintenance": "MAINT",
+            }
+            prefix = prefix_map.get(role, "OS")
             cursor.execute("SELECT COUNT(*) FROM other_staff WHERE role = ?", (role,))
-            count = cursor.fetchone()[0]
-            reg_no = f"{prefix}_{str(count + 1).zfill(4)}"
-
+            count = (cursor.fetchone()[0] or 0) + 1
+            reg_no = f"{prefix}_{str(count).zfill(4)}"
             while get_other_staff_by_reg_no(reg_no):
                 count += 1
                 reg_no = f"{prefix}_{str(count).zfill(4)}"
-        else:
-            if get_other_staff_by_reg_no(reg_no):
-                print(f"[DEBUG] Registration number already exists: {reg_no}")
-                raise HTTPException(
-                    status_code=400, detail="Registration number already exists"
-                )
 
-        # Hash password
         password_hash = hash_password(password)
 
-        # Insert user
-        print(
-            f"[DEBUG] Inserting user - username: {username}, reg_no: {reg_no}, name: {name}, role: {role}, dob: {dob}, dept: {dept}"
-        )
         cursor.execute(
             """
             INSERT INTO other_staff (username, password_hash, reg_no, name, dob, role, dept, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+            """,
             (
                 username,
                 password_hash,
                 reg_no,
                 name,
-                dob,
+                dob or None,
                 role,
                 dept,
-                admin_user["username"],
+                admin_user.get("username", "admin"),
             ),
         )
         conn.commit()
@@ -13797,7 +13996,7 @@ async def admin_create_other_staff(request: Request):
             "OTHER_STAFF_CREATED",
             reg_no,
             True,
-            f"Created by admin {admin_user['username']}",
+            f"Created by admin {admin_user.get('username', 'admin')}",
         )
 
         return {
@@ -20807,7 +21006,7 @@ async def other_staff_mark_attendance(request: Request):
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled = 1
+        WHERE is_enabled IS TRUE
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -25632,6 +25831,44 @@ async def student_mark_attendance(
     except Exception as att_err:
         print(f"[StudentAttendance] attendance insert notice: {att_err}")
 
+    # D) Sync student location into user_latest_locations and user_location_logs
+    if client_lat and client_lng:
+        try:
+            c_lat_val = float(client_lat)
+            c_lng_val = float(client_lng)
+            cursor.execute(
+                """
+                INSERT INTO user_latest_locations
+                (reg_no, username, name, dept, role, latitude, longitude, accuracy_meters, 
+                 source, app_state, captured_at, last_seen_at)
+                VALUES (?, ?, ?, ?, 'student', ?, ?, 15.0, 'student_attendance_checkin', 'foreground', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (reg_no) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    name = EXCLUDED.name,
+                    dept = EXCLUDED.dept,
+                    role = EXCLUDED.role,
+                    latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude,
+                    accuracy_meters = EXCLUDED.accuracy_meters,
+                    source = EXCLUDED.source,
+                    app_state = EXCLUDED.app_state,
+                    captured_at = EXCLUDED.captured_at,
+                    last_seen_at = CURRENT_TIMESTAMP
+                """,
+                (stu_reg, stu_reg, stu_name, stu_dept, c_lat_val, c_lng_val)
+            )
+            cursor.execute(
+                """
+                INSERT INTO user_location_logs
+                (reg_no, username, name, dept, role, latitude, longitude, accuracy_meters, 
+                 source, app_state, captured_at, server_received_at)
+                VALUES (?, ?, ?, ?, 'student', ?, ?, 15.0, 'student_attendance_checkin', 'foreground', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (stu_reg, stu_reg, stu_name, stu_dept, c_lat_val, c_lng_val)
+            )
+        except Exception as loc_err:
+            print(f"[StudentAttendance] Error recording check-in location: {loc_err}")
+
     conn.commit()
 
     # 9. Recalculate Attendance Summary
@@ -26293,33 +26530,17 @@ def get_student_today_timetable(request: Request, day: Optional[str] = Query(Non
             }
     # ── End Holiday Guard ────────────────────────────────────────────────────
 
-    # 1. Fetch period config
-    cursor.execute(
-        "SELECT start_time, total_periods, period_duration_mins, working_days, breaks_json FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-        (dept.strip(),)
+    # 1. Fetch class-specific period config (with hierarchical fallback)
+    p_cfg = get_academic_period_config_for_class(
+        dept=dept.strip(),
+        batch=batch.strip() if batch else "all",
+        semester=semester,
+        section=section.strip() if section else "all",
     )
-    p_row = cursor.fetchone()
-    start_time = "08:45"
-    total_periods = 7
-    period_dur = 50
-    default_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    default_breaks = [
-        {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
-        {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
-    ]
-    breaks_list = default_breaks
-
-    if p_row:
-        if isinstance(p_row, dict):
-            start_time = p_row.get("start_time") or start_time
-            total_periods = p_row.get("total_periods") or total_periods
-            period_dur = p_row.get("period_duration_mins") or period_dur
-            breaks_list = json.loads(p_row.get("breaks_json") or "[]") if isinstance(p_row.get("breaks_json"), str) else (p_row.get("breaks_json") or default_breaks)
-        else:
-            start_time = p_row[0]
-            total_periods = p_row[1]
-            period_dur = p_row[2]
-            breaks_list = json.loads(p_row[4]) if (len(p_row) > 4 and isinstance(p_row[4], str)) else default_breaks
+    start_time = p_cfg["start_time"]
+    total_periods = p_cfg["total_periods"]
+    period_dur = p_cfg["period_duration_mins"]
+    breaks_list = p_cfg["breaks"]
 
     timeline = _compute_schedule_slots_timings(start_time, total_periods, period_dur, breaks_list)
 
@@ -26900,7 +27121,7 @@ async def admin_sync_student_holiday_status(request: Request):
                 _, holiday_reason, is_holiday = _academic_status_for_date(d_str)
                 if is_holiday:
                     # Count students BEFORE sync for reporting
-                    cursor.execute("SELECT COUNT(*) FROM students WHERE is_active = 1 OR is_active = TRUE")
+                    cursor.execute("SELECT COUNT(*) FROM students WHERE is_active IS TRUE")
                     cnt_row = cursor.fetchone()
                     stu_cnt = (cnt_row[0] if isinstance(cnt_row, (list, tuple)) else (cnt_row or {}).get("COUNT(*)", 0)) or 0
                     _sync_student_holiday_day_status(d_str, holiday_reason or "", "Admin:SyncCalendar")
@@ -28474,6 +28695,7 @@ async def register_university_student(request: Request):
     permanent_address = (data.get("permanent_address") or "").strip() or None
     city = (data.get("city") or "").strip() or None
     state = (data.get("state") or "Tamil Nadu").strip()
+    district = (data.get("district") or data.get("city") or "").strip() or None
     pincode = (data.get("pincode") or "").strip() or None
     custom_password = data.get("custom_password")
     overwrite = bool(data.get("overwrite", False))
@@ -28530,10 +28752,10 @@ async def register_university_student(request: Request):
                 reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                 degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                 father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                permanent_address, city, state, pincode, password_hash, first_time_login,
-                registered_by, registered_role
+                permanent_address, city, state, district, pincode, password_hash, first_time_login,
+                registered_by, registered_role, year
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
             ON CONFLICT (reg_no) DO UPDATE SET
                 roll_no = EXCLUDED.roll_no,
                 name = EXCLUDED.name,
@@ -28558,14 +28780,16 @@ async def register_university_student(request: Request):
                 permanent_address = EXCLUDED.permanent_address,
                 city = EXCLUDED.city,
                 state = EXCLUDED.state,
+                district = EXCLUDED.district,
                 pincode = EXCLUDED.pincode,
+                year = EXCLUDED.year,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
                 reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                 degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                 father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                permanent_address, city, state, pincode, pw_hash, caller_reg_no, caller_role
+                permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
             )
         )
     except Exception as e_sql:
@@ -28578,14 +28802,14 @@ async def register_university_student(request: Request):
                     roll_no = ?, name = ?, email = ?, phone_number = ?, dob = ?, gender = ?, blood_group = ?,
                     degree = ?, dept = ?, batch = ?, year_of_study = ?, semester = ?, section = ?, quota = ?,
                     mentor_staff_reg_no = ?, father_name = ?, mother_name = ?, parent_phone = ?, parent_email = ?,
-                    emergency_contact = ?, permanent_address = ?, city = ?, state = ?, pincode = ?, updated_at = CURRENT_TIMESTAMP
+                    emergency_contact = ?, permanent_address = ?, city = ?, state = ?, district = ?, pincode = ?, year = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE LOWER(reg_no) = LOWER(?)
                 """,
                 (
                     roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota,
                     mentor_staff_reg_no, father_name, mother_name, parent_phone, parent_email,
-                    emergency_contact, permanent_address, city, state, pincode, reg_no
+                    emergency_contact, permanent_address, city, state, district, pincode, year_of_study, reg_no
                 )
             )
         else:
@@ -28595,16 +28819,16 @@ async def register_university_student(request: Request):
                     reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                     father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                    permanent_address, city, state, pincode, password_hash, first_time_login,
-                    registered_by, registered_role
+                    permanent_address, city, state, district, pincode, password_hash, first_time_login,
+                    registered_by, registered_role, year
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
                 """,
                 (
                     reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                     father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                    permanent_address, city, state, pincode, pw_hash, caller_reg_no, caller_role
+                    permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
                 )
             )
 
@@ -28757,7 +28981,10 @@ BULK_TEMPLATE_HEADERS = [
     "Mother Name",
     "Parent Phone*",
     "Mentor Staff Reg No",
-    "Address"
+    "State",
+    "District",
+    "Address",
+    "Pincode"
 ]
 
 
@@ -28785,7 +29012,7 @@ def _normalize_student_header(h: str) -> str:
         "parentemail": "parent_email", "guardianemail": "parent_email",
         "emergencycontact": "emergency_contact", "emergencyphone": "emergency_contact",
         "mentorstaffregno": "mentor_staff_reg_no", "mentor": "mentor_staff_reg_no", "advisor": "mentor_staff_reg_no", "classadvisor": "mentor_staff_reg_no", "mentorid": "mentor_staff_reg_no",
-        "address": "permanent_address", "permanentaddress": "permanent_address", "city": "city", "state": "state", "pincode": "pincode"
+        "address": "permanent_address", "permanentaddress": "permanent_address", "state": "state", "district": "district", "city": "city", "pincode": "pincode", "pin": "pincode", "zip": "pincode"
     }
     return mapping.get(cleaned, cleaned)
 
@@ -29204,6 +29431,10 @@ def execute_student_bulk_import(
         parent_email = (s.get("parent_email") or "").strip() or None
         mentor_reg = (s.get("mentor_staff_reg_no") or "").strip() or (caller_reg_no if caller_role in ["staff", "faculty"] else None)
         address = (s.get("permanent_address") or "").strip() or None
+        state = (s.get("state") or "Tamil Nadu").strip()
+        district = (s.get("district") or s.get("city") or "").strip() or None
+        city = (s.get("city") or district or "").strip() or None
+        pincode = (s.get("pincode") or "").strip() or None
 
         pw_hash = hash_password(dob.replace("-", "").replace("/", "") or "Welcome@123")
 
@@ -29214,10 +29445,10 @@ def execute_student_bulk_import(
                     reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                     father_name, mother_name, parent_phone, parent_email,
-                    permanent_address, password_hash, first_time_login,
-                    registered_by, registered_role
+                    permanent_address, state, district, city, pincode, password_hash, first_time_login,
+                    registered_by, registered_role, year
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
                 ON CONFLICT (reg_no) DO UPDATE SET
                     roll_no = CASE WHEN ? = TRUE THEN EXCLUDED.roll_no ELSE students.roll_no END,
                     name = CASE WHEN ? = TRUE THEN EXCLUDED.name ELSE students.name END,
@@ -29239,16 +29470,22 @@ def execute_student_bulk_import(
                     parent_phone = CASE WHEN ? = TRUE THEN EXCLUDED.parent_phone ELSE students.parent_phone END,
                     parent_email = CASE WHEN ? = TRUE THEN EXCLUDED.parent_email ELSE students.parent_email END,
                     permanent_address = CASE WHEN ? = TRUE THEN EXCLUDED.permanent_address ELSE students.permanent_address END,
+                    state = CASE WHEN ? = TRUE THEN EXCLUDED.state ELSE students.state END,
+                    district = CASE WHEN ? = TRUE THEN EXCLUDED.district ELSE students.district END,
+                    city = CASE WHEN ? = TRUE THEN EXCLUDED.city ELSE students.city END,
+                    pincode = CASE WHEN ? = TRUE THEN EXCLUDED.pincode ELSE students.pincode END,
+                    year = CASE WHEN ? = TRUE THEN EXCLUDED.year ELSE students.year END,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_reg,
                     father_name, mother_name, parent_phone, parent_email,
-                    address, pw_hash, caller_reg_no, caller_role,
+                    address, state, district, city, pincode, pw_hash, caller_reg_no, caller_role, year_of_study,
                     overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
                     overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
-                    overwrite, overwrite, overwrite, overwrite, overwrite, overwrite
+                    overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
+                    overwrite, overwrite, overwrite, overwrite
                 )
             )
             inserted_count += 1
@@ -29264,14 +29501,14 @@ def execute_student_bulk_import(
                                 roll_no = ?, name = ?, email = ?, phone_number = ?, dob = ?, gender = ?, blood_group = ?,
                                 degree = ?, dept = ?, batch = ?, year_of_study = ?, semester = ?, section = ?, quota = ?,
                                 mentor_staff_reg_no = ?, father_name = ?, mother_name = ?, parent_phone = ?, parent_email = ?,
-                                permanent_address = ?, updated_at = CURRENT_TIMESTAMP
+                                permanent_address = ?, state = ?, district = ?, city = ?, pincode = ?, year = ?, updated_at = CURRENT_TIMESTAMP
                             WHERE LOWER(reg_no) = LOWER(?)
                             """,
                             (
                                 roll_no, name, email, phone_number, dob, gender, blood_group,
                                 degree, dept, batch, year_of_study, semester, section, quota,
                                 mentor_reg, father_name, mother_name, parent_phone, parent_email,
-                                address, reg_no
+                                address, state, district, city, pincode, year_of_study, reg_no
                             )
                         )
                         updated_count += 1
@@ -29282,16 +29519,16 @@ def execute_student_bulk_import(
                             reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                             degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                             father_name, mother_name, parent_phone, parent_email,
-                            permanent_address, password_hash, first_time_login,
-                            registered_by, registered_role
+                            permanent_address, state, district, city, pincode, password_hash, first_time_login,
+                            registered_by, registered_role, year
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
                         """,
                         (
                             reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                             degree, dept, batch, year_of_study, semester, section, quota, mentor_reg,
                             father_name, mother_name, parent_phone, parent_email,
-                            address, pw_hash, caller_reg_no, caller_role
+                            address, state, district, city, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
                         )
                     )
                     inserted_count += 1
@@ -29353,7 +29590,11 @@ def get_students_list(
                s.blood_group, s.degree, s.dept, s.batch, s.year_of_study, s.semester, s.section,
                s.quota, s.mentor_staff_reg_no, s.parent_phone, s.is_active, s.suspended,
                (SELECT COUNT(*) FROM student_face_embeddings e WHERE e.student_reg_no = s.reg_no) as face_samples,
-               COALESCE(s.can_reregister, FALSE) as can_reregister
+               COALESCE(s.can_reregister, FALSE) as can_reregister,
+               COALESCE(s.state, 'Tamil Nadu') as state,
+               COALESCE(s.district, s.city, '') as district,
+               COALESCE(s.city, '') as city,
+               COALESCE(s.pincode, '') as pincode
         FROM students s
         WHERE 1=1
     """
@@ -29446,14 +29687,14 @@ def get_students_list(
             query += " AND (s.suspended IS TRUE OR s.suspended = 1)"
     if search and search.strip():
         term = f"%{search.strip().lower()}%"
-        query += " AND (LOWER(s.name) LIKE ? OR LOWER(s.reg_no) LIKE ? OR LOWER(s.roll_no) LIKE ? OR LOWER(s.dept) LIKE ? OR LOWER(s.batch) LIKE ?)"
-        params.extend([term, term, term, term, term])
+        query += " AND (LOWER(s.name) LIKE ? OR LOWER(s.reg_no) LIKE ? OR LOWER(s.roll_no) LIKE ? OR LOWER(s.dept) LIKE ? OR LOWER(s.batch) LIKE ? OR LOWER(s.state) LIKE ? OR LOWER(s.district) LIKE ?)"
+        params.extend([term, term, term, term, term, term, term])
 
     if limit and limit > 0:
-        query += " ORDER BY s.dept, s.batch, s.semester, s.section, s.reg_no LIMIT ? OFFSET ?"
+        query += " ORDER BY COALESCE(s.state, ''), COALESCE(s.district, ''), s.dept, s.batch, s.semester, s.section, s.reg_no LIMIT ? OFFSET ?"
         params.extend([limit, offset])
     else:
-        query += " ORDER BY s.dept, s.batch, s.semester, s.section, s.reg_no"
+        query += " ORDER BY COALESCE(s.state, ''), COALESCE(s.district, ''), s.dept, s.batch, s.semester, s.section, s.reg_no"
 
     cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
@@ -29487,6 +29728,10 @@ def get_students_list(
                 "face_samples_count": face_cnt,
                 "has_face": (face_cnt > 0),
                 "can_reregister": bool(r.get("can_reregister", False)),
+                "state": r.get("state") or "Tamil Nadu",
+                "district": r.get("district") or r.get("city") or "",
+                "city": r.get("city") or "",
+                "pincode": r.get("pincode") or "",
             })
         else:
             face_cnt = int(r[19] or 0) if (len(r) > 19 and r[19] is not None) else 0
@@ -29514,6 +29759,10 @@ def get_students_list(
                 "face_samples_count": face_cnt,
                 "has_face": (face_cnt > 0),
                 "can_reregister": bool(r[20]) if (len(r) > 20 and r[20] is not None) else False,
+                "state": r[21] if len(r) > 21 and r[21] else "Tamil Nadu",
+                "district": r[22] if len(r) > 22 and r[22] else (r[23] if len(r) > 23 and r[23] else ""),
+                "city": r[23] if len(r) > 23 and r[23] else "",
+                "pincode": r[24] if len(r) > 24 and r[24] else "",
             })
 
     acad_settings = _load_student_academic_settings_from_storage()
@@ -29598,6 +29847,11 @@ async def update_university_student(reg_no: str, request: Request):
     mentor = data.get("mentor_staff_reg_no")
     degree = data.get("degree")
     quota = data.get("quota")
+    state = data.get("state")
+    district = data.get("district")
+    city = data.get("city")
+    pincode = data.get("pincode")
+    address = data.get("permanent_address")
 
     cursor.execute(
         """
@@ -29613,10 +29867,15 @@ async def update_university_student(reg_no: str, request: Request):
             mentor_staff_reg_no = COALESCE(?, mentor_staff_reg_no),
             degree = COALESCE(?, degree),
             quota = COALESCE(?, quota),
+            state = COALESCE(?, state),
+            district = COALESCE(?, district),
+            city = COALESCE(?, city),
+            pincode = COALESCE(?, pincode),
+            permanent_address = COALESCE(?, permanent_address),
             updated_at = CURRENT_TIMESTAMP
         WHERE LOWER(reg_no) = LOWER(?)
         """,
-        (name, roll_no, email, phone, parent_phone, batch, semester, section, mentor, degree, quota, reg_no.strip())
+        (name, roll_no, email, phone, parent_phone, batch, semester, section, mentor, degree, quota, state, district, city, pincode, address, reg_no.strip())
     )
     conn.commit()
     return {"success": True, "message": f"Student '{reg_no}' updated successfully."}
@@ -31202,27 +31461,31 @@ def remove_class_advisor(advisor_id: int, request: Request):
     return {"message": "Class advisor assignment removed."}
 
 
-@app.get("/api/v1/academics/period-config")
-def get_period_config(
-    request: Request,
-    dept: Optional[str] = Query(None),
-    semester_type: Optional[str] = Query("all"),
-):
-    """Get customized periods, duration, start time, and break timings for a department."""
-    verify_any_user_token(request)
-    target_dept = (dept or "CSE").strip()
+def get_academic_period_config_for_class(
+    dept: str,
+    batch: Optional[str] = "all",
+    semester: Optional[int] = 0,
+    section: Optional[str] = "all",
+    semester_type: Optional[str] = "all",
+) -> dict:
+    """Hierarchically resolve period timings, duration, start time, working days, and breaks for a specific class.
 
-    cursor.execute(
-        "SELECT * FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) AND semester_type = ?",
-        (target_dept, semester_type or "all")
-    )
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute(
-            "SELECT * FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-            (target_dept,)
-        )
-        row = cursor.fetchone()
+    Resolution hierarchy:
+      1. Class-Specific Override (dept, batch, semester, section)
+      2. Semester-wide Override  (dept, batch, semester, section='all')
+      3. Batch-wide Override     (dept, batch, semester=0, section='all')
+      4. Department-wide Default (dept, batch='all', semester=0, section='all')
+      5. Any Dept row fallback
+      6. System Default (08:45, 7 periods, 50 mins, 2 breaks)
+    """
+    target_dept = (dept or "CSE").strip()
+    target_batch = (batch or "all").strip()
+    try:
+        target_sem = int(semester or 0)
+    except Exception:
+        target_sem = 0
+    target_sec = (section or "all").strip()
+    target_sem_type = (semester_type or "all").strip().lower()
 
     default_breaks = [
         {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
@@ -31230,46 +31493,164 @@ def get_period_config(
     ]
     default_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
+    def _safe_json_or_list(val, default):
+        if val is None:
+            return default
+        if isinstance(val, (list, dict)):
+            return val
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return default
+        return default
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT dept, batch, semester, section, semester_type, start_time, total_periods,
+               period_duration_mins, working_days, breaks_json,
+               (
+                   CASE
+                       WHEN LOWER(batch) = LOWER(?) AND semester = ? AND LOWER(section) = LOWER(?) 
+                            AND batch != 'all' AND semester != 0 AND LOWER(section) != 'all' THEN 40
+                       WHEN LOWER(batch) = LOWER(?) AND semester = ? AND (LOWER(section) = 'all' OR section IS NULL)
+                            AND batch != 'all' AND semester != 0 THEN 30
+                       WHEN LOWER(batch) = LOWER(?) AND (semester = 0 OR semester IS NULL) AND (LOWER(section) = 'all' OR section IS NULL)
+                            AND batch != 'all' THEN 20
+                       WHEN (LOWER(batch) = 'all' OR batch IS NULL) AND (semester = 0 OR semester IS NULL) AND (LOWER(section) = 'all' OR section IS NULL) THEN 10
+                       ELSE 1
+                   END
+               ) as match_score
+        FROM academic_period_configs
+        WHERE LOWER(dept) = LOWER(?)
+          AND (semester_type = ? OR semester_type = 'all' OR ? = 'all')
+          AND (LOWER(batch) = LOWER(?) OR LOWER(batch) = 'all' OR batch IS NULL)
+          AND (semester = ? OR semester = 0 OR semester IS NULL)
+          AND (LOWER(section) = LOWER(?) OR LOWER(section) = 'all' OR section IS NULL)
+        ORDER BY match_score DESC, updated_at DESC NULLS LAST
+        LIMIT 1
+    """
+    cursor.execute(
+        query,
+        (
+            target_batch, target_sem, target_sec,
+            target_batch, target_sem,
+            target_batch,
+            target_dept,
+            target_sem_type, target_sem_type,
+            target_batch,
+            target_sem,
+            target_sec,
+        )
+    )
+    row = cursor.fetchone()
+
+    # Fallback to any department-level row
+    if not row:
+        cursor.execute(
+            """
+            SELECT dept, batch, semester, section, semester_type, start_time, total_periods,
+                   period_duration_mins, working_days, breaks_json, 1 as match_score
+            FROM academic_period_configs
+            WHERE LOWER(dept) = LOWER(?)
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (target_dept,)
+        )
+        row = cursor.fetchone()
+
     if row:
         if isinstance(row, dict):
-            breaks = json.loads(row.get("breaks_json") or "[]") if isinstance(row.get("breaks_json"), str) else (row.get("breaks_json") or default_breaks)
-            days = json.loads(row.get("working_days") or "[]") if isinstance(row.get("working_days"), str) else (row.get("working_days") or default_days)
-            return {
-                "dept": row.get("dept"),
-                "semester_type": row.get("semester_type"),
-                "start_time": row.get("start_time", "08:45"),
-                "total_periods": row.get("total_periods", 7),
-                "period_duration_mins": row.get("period_duration_mins", 50),
-                "working_days": days,
-                "breaks": breaks,
-            }
+            r_dept = row.get("dept") or target_dept
+            r_batch = row.get("batch") or "all"
+            r_sem = int(row.get("semester") or 0)
+            r_sec = row.get("section") or "all"
+            r_sem_type = row.get("semester_type") or "all"
+            st = str(row.get("start_time") or "08:45")
+            tot = int(row.get("total_periods") or 7)
+            dur = int(row.get("period_duration_mins") or 50)
+            days = _safe_json_or_list(row.get("working_days"), default_days)
+            breaks = _safe_json_or_list(row.get("breaks_json"), default_breaks)
+            score = int(row.get("match_score") or 1)
         else:
-            breaks = json.loads(row[7]) if (len(row) > 7 and isinstance(row[7], str)) else default_breaks
-            days = json.loads(row[6]) if (len(row) > 6 and isinstance(row[6], str)) else default_days
-            return {
-                "dept": row[1],
-                "semester_type": row[2],
-                "start_time": row[3],
-                "total_periods": row[4],
-                "period_duration_mins": row[5],
-                "working_days": days,
-                "breaks": breaks,
-            }
+            r_dept = row[0] or target_dept
+            r_batch = row[1] or "all"
+            r_sem = int(row[2] or 0)
+            r_sec = row[3] or "all"
+            r_sem_type = row[4] or "all"
+            st = str(row[5] or "08:45")
+            tot = int(row[6] or 7)
+            dur = int(row[7] or 50)
+            days = _safe_json_or_list(row[8], default_days)
+            breaks = _safe_json_or_list(row[9], default_breaks)
+            score = int(row[10] if len(row) > 10 else 1)
+
+        is_custom = (score >= 40)
+        scope = "class" if score >= 40 else ("semester" if score >= 30 else ("batch" if score >= 20 else "dept"))
+
+        return {
+            "dept": target_dept,
+            "batch": target_batch,
+            "semester": target_sem,
+            "section": target_sec,
+            "semester_type": r_sem_type,
+            "start_time": st[:5] if len(st) >= 5 else st,
+            "total_periods": tot,
+            "period_duration_mins": dur,
+            "working_days": days,
+            "breaks": breaks,
+            "is_customized_for_class": is_custom,
+            "config_scope": scope,
+            "matched_batch": r_batch,
+            "matched_semester": r_sem,
+            "matched_section": r_sec,
+        }
 
     return {
         "dept": target_dept,
-        "semester_type": semester_type or "all",
+        "batch": target_batch,
+        "semester": target_sem,
+        "section": target_sec,
+        "semester_type": target_sem_type,
         "start_time": "08:45",
         "total_periods": 7,
         "period_duration_mins": 50,
         "working_days": default_days,
         "breaks": default_breaks,
+        "is_customized_for_class": False,
+        "config_scope": "default",
+        "matched_batch": "all",
+        "matched_semester": 0,
+        "matched_section": "all",
     }
+
+
+@app.get("/api/v1/academics/period-config")
+def get_period_config(
+    request: Request,
+    dept: Optional[str] = Query(None),
+    batch: Optional[str] = Query("all"),
+    semester: Optional[int] = Query(0),
+    section: Optional[str] = Query("all"),
+    semester_type: Optional[str] = Query("all"),
+):
+    """Get customized periods, duration, start time, and break timings for a specific class or department."""
+    verify_any_user_token(request)
+    return get_academic_period_config_for_class(
+        dept=dept or "CSE",
+        batch=batch or "all",
+        semester=semester or 0,
+        section=section or "all",
+        semester_type=semester_type or "all",
+    )
 
 
 @app.post("/api/v1/academics/period-config/save")
 async def save_period_config(request: Request):
-    """Save or update customizable period timings and breaks."""
+    """Save or update customizable period timings and breaks specifically for a class, semester, batch, or department."""
     caller = verify_any_user_token(request)
     caller_role = (caller.get("role") or "").lower()
     caller_dept = (caller.get("dept") or "").strip()
@@ -31280,6 +31661,13 @@ async def save_period_config(request: Request):
 
     data = await request.json()
     dept = (data.get("dept") or "CSE").strip()
+    batch = (data.get("batch") or "all").strip()
+    try:
+        semester = int(data.get("semester") or 0)
+    except Exception:
+        semester = 0
+    section = (data.get("section") or "all").strip()
+    scope = (data.get("scope") or "class").strip().lower()
     semester_type = (data.get("semester_type") or "all").strip().lower()
     start_time = (data.get("start_time") or "08:45").strip()
     total_periods = int(data.get("total_periods") or 7)
@@ -31290,46 +31678,133 @@ async def save_period_config(request: Request):
     if caller_role in ["hod", "head of department"] and dept.upper() != caller_dept.upper():
         raise HTTPException(status_code=403, detail=f"Permission Denied: HOD can only configure period timings for '{caller_dept}'.")
 
+    # Determine exact target keys to persist based on scope
+    if scope == "dept":
+        target_batch = "all"
+        target_sem = 0
+        target_sec = "all"
+    elif scope == "batch":
+        target_batch = batch
+        target_sem = 0
+        target_sec = "all"
+    elif scope == "semester":
+        target_batch = batch
+        target_sem = semester
+        target_sec = "all"
+    else:  # "class"
+        target_batch = batch
+        target_sem = semester
+        target_sec = section
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
     days_json = json.dumps(working_days)
     breaks_json = json.dumps(breaks)
 
-    try:
+    cursor.execute(
+        """
+        SELECT id FROM academic_period_configs
+        WHERE LOWER(dept) = LOWER(?)
+          AND semester_type = ?
+          AND LOWER(batch) = LOWER(?)
+          AND semester = ?
+          AND LOWER(section) = LOWER(?)
+        LIMIT 1
+        """,
+        (dept, semester_type, target_batch, target_sem, target_sec)
+    )
+    existing = cursor.fetchone()
+
+    if existing:
+        rec_id = existing[0] if isinstance(existing, (list, tuple)) else existing["id"]
+        cursor.execute(
+            """
+            UPDATE academic_period_configs
+            SET start_time = ?,
+                total_periods = ?,
+                period_duration_mins = ?,
+                working_days = ?,
+                breaks_json = ?,
+                updated_by = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (start_time, total_periods, period_duration_mins, days_json, breaks_json, caller_reg_no, rec_id)
+        )
+    else:
         cursor.execute(
             """
             INSERT INTO academic_period_configs (
-                dept, semester_type, start_time, total_periods, period_duration_mins,
+                dept, semester_type, batch, semester, section,
+                start_time, total_periods, period_duration_mins,
                 working_days, breaks_json, updated_by, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT (dept, semester_type) DO UPDATE SET
-                start_time = EXCLUDED.start_time,
-                total_periods = EXCLUDED.total_periods,
-                period_duration_mins = EXCLUDED.period_duration_mins,
-                working_days = EXCLUDED.working_days,
-                breaks_json = EXCLUDED.breaks_json,
-                updated_by = EXCLUDED.updated_by,
-                updated_at = CURRENT_TIMESTAMP
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            (dept, semester_type, start_time, total_periods, period_duration_mins, days_json, breaks_json, caller_reg_no)
-        )
-    except Exception:
-        cursor.execute(
-            "DELETE FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) AND semester_type = ?",
-            (dept, semester_type)
-        )
-        cursor.execute(
-            """
-            INSERT INTO academic_period_configs (
-                dept, semester_type, start_time, total_periods, period_duration_mins,
-                working_days, breaks_json, updated_by
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (dept, semester_type, start_time, total_periods, period_duration_mins, days_json, breaks_json, caller_reg_no)
+            (dept, semester_type, target_batch, target_sem, target_sec,
+             start_time, total_periods, period_duration_mins, days_json, breaks_json, caller_reg_no)
         )
     conn.commit()
 
-    return {"message": f"Period and break configuration saved for {dept} ({semester_type})."}
+    label = f"{dept} (All Classes)" if scope == "dept" else (
+        f"{dept} Batch {batch}" if scope == "batch" else (
+            f"{dept} Batch {batch} Sem {semester}" if scope == "semester" else (
+                f"{dept} Batch {batch} Sem {semester} Sec {section}"
+            )
+        )
+    )
+    return {
+        "message": f"Period and break configuration saved successfully for {label}.",
+        "scope": scope,
+        "dept": dept,
+        "batch": target_batch,
+        "semester": target_sem,
+        "section": target_sec,
+    }
+
+
+@app.post("/api/v1/academics/period-config/reset")
+async def reset_period_config(request: Request):
+    """Reset class-specific period timings to inherit department/semester defaults."""
+    caller = verify_any_user_token(request)
+    caller_role = (caller.get("role") or "").lower()
+    caller_dept = (caller.get("dept") or "").strip()
+
+    if caller_role not in ["admin", "superadmin", "hod", "head of department"]:
+        raise HTTPException(status_code=403, detail="Unauthorized: Only Admin and HOD can reset period timings.")
+
+    data = await request.json()
+    dept = (data.get("dept") or "CSE").strip()
+    batch = (data.get("batch") or "all").strip()
+    try:
+        semester = int(data.get("semester") or 0)
+    except Exception:
+        semester = 0
+    section = (data.get("section") or "all").strip()
+    semester_type = (data.get("semester_type") or "all").strip().lower()
+
+    if caller_role in ["hod", "head of department"] and dept.upper() != caller_dept.upper():
+        raise HTTPException(status_code=403, detail=f"Permission Denied: HOD can only configure for '{caller_dept}'.")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        DELETE FROM academic_period_configs
+        WHERE LOWER(dept) = LOWER(?)
+          AND LOWER(batch) = LOWER(?)
+          AND semester = ?
+          AND LOWER(section) = LOWER(?)
+          AND semester_type = ?
+        """,
+        (dept, batch, semester, section, semester_type)
+    )
+    conn.commit()
+    return {
+        "message": f"Custom period configuration for {dept} Batch {batch} Sem {semester} Sec {section} removed. Now inheriting defaults."
+    }
 
 
 @app.get("/api/v1/academics/faculty-pool")
@@ -31942,36 +32417,18 @@ def get_class_timetable(
     """Retrieve full weekly timetable grid with computed period timings and faculty details."""
     verify_any_user_token(request)
 
-    # 1. Fetch period config
-    cursor.execute(
-        "SELECT start_time, total_periods, period_duration_mins, working_days, breaks_json FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-        (dept.strip(),)
+    # 1. Fetch class-specific period config (with hierarchical fallback)
+    p_cfg = get_academic_period_config_for_class(
+        dept=dept.strip(),
+        batch=batch.strip(),
+        semester=semester,
+        section=section.strip(),
     )
-    p_row = cursor.fetchone()
-    start_time = "08:45"
-    total_periods = 7
-    period_dur = 50
-    default_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    default_breaks = [
-        {"title": "Tea Break", "after_period": 2, "duration_mins": 15},
-        {"title": "Lunch Break", "after_period": 4, "duration_mins": 45},
-    ]
-    working_days = default_days
-    breaks_list = default_breaks
-
-    if p_row:
-        if isinstance(p_row, dict):
-            start_time = p_row.get("start_time") or start_time
-            total_periods = p_row.get("total_periods") or total_periods
-            period_dur = p_row.get("period_duration_mins") or period_dur
-            working_days = json.loads(p_row.get("working_days") or "[]") if isinstance(p_row.get("working_days"), str) else (p_row.get("working_days") or default_days)
-            breaks_list = json.loads(p_row.get("breaks_json") or "[]") if isinstance(p_row.get("breaks_json"), str) else (p_row.get("breaks_json") or default_breaks)
-        else:
-            start_time = p_row[0]
-            total_periods = p_row[1]
-            period_dur = p_row[2]
-            working_days = json.loads(p_row[3]) if (len(p_row) > 3 and isinstance(p_row[3], str)) else default_days
-            breaks_list = json.loads(p_row[4]) if (len(p_row) > 4 and isinstance(p_row[4], str)) else default_breaks
+    start_time = p_cfg["start_time"]
+    total_periods = p_cfg["total_periods"]
+    period_dur = p_cfg["period_duration_mins"]
+    working_days = p_cfg["working_days"]
+    breaks_list = p_cfg["breaks"]
 
     timeline = _compute_schedule_slots_timings(start_time, total_periods, period_dur, breaks_list)
 
@@ -32051,13 +32508,7 @@ def get_class_timetable(
         "batch": batch,
         "semester": semester,
         "section": section,
-        "period_config": {
-            "start_time": start_time,
-            "total_periods": total_periods,
-            "period_duration_mins": period_dur,
-            "working_days": working_days,
-            "breaks": breaks_list,
-        },
+        "period_config": p_cfg,
         "timeline": timeline,
         "slots": slots,
     }
@@ -32711,21 +33162,10 @@ async def auto_schedule_timetable(request: Request):
     cursor = conn.cursor()
 
     try:
-        # 1. Fetch period config
-        cursor.execute(
-            "SELECT total_periods, working_days FROM academic_period_configs WHERE LOWER(dept) = LOWER(?) LIMIT 1",
-            (dept,)
-        )
-        p_row = cursor.fetchone()
-        total_periods = 7
-        working_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        if p_row:
-            if isinstance(p_row, dict):
-                total_periods = p_row.get("total_periods") or 7
-                working_days = json.loads(p_row.get("working_days") or "[]") if isinstance(p_row.get("working_days"), str) else (p_row.get("working_days") or working_days)
-            else:
-                total_periods = p_row[0]
-                working_days = json.loads(p_row[1]) if (len(p_row) > 1 and isinstance(p_row[1], str)) else working_days
+        # 1. Fetch class-specific period config
+        p_cfg = get_academic_period_config_for_class(dept=dept, batch=batch, semester=semester, section=section)
+        total_periods = p_cfg["total_periods"]
+        working_days = p_cfg["working_days"]
 
         # 2. Fetch subject allocations
         cursor.execute(
@@ -36563,10 +37003,12 @@ if __name__ == "__main__":
     print("=" * 60)
     # NOTE: On Windows, --workers flag is unstable (OSError socket issue).
     # Use the thread pool executors (20 CPU + 30 DB threads) for concurrency instead.
+    server_host = os.environ.get("HOST", "0.0.0.0")
+    server_port = int(os.environ.get("PORT", os.environ.get("BACKEND_PORT", 8001)))
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8001,
+        host=server_host,
+        port=server_port,
         loop="asyncio",
         limit_concurrency=100,
         timeout_keep_alive=30,

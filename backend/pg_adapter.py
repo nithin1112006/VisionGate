@@ -12,8 +12,9 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
-# Load .env file if it exists
+# Load .env file if it exists (check backend/.env then root .env)
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 
 class _ThreadLocalCursor:

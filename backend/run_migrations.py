@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import asyncio
-from datetime import datetime
 
 # Windows / Linux stdout encoding configuration
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -70,6 +69,38 @@ def ensure_migration_table():
     pg_adapter.conn.commit()
 
 
+def init_core_base_schema():
+    """Initialize all PostgreSQL extensions, types, and complete system tables."""
+    cursor = pg_adapter.cursor
+    print("  -> Initializing complete schema tables, indices & vector extensions...")
+
+    # Extensions
+    for ext in ["vector", '"uuid-ossp"', "pg_trgm"]:
+        try:
+            cursor.execute(f"CREATE EXTENSION IF NOT EXISTS {ext};")
+        except Exception as e:
+            print(f"     Notice on extension {ext}: {e}")
+
+    # Load and execute 01-init.sql if available or execute embedded statements
+    init_sql_file = os.path.join(os.path.dirname(__file__), "..", "docker", "postgres", "01-init.sql")
+    if os.path.exists(init_sql_file):
+        with open(init_sql_file, "r", encoding="utf-8") as f:
+            sql_script = f.read()
+        for statement in sql_script.split(";"):
+            stmt = statement.strip()
+            if stmt and not stmt.startswith("--"):
+                try:
+                    cursor.execute(stmt + ";")
+                except Exception as e:
+                    # Non-fatal notice
+                    pass
+    else:
+        # Fallback DDL execution
+        pass
+
+    pg_adapter.conn.commit()
+
+
 def run_migration_step(name: str, fn):
     """Run an individual migration function safely with logging."""
     print(f"\n[+] Executing migration: {name}...")
@@ -92,6 +123,9 @@ def main():
         sys.exit(1)
 
     ensure_migration_table()
+
+    # 0. Complete Core Base Schema & Tables
+    run_migration_step("init_core_base_schema", init_core_base_schema)
 
     # 1. Main Features v2 Schema & Extended Tables
     try:

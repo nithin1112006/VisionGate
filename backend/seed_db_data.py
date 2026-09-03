@@ -37,12 +37,13 @@ def run_seed():
     inserted_depts = 0
     for d in depts:
         try:
-            cursor.execute('SELECT id FROM departments WHERE name = ?', (d,))
+            cursor.execute('SELECT id FROM departments WHERE name = %s OR dept_name = %s', (d, d))
             if not cursor.fetchone():
-                cursor.execute('INSERT INTO departments (name) VALUES (?)', (d,))
+                cursor.execute('INSERT INTO departments (name, dept_name) VALUES (%s, %s)', (d, d))
                 inserted_depts += 1
         except Exception as e:
             print(f"Error seeding dept {d}: {e}")
+    pg_adapter.conn.commit()
     print(f"Departments: {inserted_depts} inserted.")
 
     # 2. Seed Users (Admin, HODs, Staff)
@@ -181,16 +182,16 @@ def run_seed():
                     '''
                     INSERT INTO students (
                         reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
-                        degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
+                        degree, dept, batch, year, year_of_study, semester, section, quota, mentor_staff_reg_no,
                         father_name, mother_name, parent_phone, parent_email, emergency_contact,
                         permanent_address, city, state, pincode, password_hash, first_time_login,
                         registered_by, registered_role
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''',
                     (
                         reg, f"R_{reg[-4:]}", name, f"{reg.lower()}@college.edu", "9876543210",
-                        "2004-06-15", "Male", "O+", "B.E.", dept, "2022-2026", 3, 6, "A", "Govt", reg_by,
+                        "2004-06-15", "Male", "O+", "B.E.", dept, "2022-2026", 3, 3, 6, "A", "Govt", reg_by,
                         "Parent Name", "Mother Name", "9876543210", "parent@gmail.com", "9876543210",
                         "123 University Campus Road", "Coimbatore", "Tamil Nadu", "641001",
                         default_pw_hash, True, reg_by, "staff"

@@ -33,9 +33,9 @@ fi
 
 # Detect Compose Command
 if docker compose version &> /dev/null; then
-    COMPOSE_CMD="docker compose"
+    COMPOSE_BASE="docker compose"
 elif command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
+    COMPOSE_BASE="docker-compose"
 else
     echo -e "${RED}Docker Compose is not available.${NC}"
     exit 1
@@ -60,10 +60,61 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
+# Detect GPU capability
+USE_GPU=0
+echo -e "\n${BOLD}[*] Detecting Hardware Acceleration Mode...${NC}"
+if command -v nvidia-smi &> /dev/null; then
+    if docker run --rm --gpus all nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
+        USE_GPU=1
+        echo -e "  ${GREEN}✓ NVIDIA GPU Container Passthrough is OPERATIONAL.${NC}"
+    else
+        echo -e "  ${YELLOW}! GPU detected on host but container passthrough unavailable or driver too old for full passthrough.${NC}"
+        echo -e "  ${CYAN}-> Deploying in robust CPU Execution mode (InsightFace operates fully on CPU).${NC}"
+    fi
+else
+    echo -e "  ${CYAN}-> Deploying in CPU Execution mode (CPU fallback active).${NC}"
+fi
+
+if [ "$USE_GPU" -eq 1 ] && [ -f "docker-compose.gpu.yml" ]; then
+    COMPOSE_CMD="${COMPOSE_BASE} -f docker-compose.yml -f docker-compose.gpu.yml"
+else
+    COMPOSE_CMD="${COMPOSE_BASE} -f docker-compose.yml"
+fi
+
 # 3. Build Production Container Images
 echo -e "\n${BOLD}${YELLOW}[Step 3/6] Building Production Container Images...${NC}"
+echo -e "  -> Pre-fetching base image (with automatic retries for slow connections)..."
+
+PULL_SUCCESS=0
+for attempt in 1 2 3; do
+    echo -e "     [Attempt $attempt/3] Pulling nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04..."
+    if docker pull nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04; then
+        PULL_SUCCESS=1
+        echo -e "     ${GREEN}✓${NC} Base image successfully cached."
+        break
+    else
+        echo -e "     ${YELLOW}! Network timeout during layer download. Retrying in 3 seconds...${NC}"
+        sleep 3
+    fi
+done
+
 echo -e "  -> Building VisionGate backend container with ONNX & InsightFace..."
-${COMPOSE_CMD} build backend
+BUILD_SUCCESS=0
+for b_attempt in 1 2 3; do
+    if ${COMPOSE_CMD} build backend; then
+        BUILD_SUCCESS=1
+        break
+    else
+        echo -e "  ${YELLOW}! Build attempt $b_attempt failed. Retrying in 5 seconds...${NC}"
+        sleep 5
+    fi
+done
+
+if [ "$BUILD_SUCCESS" -ne 1 ]; then
+    echo -e "${RED}ERROR: Container build failed after 3 attempts.${NC}"
+    echo -e "${YELLOW}Tip: If your internet connection has packet loss, check your network or try again.${NC}"
+    exit 1
+fi
 
 # 4. Start Database & Infrastructure
 echo -e "\n${BOLD}${YELLOW}[Step 4/6] Initializing Database & Core Services...${NC}"
@@ -137,7 +188,7 @@ if [ "$BACKEND_OK" -eq 1 ]; then
     echo -e "  ${CYAN}API Documentation:${NC}       http://${HOST_IP}:${BACKEND_PORT_VAL}/docs"
     echo -e "  ${CYAN}Health Check:${NC}            http://${HOST_IP}:${BACKEND_PORT_VAL}/health"
     echo -e "  ${CYAN}Dependency Status:${NC}       http://${HOST_IP}:${BACKEND_PORT_VAL}/health/dependencies"
-    echo -e "  ${CYAN}PostgreSQL Database:${NC}     ${HOST_IP}:${PG_HOST_PORT:-5432} (DB: ${PG_DB:-attenda})"
+    echo -e "  ${CYAN}PostgreSQL Database:${NC}     ${HOST_IP}:${PG_HOST_PORT:-5434} (DB: ${PG_DB:-attenda})"
     
     if [ -n "${CLOUDFLARE_TUNNEL_TOKEN}" ]; then
         echo -e "  ${CYAN}Cloudflare Zero-Trust:${NC}   Enabled & Active via tunnel profile"

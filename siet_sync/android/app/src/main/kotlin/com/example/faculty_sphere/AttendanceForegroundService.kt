@@ -50,6 +50,12 @@ class AttendanceForegroundService : Service() {
         // Native offline queue key (separate from Flutter SharedPreferences)
         private const val NATIVE_OFFLINE_QUEUE_KEY = "native_offline_queue"
         private const val MAX_OFFLINE_QUEUE_SIZE = 500
+
+        @Volatile
+        var isRunning: Boolean = false
+
+        @Volatile
+        var lastHeartbeatMs: Long = 0L
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -75,6 +81,14 @@ class AttendanceForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
+        lastHeartbeatMs = System.currentTimeMillis()
+        try {
+            getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE).edit()
+                .putBoolean("service_running", true)
+                .putLong("last_heartbeat_ms", lastHeartbeatMs)
+                .apply()
+        } catch (_: Exception) {}
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         geofencingClient = LocationServices.getGeofencingClient(this)
         createNotificationChannel()
@@ -85,7 +99,14 @@ class AttendanceForegroundService : Service() {
         val action = intent?.action ?: ACTION_START
         Log.d(TAG, "onStartCommand action=$action")
 
+        isRunning = true
+        lastHeartbeatMs = System.currentTimeMillis()
+
         val prefs = getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean("service_running", true)
+            .putLong("last_heartbeat_ms", lastHeartbeatMs)
+            .apply()
 
         if (intent == null) {
             // System restarted service (START_STICKY) — restore from SharedPreferences
@@ -165,6 +186,12 @@ class AttendanceForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
+        try {
+            getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE).edit()
+                .putBoolean("service_running", false)
+                .apply()
+        } catch (_: Exception) {}
         releaseWakeLock()
         serviceJob.cancel()
         Log.d(TAG, "Service destroyed")
@@ -373,13 +400,15 @@ class AttendanceForegroundService : Service() {
         val today = sdf.format(Date())
 
         if (today != startDay) {
-            Log.d(TAG, "Day changed ($startDay → $today). Stopping service cleanly.")
-            cancelWorkManagerRestart()
-            stopLocationUpdates()
-            removeGeofence()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return false
+            Log.d(TAG, "Day rolled over ($startDay → $today). Updating startDay and continuing sync.")
+            startDay = today
+            try {
+                getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE).edit()
+                    .putString("startDay", startDay)
+                    .apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to persist new startDay: ${e.message}")
+            }
         }
         return true
     }
@@ -390,6 +419,12 @@ class AttendanceForegroundService : Service() {
 
     private fun onLocationChanged(location: Location) {
         if (!shouldTrack()) return
+        lastHeartbeatMs = System.currentTimeMillis()
+        try {
+            getSharedPreferences("AttendanceNativePrefs", Context.MODE_PRIVATE).edit()
+                .putLong("last_heartbeat_ms", lastHeartbeatMs)
+                .apply()
+        } catch (_: Exception) {}
         Log.d(TAG, "Location fix: ${location.latitude}, ${location.longitude} acc=${location.accuracy}m")
         serviceScope.launch { sendLocationToBackend(location) }
     }
