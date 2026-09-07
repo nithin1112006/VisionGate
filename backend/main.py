@@ -7633,11 +7633,30 @@ async def update_user_location(request: Request):
                     first_left_boundary_at = datetime.now()
 
         # Check if point is inside any limit range polygon
-        inside_limit = _point_in_any_polygon(latitude, longitude, _geo_fence_limit_range_polygons)
+        limit_polys = _geo_fence_limit_range_polygons if _geo_fence_limit_range_polygons else _geo_fence_outer_polygons
+        inside_limit = _point_in_any_polygon(latitude, longitude, limit_polys)
         if inside_limit:
             first_left_boundary_at = None
+            try:
+                _resolve_campus_movement_alert(cursor, reg_no)
+            except Exception:
+                pass
         else:
             boundary_warning = True
+            try:
+                _record_campus_movement_alert(
+                    cursor,
+                    user_reg_no=reg_no,
+                    user_name=user.get("name") or user.get("username") or reg_no,
+                    user_role=user.get("role") or "staff",
+                    dept=user.get("dept") or "",
+                    latitude=latitude,
+                    longitude=longitude,
+                    accuracy=accuracy,
+                    speed=speed,
+                )
+            except Exception:
+                pass
             if first_left_boundary_at is None:
                 first_left_boundary_at = datetime.now()
                 warning_message = "You are outside the permitted movement boundary. Please return within 3 minutes to avoid being marked absent."
@@ -7922,13 +7941,31 @@ async def sync_offline_locations(request: Request):
 
         # Rule 3: Geofence limits
         boundary_warning = False
-        warning_message = None
-        if has_attendance and not out_permitted and _geo_fence_limit_range_polygons and gps_enabled:
-            inside_limit = _point_in_any_polygon(latitude, longitude, _geo_fence_limit_range_polygons)
+        limit_polys = _geo_fence_limit_range_polygons if _geo_fence_limit_range_polygons else _geo_fence_outer_polygons
+        if has_attendance and not out_permitted and limit_polys and gps_enabled:
+            inside_limit = _point_in_any_polygon(latitude, longitude, limit_polys)
             if inside_limit:
                 outside_start = None
+                try:
+                    _resolve_campus_movement_alert(cursor, reg_no)
+                except Exception:
+                    pass
             else:
                 boundary_warning = True
+                try:
+                    _record_campus_movement_alert(
+                        cursor,
+                        user_reg_no=reg_no,
+                        user_name=user.get("name") or user.get("username") or reg_no,
+                        user_role=user.get("role") or "staff",
+                        dept=user.get("dept") or "",
+                        latitude=latitude,
+                        longitude=longitude,
+                        accuracy=accuracy,
+                        speed=speed,
+                    )
+                except Exception:
+                    pass
                 if outside_start is None:
                     outside_start = captured_at
                     warning_message = "You are outside the permitted movement boundary."
@@ -15129,20 +15166,67 @@ _DEPT_CACHE_TTL = 300  # 5 minutes in-memory cache for fast response
 
 
 @app.get("/admin/departments")
+@app.get("/api/v1/departments")
 async def admin_get_departments(request: Request):
-    """Get all departments (admin only, in-memory cached)"""
-    verify_admin_token(request)
+    """Get all departments dynamically present across departments, students, timetables, and advisors."""
+    try:
+        verify_any_user_token(request)
+    except Exception:
+        pass
 
     now = time.time()
     if _departments_cache["data"] is not None and (now - _departments_cache["timestamp"]) < _DEPT_CACHE_TTL:
         return _departments_cache["data"]
 
     try:
-        cursor.execute("SELECT id, name, created_at FROM departments ORDER BY name")
-        rows = cursor.fetchall()
+        cur = pg_adapter.cursor
+        all_depts_set = set()
+
+        # 1. From departments table
+        try:
+            cur.execute("SELECT id, name FROM departments ORDER BY name")
+            for r in cur.fetchall():
+                d_name = (r[1] if isinstance(r, (list, tuple)) else r.get("name")) or ""
+                if d_name.strip():
+                    all_depts_set.add(d_name.strip())
+        except Exception as e_dept:
+            print(f"[Departments] Error reading departments table: {e_dept}")
+
+        # 2. From students table (present student cohorts)
+        try:
+            cur.execute("SELECT DISTINCT dept FROM students WHERE dept IS NOT NULL AND TRIM(dept) != ''")
+            for r in cur.fetchall():
+                d_name = (r[0] if isinstance(r, (list, tuple)) else r.get("dept")) or ""
+                if d_name.strip():
+                    all_depts_set.add(d_name.strip())
+        except Exception:
+            pass
+
+        # 3. From class_timetable
+        try:
+            cur.execute("SELECT DISTINCT dept FROM class_timetable WHERE dept IS NOT NULL AND TRIM(dept) != ''")
+            for r in cur.fetchall():
+                d_name = (r[0] if isinstance(r, (list, tuple)) else r.get("dept")) or ""
+                if d_name.strip():
+                    all_depts_set.add(d_name.strip())
+        except Exception:
+            pass
+
+        # 4. From class_advisors
+        try:
+            cur.execute("SELECT DISTINCT dept FROM class_advisors WHERE dept IS NOT NULL AND TRIM(dept) != ''")
+            for r in cur.fetchall():
+                d_name = (r[0] if isinstance(r, (list, tuple)) else r.get("dept")) or ""
+                if d_name.strip():
+                    all_depts_set.add(d_name.strip())
+        except Exception:
+            pass
+
+        sorted_depts = sorted(list(all_depts_set), key=lambda x: x.upper())
         result = {
             "departments": [
-                {"id": row[0], "name": row[1], "created_at": row[2]} for row in rows
+                {"id": idx + 1, "name": d, "code": d, "dept": d}
+                for idx, d in enumerate(sorted_depts)
             ]
         }
         _departments_cache["data"] = result
@@ -23127,20 +23211,13 @@ def get_my_registered_students(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/staff/departments")
-def get_staff_departments(request: Request):
-    """Fetch distinct department names across institution."""
-    try:
-        cursor.execute("SELECT name FROM departments ORDER BY name ASC")
-        rows = cursor.fetchall()
-        depts = [r[0] if isinstance(r, (list, tuple)) else r.get("name") for r in rows if r]
-        if not depts:
-            cursor.execute("SELECT DISTINCT dept FROM users WHERE dept IS NOT NULL AND dept != ''")
-            rows = cursor.fetchall()
-            depts = [r[0] if isinstance(r, (list, tuple)) else r.get("dept") for r in rows if r]
-        unique_depts = sorted(list(set([d for d in depts if d])))
-        return {"departments": unique_depts}
-    except Exception as e:
-        return {"departments": ["CSE", "ECE", "EEE", "MECH", "CIVIL", "IT", "AI & ML", "Data Science"]}
+async def get_staff_departments(request: Request):
+    """Fetch distinct department names across institution dynamically."""
+    res = await admin_get_departments(request)
+    # Support both list of strings and list of dicts
+    dept_objs = res.get("departments", [])
+    dept_names = [d["name"] if isinstance(d, dict) else str(d) for d in dept_objs]
+    return {"departments": dept_names, "department_details": dept_objs}
 
 @app.post("/staff/permissions/grant")
 def grant_student_permission(req: GrantPermissionRequest, request: Request):
@@ -23791,10 +23868,125 @@ def get_student_attendance_logs(
         pct = round((effective_attended / total_rec * 100), 1) if total_rec > 0 else 100.0
 
         # -------------------------------------------------------------
-        # BUILD DAY & PERIOD ATTENDANCE MATRIX (Periods 1 to 8)
+        # 1. DYNAMIC DEPARTMENTS & TIMETABLE PREFETCH
+        # -------------------------------------------------------------
+        cur = pg_adapter.cursor
+
+        # Discover all departments present in institution
+        all_depts_set = set()
+        try:
+            cur.execute("SELECT name FROM departments WHERE name IS NOT NULL")
+            for r in cur.fetchall():
+                d_val = (r[0] if isinstance(r, (list, tuple)) else r.get("name")) or ""
+                if d_val.strip():
+                    all_depts_set.add(d_val.strip())
+        except Exception:
+            pass
+        try:
+            cur.execute("SELECT DISTINCT dept FROM students WHERE dept IS NOT NULL AND TRIM(dept) != ''")
+            for r in cur.fetchall():
+                d_val = (r[0] if isinstance(r, (list, tuple)) else r.get("dept")) or ""
+                if d_val.strip():
+                    all_depts_set.add(d_val.strip())
+        except Exception:
+            pass
+        try:
+            cur.execute("SELECT DISTINCT dept FROM class_timetable WHERE dept IS NOT NULL AND TRIM(dept) != ''")
+            for r in cur.fetchall():
+                d_val = (r[0] if isinstance(r, (list, tuple)) else r.get("dept")) or ""
+                if d_val.strip():
+                    all_depts_set.add(d_val.strip())
+        except Exception:
+            pass
+        sorted_all_depts = sorted(list(all_depts_set), key=lambda x: x.upper())
+
+        # Pre-fetch timetable slots for all classes
+        timetable_map = {}  # (dept.lower(), sem, sec.lower(), day.lower()) -> {period_num: slot_data}
+        all_tt_periods = set()
+        try:
+            cur.execute("""
+                SELECT ct.dept, ct.batch, ct.semester, ct.section, ct.day_of_week, ct.period_number,
+                       ct.subject_code, ct.subject_name, ct.staff_reg_no, ct.room_or_lab,
+                       COALESCE(u.name, os.name, ct.staff_reg_no) as faculty_name
+                FROM class_timetable ct
+                LEFT JOIN users u ON LOWER(u.reg_no) = LOWER(ct.staff_reg_no)
+                LEFT JOIN other_staff os ON LOWER(os.reg_no) = LOWER(ct.staff_reg_no)
+                ORDER BY ct.period_number ASC
+            """)
+            tt_rows = cur.fetchall()
+            for ttr in tt_rows:
+                if isinstance(ttr, dict):
+                    t_dept = (ttr.get("dept") or "").strip().lower()
+                    t_batch = (ttr.get("batch") or "").strip().lower()
+                    t_sem = ttr.get("semester") or 0
+                    t_sec = (ttr.get("section") or "").strip().lower()
+                    t_day = (ttr.get("day_of_week") or "").strip().lower()
+                    t_pnum = ttr.get("period_number") or 1
+                    t_sub = ttr.get("subject_code") or ""
+                    t_sname = ttr.get("subject_name") or ""
+                    t_fac = ttr.get("faculty_name") or ""
+                    t_room = ttr.get("room_or_lab") or ""
+                else:
+                    t_dept = (ttr[0] or "").strip().lower()
+                    t_batch = (ttr[1] or "").strip().lower()
+                    t_sem = ttr[2] or 0
+                    t_sec = (ttr[3] or "").strip().lower()
+                    t_day = (ttr[4] or "").strip().lower()
+                    t_pnum = ttr[5] or 1
+                    t_sub = ttr[6] or ""
+                    t_sname = ttr[7] or ""
+                    t_fac = ttr[10] or ttr[8] or ""
+                    t_room = ttr[9] or ""
+
+                all_tt_periods.add(t_pnum)
+                slot_info = {
+                    "period_number": t_pnum,
+                    "subject_code": t_sub,
+                    "subject_name": t_sname,
+                    "faculty_name": t_fac,
+                    "room_or_lab": t_room,
+                    "is_scheduled": True
+                }
+
+                # Store by exact class key
+                k_exact = (t_dept, t_sem, t_sec, t_day)
+                if k_exact not in timetable_map:
+                    timetable_map[k_exact] = {}
+                timetable_map[k_exact][t_pnum] = slot_info
+
+                # Store by section 'all' fallback
+                k_all = (t_dept, t_sem, "all", t_day)
+                if k_all not in timetable_map:
+                    timetable_map[k_all] = {}
+                timetable_map[k_all][t_pnum] = slot_info
+        except Exception as e_tt:
+            print(f"[STUDENT-LOGS] Error prefetching timetables: {e_tt}")
+
+        # Pre-fetch academic calendar date overrides for day-order / mapped days
+        date_overrides = {}
+        try:
+            cur.execute("SELECT override_date, mapped_day_of_week FROM academic_calendar_date_overrides WHERE override_date >= ? AND override_date <= ?", (start_date, end_date))
+            for orow in cur.fetchall():
+                o_date = str(orow[0] if isinstance(orow, (list, tuple)) else orow.get("override_date"))
+                o_day = (orow[1] if isinstance(orow, (list, tuple)) else orow.get("mapped_day_of_week")) or ""
+                if o_day:
+                    date_overrides[o_date] = o_day
+        except Exception:
+            pass
+
+        # Determine available periods dynamically (from logs + timetable + configs)
+        log_periods = {l.get("period_number") for l in logs if l.get("period_number")}
+        all_periods_discovered = set(log_periods).union(all_tt_periods)
+        max_p = max(all_periods_discovered) if all_periods_discovered else 8
+        if max_p < 8:
+            max_p = 8
+        available_periods = sorted(list(range(1, max_p + 1)))
+
+        # -------------------------------------------------------------
+        # 2. BUILD DAY & PERIOD ATTENDANCE MATRIX ACCORDING TO TIMETABLE
         # -------------------------------------------------------------
         matrix_dict = {}
-        period_stats = {str(p): {"present": 0, "absent": 0, "od": 0, "leave": 0, "total": 0, "pct": 100.0} for p in range(1, 9)}
+        period_stats = {str(p): {"present": 0, "absent": 0, "od": 0, "leave": 0, "scheduled": 0, "total": 0, "pct": 100.0} for p in available_periods}
 
         for l in logs:
             d = l.get("date")
@@ -23804,18 +23996,69 @@ def get_student_attendance_logs(
 
             key = (d, rno)
             if key not in matrix_dict:
+                s_dept = (l.get("dept") or "").strip()
+                s_sem = l.get("semester") or 0
+                s_sec = (l.get("section") or "").strip()
+
+                # Determine effective day of week for this date
+                effective_day = date_overrides.get(d)
+                if not effective_day:
+                    try:
+                        effective_day = datetime.strptime(d, "%Y-%m-%d").strftime("%A")
+                    except Exception:
+                        effective_day = "Monday"
+
+                # Look up timetable slots for this student's class
+                tt_slots = timetable_map.get((s_dept.lower(), s_sem, s_sec.lower(), effective_day.lower()))
+                if not tt_slots:
+                    tt_slots = timetable_map.get((s_dept.lower(), s_sem, "all", effective_day.lower()), {})
+
+                # Build periods dictionary initialized with class timetable slots
+                row_periods = {}
+                for p in available_periods:
+                    sched = tt_slots.get(p)
+                    if sched:
+                        row_periods[str(p)] = {
+                            "status": "--",
+                            "subject_code": sched.get("subject_code") or "--",
+                            "subject_name": sched.get("subject_name") or f"Period {p}",
+                            "faculty_name": sched.get("faculty_name") or "--",
+                            "room_or_lab": sched.get("room_or_lab") or "--",
+                            "is_scheduled": True,
+                            "entry_time": "--",
+                            "exit_time": "--",
+                            "method": "--",
+                            "remarks": "Scheduled Class",
+                            "confidence_score": 1.0,
+                        }
+                    else:
+                        row_periods[str(p)] = {
+                            "status": "--",
+                            "subject_code": "--",
+                            "subject_name": "--",
+                            "faculty_name": "--",
+                            "room_or_lab": "--",
+                            "is_scheduled": False,
+                            "entry_time": "--",
+                            "exit_time": "--",
+                            "method": "--",
+                            "remarks": "",
+                            "confidence_score": 1.0,
+                        }
+
                 matrix_dict[key] = {
                     "date": d,
                     "reg_no": rno,
                     "roll_no": l.get("roll_no") or "--",
                     "name": l.get("name") or "",
-                    "dept": l.get("dept") or "",
+                    "dept": s_dept,
                     "degree": l.get("degree") or "B.E",
                     "year_of_study": l.get("year_of_study") or 1,
                     "batch": l.get("batch") or "--",
-                    "semester": l.get("semester"),
-                    "section": l.get("section"),
-                    "periods": {str(p): {"status": "--", "subject_code": "--", "subject_name": "--", "faculty_name": "--", "entry_time": "--", "exit_time": "--", "method": "--"} for p in range(1, 9)},
+                    "semester": s_sem,
+                    "section": s_sec,
+                    "day_of_week": effective_day,
+                    "periods": row_periods,
                     "attended_periods": 0,
                     "total_periods": 0,
                     "absent_periods": 0,
@@ -23827,17 +24070,23 @@ def get_student_attendance_logs(
 
             p_key = str(p_num)
             if p_key in matrix_dict[key]["periods"]:
-                matrix_dict[key]["periods"][p_key] = {
+                prev_sched = matrix_dict[key]["periods"][p_key].get("is_scheduled", False)
+                prev_sub_code = matrix_dict[key]["periods"][p_key].get("subject_code")
+                prev_sub_name = matrix_dict[key]["periods"][p_key].get("subject_name")
+                prev_fac = matrix_dict[key]["periods"][p_key].get("faculty_name")
+
+                matrix_dict[key]["periods"][p_key].update({
                     "status": st,
-                    "subject_code": l.get("subject_code") or "--",
-                    "subject_name": l.get("subject_name") or "--",
-                    "faculty_name": l.get("faculty_name") or "--",
+                    "subject_code": l.get("subject_code") if (l.get("subject_code") and l.get("subject_code") != "--") else (prev_sub_code or "--"),
+                    "subject_name": l.get("subject_name") if (l.get("subject_name") and l.get("subject_name") != "--") else (prev_sub_name or "--"),
+                    "faculty_name": l.get("faculty_name") if (l.get("faculty_name") and l.get("faculty_name") != "--") else (prev_fac or "--"),
                     "entry_time": l.get("entry_time") or "--",
                     "exit_time": l.get("exit_time") or "--",
                     "method": l.get("method") or "Face Recognition",
                     "remarks": l.get("remarks") or "",
                     "confidence_score": l.get("confidence_score") or 1.0,
-                }
+                    "is_scheduled": prev_sched or True,
+                })
 
             if p_key in period_stats:
                 period_stats[p_key]["total"] += 1
@@ -23852,26 +24101,14 @@ def get_student_attendance_logs(
 
         matrix_list = []
         for (d, rno), item in matrix_dict.items():
-            tot = 0
-            att = 0
-            abs_cnt = 0
-            od_cnt_local = 0
-            leave_cnt_local = 0
-            for p_key, p_val in item["periods"].items():
-                p_st = p_val.get("status")
-                if p_st != "--":
-                    tot += 1
-                    if p_st == "Present":
-                        att += 1
-                    elif "OD" in p_st:
-                        att += 1
-                        od_cnt_local += 1
-                    elif "Holiday" in p_st:
-                        att += 1
-                    elif any(k in p_st for k in ["Leave", "Medical", "Casual"]):
-                        leave_cnt_local += 1
-                    elif p_st == "Absent":
-                        abs_cnt += 1
+            sched_cnt = sum(1 for p_val in item["periods"].values() if p_val.get("is_scheduled"))
+            marked_cnt = sum(1 for p_val in item["periods"].values() if p_val.get("status") != "--")
+            tot = max(sched_cnt, marked_cnt)
+
+            att = sum(1 for p_val in item["periods"].values() if p_val.get("status") == "Present" or "OD" in (p_val.get("status") or "") or "Holiday" in (p_val.get("status") or ""))
+            abs_cnt = sum(1 for p_val in item["periods"].values() if p_val.get("status") == "Absent")
+            od_cnt_local = sum(1 for p_val in item["periods"].values() if "OD" in (p_val.get("status") or ""))
+            leave_cnt_local = sum(1 for p_val in item["periods"].values() if any(k in (p_val.get("status") or "") for k in ["Leave", "Medical", "Casual"]))
 
             item["total_periods"] = tot
             item["attended_periods"] = att
@@ -23906,6 +24143,8 @@ def get_student_attendance_logs(
             "end_date": end_date,
             "dept": dept or "ALL",
             "period_number": filter_pnum,
+            "available_periods": available_periods,
+            "departments": sorted_all_depts,
             "summary": {
                 "total_records": total_rec,
                 "present_count": present_cnt,
@@ -27497,6 +27736,47 @@ async def student_location_ping(request: Request):
             is_inside_campus, p_num, p_name, sub_code,
             is_tracking_active, is_mocked, float(battery), client_platform
         ))
+
+        # Check student active approved leave/OD
+        student_on_leave_or_od = False
+        try:
+            cursor.execute(
+                """
+                SELECT id FROM student_leave_od_requests
+                WHERE LOWER(student_reg_no) = LOWER(?)
+                  AND CURRENT_DATE >= start_date AND CURRENT_DATE <= end_date
+                  AND hod_status = 'APPROVED'
+                LIMIT 1
+                """,
+                (stu_reg,)
+            )
+            if cursor.fetchone():
+                student_on_leave_or_od = True
+        except Exception:
+            pass
+
+        # Trigger campus movement alert if outside campus without approved leave/OD
+        try:
+            if not is_inside_campus and not student_on_leave_or_od and is_tracking_active:
+                _record_campus_movement_alert(
+                    cursor,
+                    user_reg_no=stu_reg,
+                    user_name=stu_name,
+                    user_role="student",
+                    dept=stu_dept,
+                    batch=stu_batch,
+                    semester=stu_sem,
+                    section=stu_sec,
+                    latitude=float(lat) if lat is not None else None,
+                    longitude=float(lng) if lng is not None else None,
+                    accuracy=float(accuracy) if accuracy is not None else None,
+                    speed=float(speed) if speed is not None else None,
+                )
+            elif is_inside_campus:
+                _resolve_campus_movement_alert(cursor, stu_reg)
+        except Exception as _alert_err:
+            print(f"[StudentAlertNotice] {_alert_err}")
+
         conn.commit()
     except Exception as db_err:
         print(f"[StudentLocationPing] DB write notice: {db_err}")
@@ -27655,6 +27935,504 @@ def get_staff_live_student_locations(request: Request, dept: Optional[str] = Non
             pass
             
     return {"success": True, "date": today_str, "students_tracked": len(results), "locations": results}
+
+
+# =============================================================================
+# CAMPUS MOVEMENT & OUT-OF-COLLEGE WARNING ALERTS SYSTEM
+# =============================================================================
+
+def _ensure_campus_alerts_table(cur=None):
+    """Ensures the campus_movement_alerts table and indices exist."""
+    c = cur if cur is not None else pg_adapter.cursor
+    try:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS campus_movement_alerts (
+                id SERIAL PRIMARY KEY,
+                user_reg_no VARCHAR(64) NOT NULL,
+                user_name VARCHAR(160) NOT NULL,
+                user_role VARCHAR(32) NOT NULL,
+                dept VARCHAR(160),
+                batch VARCHAR(32),
+                semester INT,
+                section VARCHAR(16),
+                advisor_reg_no VARCHAR(64),
+                advisor_name VARCHAR(160),
+                hod_reg_no VARCHAR(64),
+                hod_name VARCHAR(160),
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                accuracy DOUBLE PRECISION,
+                speed DOUBLE PRECISION,
+                alert_type VARCHAR(64) DEFAULT 'OUT_OF_COLLEGE',
+                status VARCHAR(32) DEFAULT 'ACTIVE',
+                title VARCHAR(255) NOT NULL,
+                message TEXT NOT NULL,
+                left_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP,
+                acknowledged_at TIMESTAMP,
+                acknowledged_by VARCHAR(64),
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for idx in [
+            "CREATE INDEX IF NOT EXISTS idx_cma_user_reg ON campus_movement_alerts (user_reg_no)",
+            "CREATE INDEX IF NOT EXISTS idx_cma_status ON campus_movement_alerts (status)",
+            "CREATE INDEX IF NOT EXISTS idx_cma_advisor ON campus_movement_alerts (advisor_reg_no)",
+            "CREATE INDEX IF NOT EXISTS idx_cma_hod ON campus_movement_alerts (hod_reg_no)",
+            "CREATE INDEX IF NOT EXISTS idx_cma_dept ON campus_movement_alerts (dept)",
+            "CREATE INDEX IF NOT EXISTS idx_cma_created_at ON campus_movement_alerts (created_at DESC)"
+        ]:
+            try:
+                c.execute(idx)
+            except Exception:
+                pass
+    except Exception as _e:
+        print(f"[CampusAlertsTable] Init notice: {_e}")
+
+try:
+    _ensure_campus_alerts_table()
+except Exception:
+    pass
+
+
+
+def _resolve_student_advisor_and_hod(cur, stu_reg, dept="", batch="", semester=1, section="A", mentor_reg=""):
+    """Resolves a student's assigned class advisor and department HOD."""
+    c = cur if cur is not None else pg_adapter.cursor
+    advisor_reg = mentor_reg or ""
+    advisor_name = ""
+    hod_reg = ""
+    hod_name = ""
+
+    # 1. Check students table if fields are missing
+    if not advisor_reg or not dept:
+        try:
+            c.execute("SELECT mentor_staff_reg_no, dept, batch, semester, section FROM students WHERE LOWER(reg_no) = LOWER(?)", (stu_reg,))
+            row = c.fetchone()
+            if row:
+                if isinstance(row, dict):
+                    advisor_reg = row.get("mentor_staff_reg_no") or advisor_reg
+                    dept = row.get("dept") or dept
+                    batch = row.get("batch") or batch
+                    semester = row.get("semester") or semester
+                    section = row.get("section") or section
+                else:
+                    advisor_reg = row[0] or advisor_reg
+                    dept = row[1] or dept
+                    batch = row[2] or batch
+                    semester = row[3] or semester
+                    section = row[4] or section
+        except Exception:
+            pass
+
+    # 2. Check class_advisors table if no mentor_staff_reg_no found
+    if not advisor_reg and dept:
+        try:
+            c.execute(
+                """
+                SELECT ca.staff_reg_no, u.name 
+                FROM class_advisors ca
+                LEFT JOIN users u ON LOWER(ca.staff_reg_no) = LOWER(u.reg_no)
+                WHERE UPPER(ca.dept) = UPPER(?)
+                  AND (ca.batch = ? OR ? = '')
+                  AND (ca.section = ? OR ? = '')
+                  AND COALESCE(ca.is_active, TRUE) = TRUE
+                ORDER BY ca.id DESC LIMIT 1
+                """,
+                (dept, batch, batch, section, section)
+            )
+            row = c.fetchone()
+            if row:
+                if isinstance(row, dict):
+                    advisor_reg = row.get("staff_reg_no") or ""
+                    advisor_name = row.get("name") or ""
+                else:
+                    advisor_reg = row[0] or ""
+                    advisor_name = row[1] or ""
+        except Exception:
+            pass
+
+    # 3. If advisor_reg exists without name, query users
+    if advisor_reg and not advisor_name:
+        try:
+            c.execute("SELECT name FROM users WHERE LOWER(reg_no) = LOWER(?)", (advisor_reg,))
+            u_row = c.fetchone()
+            if u_row:
+                advisor_name = (u_row.get("name") if isinstance(u_row, dict) else u_row[0]) or ""
+        except Exception:
+            pass
+
+    # 4. Resolve HOD
+    if dept:
+        try:
+            c.execute("SELECT reg_no, name FROM users WHERE role = 'hod' AND UPPER(dept) = UPPER(?) LIMIT 1", (dept,))
+            h_row = c.fetchone()
+            if h_row:
+                if isinstance(h_row, dict):
+                    hod_reg = h_row.get("reg_no") or ""
+                    hod_name = h_row.get("name") or ""
+                else:
+                    hod_reg = h_row[0] or ""
+                    hod_name = h_row[1] or ""
+        except Exception:
+            pass
+
+    return advisor_reg, advisor_name, hod_reg, hod_name, dept, batch, semester, section
+
+
+def _resolve_staff_hod(cur, dept):
+    """Resolves HOD for a staff member's department."""
+    c = cur if cur is not None else pg_adapter.cursor
+    hod_reg = ""
+    hod_name = ""
+    if dept:
+        try:
+            c.execute("SELECT reg_no, name FROM users WHERE role = 'hod' AND UPPER(dept) = UPPER(?) LIMIT 1", (dept,))
+            h_row = c.fetchone()
+            if h_row:
+                if isinstance(h_row, dict):
+                    hod_reg = h_row.get("reg_no") or ""
+                    hod_name = h_row.get("name") or ""
+                else:
+                    hod_reg = h_row[0] or ""
+                    hod_name = h_row[1] or ""
+        except Exception:
+            pass
+    return hod_reg, hod_name
+
+
+def _record_campus_movement_alert(
+    cur=None,
+    user_reg_no: str = "",
+    user_name: str = "",
+    user_role: str = "student",
+    dept: str = "",
+    batch: str = "",
+    semester: int = 1,
+    section: str = "A",
+    mentor_reg_no: str = "",
+    latitude: float = None,
+    longitude: float = None,
+    accuracy: float = None,
+    speed: float = None,
+):
+    """
+    Records or updates an active out-of-campus warning alert for student, staff, HOD, or other users.
+    Throttles pings so existing ACTIVE alerts have their location & last_seen_at refreshed without duplicates.
+    """
+    c = cur if cur is not None else pg_adapter.cursor
+    _ensure_campus_alerts_table(c)
+    user_reg = (user_reg_no or "").strip()
+    if not user_reg:
+        return
+
+    # Check if there is already an ACTIVE alert for this user
+    try:
+        c.execute(
+            "SELECT id FROM campus_movement_alerts WHERE LOWER(user_reg_no) = LOWER(?) AND status = 'ACTIVE' ORDER BY id DESC LIMIT 1",
+            (user_reg,)
+        )
+        active_row = c.fetchone()
+        if active_row:
+            alert_id = active_row.get("id") if isinstance(active_row, dict) else active_row[0]
+            c.execute(
+                """
+                UPDATE campus_movement_alerts
+                SET last_seen_at = CURRENT_TIMESTAMP,
+                    latitude = COALESCE(?, latitude),
+                    longitude = COALESCE(?, longitude),
+                    accuracy = COALESCE(?, accuracy),
+                    speed = COALESCE(?, speed)
+                WHERE id = ?
+                """,
+                (latitude, longitude, accuracy, speed, alert_id)
+            )
+            return alert_id
+    except Exception as e:
+        print(f"[CampusAlert] Error checking active alert: {e}")
+
+    # No active alert: resolve recipients and insert new warning
+    advisor_reg, advisor_name, hod_reg, hod_name = "", "", "", ""
+    u_role = (user_role or "student").lower()
+    u_name = user_name or user_reg
+
+    if u_role == "student":
+        advisor_reg, advisor_name, hod_reg, hod_name, dept, batch, semester, section = _resolve_student_advisor_and_hod(
+            c, user_reg, dept=dept, batch=batch, semester=semester, section=section, mentor_reg=mentor_reg_no
+        )
+        title = f"Student {u_name} ({user_reg}) Left Campus"
+        msg = f"Student {u_name} ({user_reg}, {dept} Sem {semester}-{section}) is outside the college campus boundary during active academic hours without approved OD/leave."
+    elif u_role == "staff":
+        hod_reg, hod_name = _resolve_staff_hod(c, dept)
+        title = f"Staff {u_name} ({user_reg}) Left College Boundary"
+        msg = f"Staff member {u_name} ({user_reg}, {dept}) moved outside the permitted college boundary during duty hours."
+    elif u_role == "hod":
+        title = f"HOD {u_name} ({dept}) Left College Boundary"
+        msg = f"HOD {u_name} ({user_reg}, {dept}) moved outside the permitted college boundary."
+    else:
+        hod_reg, hod_name = _resolve_staff_hod(c, dept)
+        title = f"Staff {u_name} ({user_reg}) Left College Boundary"
+        msg = f"Staff member {u_name} ({user_reg}, {dept or 'General'}) moved outside the permitted college boundary."
+
+    try:
+        c.execute(
+            """
+            INSERT INTO campus_movement_alerts (
+                user_reg_no, user_name, user_role, dept, batch, semester, section,
+                advisor_reg_no, advisor_name, hod_reg_no, hod_name,
+                latitude, longitude, accuracy, speed, alert_type, status,
+                title, message, left_at, last_seen_at, created_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?, 'OUT_OF_COLLEGE', 'ACTIVE',
+                ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """,
+            (
+                user_reg, u_name, u_role, dept, batch, semester, section,
+                advisor_reg, advisor_name, hod_reg, hod_name,
+                latitude, longitude, accuracy, speed,
+                title, msg
+            )
+        )
+        print(f"[CampusAlert] Dispatched OUT_OF_COLLEGE alert for {u_name} ({user_reg}, {u_role}). Advisor: {advisor_reg}, HOD: {hod_reg}")
+    except Exception as e:
+        print(f"[CampusAlert] Insert alert error: {e}")
+
+
+def _resolve_campus_movement_alert(cur=None, user_reg_no: str = ""):
+    """Automatically marks an active out-of-campus alert as RESOLVED when user returns."""
+    c = cur if cur is not None else pg_adapter.cursor
+    _ensure_campus_alerts_table(c)
+    user_reg = (user_reg_no or "").strip()
+    if not user_reg:
+        return
+    try:
+        c.execute(
+            """
+            UPDATE campus_movement_alerts
+            SET status = 'RESOLVED',
+                resolved_at = CURRENT_TIMESTAMP,
+                last_seen_at = CURRENT_TIMESTAMP
+            WHERE LOWER(user_reg_no) = LOWER(?) AND status = 'ACTIVE'
+            """,
+            (user_reg,)
+        )
+    except Exception as e:
+        print(f"[CampusAlert] Auto-resolve error for {user_reg}: {e}")
+
+
+# -------------------------------------------------
+# CAMPUS MOVEMENT ALERTS ENDPOINTS
+# -------------------------------------------------
+
+@app.get("/api/v1/campus-alerts")
+async def get_campus_movement_alerts(
+    request: Request,
+    status: Optional[str] = Query("all", description="Status filter: all, ACTIVE, RESOLVED, ACKNOWLEDGED"),
+    role: Optional[str] = Query("all", description="Role filter: all, student, staff, hod, other_staff"),
+    date: Optional[str] = Query(None, description="Date filter YYYY-MM-DD"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """
+    Fetches campus movement alerts scoped to caller's authorization:
+    - Admin: All campus alerts across all students, staff, HODs, other staff.
+    - HOD: Alerts for all students and staff in caller's department or where caller is HOD.
+    - Class Advisor / Staff: Alerts for all advisee students or students in assigned classes.
+    """
+    caller = verify_any_user_token(request)
+    caller_role = (caller.get("role") or "staff").lower()
+    caller_reg = (caller.get("reg_no") or "").strip()
+    caller_dept = (caller.get("dept") or "").strip()
+
+    cur = pg_adapter.cursor
+    _ensure_campus_alerts_table(cur)
+
+    conditions = []
+    params = []
+
+    # 1. Authorization & Role Scoping
+    if caller_role in ("admin", "superadmin", "principal"):
+        pass
+    elif caller_role == "hod":
+        conditions.append("(LOWER(hod_reg_no) = LOWER(?) OR UPPER(dept) = UPPER(?))")
+        params.extend([caller_reg, caller_dept])
+    elif caller_role == "staff":
+        conditions.append("""
+            (
+                LOWER(advisor_reg_no) = LOWER(?)
+                OR EXISTS (
+                    SELECT 1 FROM class_advisors ca
+                    WHERE LOWER(ca.staff_reg_no) = LOWER(?)
+                      AND UPPER(ca.dept) = UPPER(campus_movement_alerts.dept)
+                      AND (ca.batch = campus_movement_alerts.batch OR ca.batch = '')
+                      AND (ca.section = campus_movement_alerts.section OR ca.section = '')
+                      AND COALESCE(ca.is_active, TRUE) = TRUE
+                )
+            )
+        """)
+        params.extend([caller_reg, caller_reg])
+    else:
+        conditions.append("LOWER(user_reg_no) = LOWER(?)")
+        params.append(caller_reg)
+
+    # 2. Status filter
+    if status and status.lower() != "all":
+        conditions.append("status = ?")
+        params.append(status.upper())
+
+    # 3. Role filter
+    if role and role.lower() != "all":
+        conditions.append("LOWER(user_role) = LOWER(?)")
+        params.append(role.lower())
+
+    # 4. Date filter
+    if date:
+        conditions.append("DATE(created_at) = ?")
+        params.append(date)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    query = f"""
+        SELECT id, user_reg_no, user_name, user_role, dept, batch, semester, section,
+               advisor_reg_no, advisor_name, hod_reg_no, hod_name,
+               latitude, longitude, accuracy, speed, alert_type, status,
+               title, message, left_at, resolved_at, acknowledged_at, acknowledged_by,
+               last_seen_at, created_at
+        FROM campus_movement_alerts
+        {where_clause}
+        ORDER BY CASE WHEN status = 'ACTIVE' THEN 0 ELSE 1 END, created_at DESC
+        LIMIT ?
+    """
+    params.append(limit)
+
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+
+    alerts = []
+    for r in rows:
+        if isinstance(r, dict):
+            alerts.append(r)
+        else:
+            alerts.append({
+                "id": r[0],
+                "user_reg_no": r[1],
+                "user_name": r[2],
+                "user_role": r[3],
+                "dept": r[4],
+                "batch": r[5],
+                "semester": r[6],
+                "section": r[7],
+                "advisor_reg_no": r[8],
+                "advisor_name": r[9],
+                "hod_reg_no": r[10],
+                "hod_name": r[11],
+                "latitude": r[12],
+                "longitude": r[13],
+                "accuracy": r[14],
+                "speed": r[15],
+                "alert_type": r[16],
+                "status": r[17],
+                "title": r[18],
+                "message": r[19],
+                "left_at": str(r[20]) if r[20] else None,
+                "resolved_at": str(r[21]) if r[21] else None,
+                "acknowledged_at": str(r[22]) if r[22] else None,
+                "acknowledged_by": r[23],
+                "last_seen_at": str(r[24]) if r[24] else None,
+                "created_at": str(r[25]) if r[25] else None,
+            })
+
+    active_count = sum(1 for a in alerts if a.get("status") == "ACTIVE")
+    resolved_count = sum(1 for a in alerts if a.get("status") == "RESOLVED")
+
+    return {
+        "success": True,
+        "count": len(alerts),
+        "alerts": alerts,
+        "stats": {
+            "active_count": active_count,
+            "resolved_count": resolved_count,
+            "total_count": len(alerts)
+        }
+    }
+
+
+@app.post("/api/v1/campus-alerts/{alert_id}/acknowledge")
+async def acknowledge_campus_movement_alert(request: Request, alert_id: int):
+    """Allows an advisor, HOD, or admin to acknowledge an out-of-campus alert."""
+    caller = verify_any_user_token(request)
+    caller_reg = caller.get("reg_no") or caller.get("username") or "staff"
+
+    cur = pg_adapter.cursor
+    _ensure_campus_alerts_table(cur)
+    cur.execute(
+        """
+        UPDATE campus_movement_alerts
+        SET status = 'ACKNOWLEDGED',
+            acknowledged_at = CURRENT_TIMESTAMP,
+            acknowledged_by = ?
+        WHERE id = ?
+        """,
+        (caller_reg, alert_id)
+    )
+    return {"success": True, "message": f"Alert #{alert_id} acknowledged by {caller_reg}"}
+
+
+@app.get("/api/v1/campus-alerts/stats")
+async def get_campus_movement_alerts_stats(request: Request):
+    """Returns real-time active breach and today's total alert counts for badge display."""
+    caller = verify_any_user_token(request)
+    caller_role = (caller.get("role") or "staff").lower()
+    caller_reg = (caller.get("reg_no") or "").strip()
+    caller_dept = (caller.get("dept") or "").strip()
+
+    cur = pg_adapter.cursor
+    _ensure_campus_alerts_table(cur)
+
+    conditions = []
+    params = []
+    if caller_role in ("admin", "superadmin", "principal"):
+        pass
+    elif caller_role == "hod":
+        conditions.append("(LOWER(hod_reg_no) = LOWER(?) OR UPPER(dept) = UPPER(?))")
+        params.extend([caller_reg, caller_dept])
+    elif caller_role == "staff":
+        conditions.append("""
+            (
+                LOWER(advisor_reg_no) = LOWER(?)
+                OR EXISTS (
+                    SELECT 1 FROM class_advisors ca
+                    WHERE LOWER(ca.staff_reg_no) = LOWER(?)
+                      AND UPPER(ca.dept) = UPPER(campus_movement_alerts.dept)
+                      AND (ca.batch = campus_movement_alerts.batch OR ca.batch = '')
+                      AND (ca.section = campus_movement_alerts.section OR ca.section = '')
+                      AND COALESCE(ca.is_active, TRUE) = TRUE
+                )
+            )
+        """)
+        params.extend([caller_reg, caller_reg])
+    else:
+        conditions.append("LOWER(user_reg_no) = LOWER(?)")
+        params.append(caller_reg)
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    cur.execute(f"SELECT COUNT(*) FROM campus_movement_alerts {where_clause} {'AND' if where_clause else 'WHERE'} status = 'ACTIVE'", tuple(params))
+    active_row = cur.fetchone()
+    active_count = (active_row[0] if active_row else 0) or 0
+
+    cur.execute(f"SELECT COUNT(*) FROM campus_movement_alerts {where_clause} {'AND' if where_clause else 'WHERE'} DATE(created_at) = CURRENT_DATE", tuple(params))
+    today_row = cur.fetchone()
+    today_count = (today_row[0] if today_row else 0) or 0
+
+    return {
+        "success": True,
+        "active_outside_count": active_count,
+        "today_total_count": today_count
+    }
 
 
 # -------------------------------------------------

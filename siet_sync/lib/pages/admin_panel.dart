@@ -44,6 +44,7 @@ import 'security_hub_page.dart';
 import 'holiday_calendar_page.dart';
 import 'student_grievance_page.dart';
 import 'substitute_management_page.dart';
+import '../widgets/campus_movement_alerts_tab.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../utils/file_saver.dart';
@@ -3496,6 +3497,12 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       icon: Icons.location_on_outlined,
       selectedIcon: Icons.location_on_rounded,
     ),
+    _AdminNavEntry(
+      index: 26,
+      label: 'Campus Alerts',
+      icon: Icons.notification_important_outlined,
+      selectedIcon: Icons.notification_important_rounded,
+    ),
 
     // LEAVE & ON-DUTY
     _AdminNavEntry(
@@ -3628,6 +3635,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     'Student Grievances & Feedback',
     'Security & Session Control',
     'Settings',
+    'Campus Movement Warnings',
   ];
 
 
@@ -3714,6 +3722,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         user: widget.user,
       ),
       SettingsTab(token: widget.token),
+      CampusMovementAlertsTab(token: widget.token, user: widget.user),
     ]);
   }
 
@@ -3865,6 +3874,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       user: widget.user,
                     ),
                     SettingsTab(token: widget.token),
+                    CampusMovementAlertsTab(token: widget.token, user: widget.user),
                   ]);
 
                 }

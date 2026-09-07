@@ -41,6 +41,7 @@ import 'substitute_management_page.dart';
 import 'holiday_calendar_page.dart';
 import 'student_grievance_page.dart';
 import 'security_hub_page.dart';
+import '../widgets/campus_movement_alerts_tab.dart';
 
 
 
@@ -469,6 +470,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
     'Dashboard',
     'Staff',
     'Students',
+    'Campus Movement Warnings',
     'Schedule & Sessions',
     'Timetable & Advisors',
     'Halls & Labs',
@@ -495,7 +497,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
     setState(() {
       _selectedIndex = index;
     });
-    if (index == 7) {
+    if (index < _titles.length && _titles[index] == 'Staff Leave') {
       LeaveBalanceNotifier.instance.notifyBalanceChanged();
     }
   }
@@ -567,6 +569,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
         isHod: true,
         defaultDept: widget.user['dept'],
       ),
+      CampusMovementAlertsTab(token: widget.token, user: widget.user),
       StaffScheduleWorkingListTab(
         token: widget.token,
         user: widget.user,
@@ -694,6 +697,11 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
       label: 'Students',
     ),
     NavDestination(
+      icon: Icons.notification_important_outlined,
+      selectedIcon: Icons.notification_important_rounded,
+      label: 'Campus Alerts',
+    ),
+    NavDestination(
       icon: Icons.event_available_outlined,
       selectedIcon: Icons.event_available_rounded,
       label: 'Schedule & Sessions',
@@ -806,7 +814,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
       selectedIndex: _selectedIndex,
       onDestinationSelected: (index) {
         setState(() => _selectedIndex = index);
-        if (index == 7) {
+        if (index < _titles.length && _titles[index] == 'Staff Leave') {
           LeaveBalanceNotifier.instance.notifyBalanceChanged();
         }
       },
@@ -831,6 +839,7 @@ class _HODDashboardPageState extends State<HODDashboardPage> with WidgetsBinding
                 isHod: true,
                 defaultDept: widget.user['dept'],
               ),
+              CampusMovementAlertsTab(token: widget.token, user: widget.user),
               StaffScheduleWorkingListTab(
                 token: widget.token,
                 user: widget.user,

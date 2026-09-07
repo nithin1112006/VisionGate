@@ -37,6 +37,7 @@ import 'student_grievance_page.dart';
 import 'system_reports_page.dart';
 import 'security_hub_page.dart';
 import '../widgets/staff_schedule_working_list_tab.dart';
+import '../widgets/campus_movement_alerts_tab.dart';
 
 
 
@@ -467,6 +468,11 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
         label: 'Students',
         sectionHeader: 'Academic & Teaching',
       ),
+      const NavDestination(
+        icon: Icons.notification_important_outlined,
+        selectedIcon: Icons.notification_important_rounded,
+        label: 'Campus Alerts',
+      ),
       if (_isKioskEnabled)
         const NavDestination(
           icon: Icons.storefront_outlined,
@@ -582,6 +588,14 @@ class _StaffDashboardPageState extends State<StaffDashboardPage> with WidgetsBin
         defaultDept: (widget.user['dept'] ?? widget.user['department'] ?? '').toString(),
         staffRegNo: (widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString(),
         onNavigateToTab: _onTabSelected,
+      ),
+    );
+
+    _titles.add('Campus Movement Warnings');
+    _pages.add(
+      CampusMovementAlertsTab(
+        token: widget.token,
+        user: widget.user,
       ),
     );
 

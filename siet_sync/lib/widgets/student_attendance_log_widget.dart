@@ -73,6 +73,7 @@ class _StudentAttendanceLogWidgetState
   Map<String, dynamic> _summary = {};
   Map<String, dynamic> _periodStats = {};
   List<String> _departments = ["ALL"];
+  List<int> _availablePeriods = [1, 2, 3, 4, 5, 6, 7, 8];
 
   bool _isLoading = true;
   String? _errorMessage;
@@ -172,13 +173,22 @@ class _StudentAttendanceLogWidgetState
       );
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
-        if (data is List && mounted) {
+        List<dynamic> list = [];
+        if (data is List) {
+          list = data;
+        } else if (data is Map && data['departments'] is List) {
+          list = data['departments'];
+        }
+        if (list.isNotEmpty && mounted) {
+          final fetched = list
+              .map((d) => (d is Map ? (d['name'] ?? d['code'] ?? d['dept']) : d)
+                  .toString()
+                  .trim())
+              .where((d) => d.isNotEmpty && d != 'null' && d != 'ALL')
+              .toList();
+          final uniqueSorted = fetched.toSet().toList()..sort((a, b) => a.compareTo(b));
           setState(() {
-            final fetched = data
-                .map((d) => (d is Map ? d['code'] ?? d['dept'] : d).toString())
-                .where((d) => d.isNotEmpty && d != 'null')
-                .toList();
-            _departments = ["ALL", ...fetched.toSet()];
+            _departments = ["ALL", ...uniqueSorted];
           });
         }
       }
@@ -228,6 +238,53 @@ class _StudentAttendanceLogWidgetState
           final Map<String, dynamic> periodStats =
               Map<String, dynamic>.from(rawSummary['period_stats'] ?? {});
 
+          // Dynamically parse available periods (fused with class timetable)
+          final List<dynamic> rawAvail = data['available_periods'] ?? [];
+          List<int> parsedPeriods = rawAvail
+              .map((p) => int.tryParse(p.toString()))
+              .whereType<int>()
+              .where((p) => p > 0)
+              .toList();
+
+          if (parsedPeriods.isEmpty) {
+            final discovered = <int>{};
+            for (final m in matrixData) {
+              if (m is Map && m['periods'] is Map) {
+                for (final k in (m['periods'] as Map).keys) {
+                  final pi = int.tryParse(k.toString());
+                  if (pi != null && pi > 0) discovered.add(pi);
+                }
+              }
+            }
+            parsedPeriods = discovered.isNotEmpty
+                ? (discovered.toList()..sort())
+                : [1, 2, 3, 4, 5, 6, 7, 8];
+          }
+
+          // Dynamically merge any departments present in response or records
+          final Set<String> discoveredDepts = {};
+          if (data['departments'] is List) {
+            for (final d in (data['departments'] as List)) {
+              final dName = (d is Map ? (d['name'] ?? d['code'] ?? d['dept']) : d).toString().trim();
+              if (dName.isNotEmpty && dName != 'null' && dName != 'ALL') {
+                discoveredDepts.add(dName);
+              }
+            }
+          }
+          for (final m in matrixData) {
+            if (m is Map && m['dept'] != null && m['dept'].toString().trim().isNotEmpty) {
+              discoveredDepts.add(m['dept'].toString().trim());
+            }
+          }
+          if (discoveredDepts.isNotEmpty) {
+            final mergedDepts = {
+              ..._departments.where((d) => d != 'ALL'),
+              ...discoveredDepts
+            }.toList()
+              ..sort();
+            _departments = ["ALL", ...mergedDepts];
+          }
+
           // Exclude staff members from student logs
           final List<dynamic> rawLogs = allLogs.where((log) {
             if (log is! Map) return false;
@@ -258,6 +315,7 @@ class _StudentAttendanceLogWidgetState
             _matrix = matrixData;
             _summary = rawSummary;
             _periodStats = periodStats;
+            _availablePeriods = parsedPeriods;
             _isLoading = false;
           });
         }
@@ -492,7 +550,7 @@ class _StudentAttendanceLogWidgetState
                       pw.SizedBox(height: 2),
                       pw.Text(
                         isMatrixMode
-                            ? "STUDENT ATTENDANCE DAY & PERIOD MATRIX REPORT (PERIODS 1 TO 8)"
+                            ? "STUDENT ATTENDANCE DAY & PERIOD MATRIX REPORT (${_availablePeriods.isNotEmpty ? 'PERIODS P${_availablePeriods.first} TO P${_availablePeriods.last}' : 'TIMETABLE SCHEDULE'})"
                             : "STUDENT ATTENDANCE COMPREHENSIVE AUDIT & LOG REPORT",
                         style: pw.TextStyle(
                           font: fontBold,
@@ -693,14 +751,7 @@ class _StudentAttendanceLogWidgetState
       "Student Name",
       "Dept",
       "Sem-Sec",
-      "P1",
-      "P2",
-      "P3",
-      "P4",
-      "P5",
-      "P6",
-      "P7",
-      "P8",
+      ..._availablePeriods.map((p) => "P$p"),
       "Att/Tot",
       "Day %",
       "Status",
@@ -715,12 +766,14 @@ class _StudentAttendanceLogWidgetState
       String getP(int p) {
         final pData = periods[p.toString()];
         if (pData is Map) {
+          final isSched = pData['is_scheduled'] != false;
           final st = (pData['status'] ?? '--').toString();
           if (st == 'Present') return 'P';
           if (st == 'Absent') return 'A';
           if (st.contains('OD') || st.contains('On-Duty')) return 'OD';
           if (st.contains('Leave') || st.contains('Medical')) return 'L';
           if (st.contains('Holiday')) return 'H';
+          if (!isSched) return '-';
           return '--';
         }
         return '--';
@@ -734,14 +787,7 @@ class _StudentAttendanceLogWidgetState
         "${item['name'] ?? '--'}",
         "${item['dept'] ?? '--'}",
         "S${item['semester'] ?? '-'}-${item['section'] ?? '-'}",
-        getP(1),
-        getP(2),
-        getP(3),
-        getP(4),
-        getP(5),
-        getP(6),
-        getP(7),
-        getP(8),
+        ..._availablePeriods.map((p) => getP(p)),
         "${item['attended_periods'] ?? 0}/${item['total_periods'] ?? 0}",
         "${item['day_percentage'] ?? 0}%",
         "${item['day_status'] ?? '--'}",
@@ -899,8 +945,9 @@ class _StudentAttendanceLogWidgetState
     buffer.write('\uFEFF');
 
     if (isMatrix) {
+      final periodCols = _availablePeriods.map((p) => '"Period $p"').join(',');
       buffer.writeln(
-          '"S.No","Date","Register Number","Roll Number","Student Name","Degree","Department","Year","Semester","Section","Batch","Period 1","Period 2","Period 3","Period 4","Period 5","Period 6","Period 7","Period 8","Total Scheduled Periods","Attended Periods","Day Attendance %","Day Status"');
+          '"S.No","Date","Register Number","Roll Number","Student Name","Degree","Department","Year","Semester","Section","Batch",$periodCols,"Total Scheduled Periods","Attended Periods","Day Attendance %","Day Status"');
 
       for (int i = 0; i < _matrix.length; i++) {
         final item = _matrix[i];
@@ -910,17 +957,20 @@ class _StudentAttendanceLogWidgetState
         String getPDesc(int p) {
           final pData = periods[p.toString()];
           if (pData is Map) {
+            final isSched = pData['is_scheduled'] != false;
             final st = (pData['status'] ?? '--').toString();
-            final code = (pData['subject_code'] ?? '--').toString();
+            final code = (pData['subject_code'] ?? '').toString();
             if (st != '--') {
-              return '"$st ($code)"';
+              return code.isNotEmpty ? '"$st ($code)"' : '"$st"';
             }
+            if (!isSched) return '"Free"';
           }
           return '"--"';
         }
 
+        final pRowVals = _availablePeriods.map((p) => getPDesc(p)).join(',');
         buffer.writeln(
-            '${i + 1},"${item['date'] ?? ''}","${item['reg_no'] ?? ''}","${item['roll_no'] ?? ''}","${item['name'] ?? ''}","${item['degree'] ?? ''}","${item['dept'] ?? ''}",${item['year_of_study'] ?? ''},${item['semester'] ?? ''},"${item['section'] ?? ''}","${item['batch'] ?? ''}",${getPDesc(1)},${getPDesc(2)},${getPDesc(3)},${getPDesc(4)},${getPDesc(5)},${getPDesc(6)},${getPDesc(7)},${getPDesc(8)},${item['total_periods'] ?? 0},${item['attended_periods'] ?? 0},"${item['day_percentage'] ?? 0}%","${item['day_status'] ?? ''}"');
+            '${i + 1},"${item['date'] ?? ''}","${item['reg_no'] ?? ''}","${item['roll_no'] ?? ''}","${item['name'] ?? ''}","${item['degree'] ?? ''}","${item['dept'] ?? ''}",${item['year_of_study'] ?? ''},${item['semester'] ?? ''},"${item['section'] ?? ''}","${item['batch'] ?? ''}",$pRowVals,${item['total_periods'] ?? 0},${item['attended_periods'] ?? 0},"${item['day_percentage'] ?? 0}%","${item['day_status'] ?? ''}"');
       }
     } else {
       buffer.writeln(
@@ -1178,34 +1228,53 @@ class _StudentAttendanceLogWidgetState
                 ]),
                 const SizedBox(height: 14),
 
-                // Periods 1 to 8 Timeline List
-                const Text(
-                  "Period Breakdown (Periods 1 to 8)",
-                  style: TextStyle(
+                // Period Breakdown dynamically based on class timetable
+                Text(
+                  "Period Breakdown (${_availablePeriods.isNotEmpty ? 'Periods P${_availablePeriods.first} to P${_availablePeriods.last}' : 'Periods'})",
+                  style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
                     color: primaryNavy,
                   ),
                 ),
                 const SizedBox(height: 8),
-                ...List.generate(8, (idx) {
-                  final pNum = idx + 1;
+                ..._availablePeriods.map((pNum) {
                   final pData = periods[pNum.toString()] as Map? ?? {};
+                  final isSched = pData['is_scheduled'] == true;
                   final pStatus = (pData['status'] ?? '--').toString();
                   final pSubCode = (pData['subject_code'] ?? '--').toString();
                   final pSubName = (pData['subject_name'] ?? '--').toString();
                   final pFac = (pData['faculty_name'] ?? '--').toString();
                   final pTime = (pData['entry_time'] ?? '--').toString();
 
+                  String titleText = "Period $pNum (Free Period)";
+                  if (pStatus != '--') {
+                    titleText = pSubName != '--' ? "$pSubCode • $pSubName" : "Period $pNum Session";
+                  } else if (isSched) {
+                    titleText = pSubName != '--' ? "$pSubCode • $pSubName (Scheduled)" : "Period $pNum (Scheduled)";
+                  }
+
+                  String subText = isSched
+                      ? (pStatus != '--' ? "Faculty: $pFac • Time: $pTime" : "Faculty: $pFac • Session not marked")
+                      : "Not in class timetable for ${item['day_of_week'] ?? 'this day'}";
+
+                  final badgeColor = pStatus != '--'
+                      ? _getStatusColor(pStatus)
+                      : (isSched ? accentBlue : Colors.grey.shade500);
+
+                  final badgeBg = pStatus != '--'
+                      ? _getStatusBgColor(pStatus)
+                      : (isSched ? const Color(0xFFEFF6FF) : Colors.grey.shade100);
+
                   return Container(
                     margin: const EdgeInsets.only(bottom: 6),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                      color: _getStatusBgColor(pStatus),
+                      color: badgeBg,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                          color: _getStatusColor(pStatus).withValues(alpha: 0.2)),
+                          color: badgeColor.withValues(alpha: 0.25)),
                     ),
                     child: Row(
                       children: [
@@ -1214,7 +1283,7 @@ class _StudentAttendanceLogWidgetState
                           height: 28,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: _getStatusColor(pStatus),
+                            color: badgeColor,
                             shape: BoxShape.circle,
                           ),
                           child: Text(
@@ -1232,9 +1301,7 @@ class _StudentAttendanceLogWidgetState
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                pSubName != '--'
-                                    ? "$pSubCode • $pSubName"
-                                    : "Period $pNum (Free / Unassigned)",
+                                titleText,
                                 style: const TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
@@ -1244,7 +1311,7 @@ class _StudentAttendanceLogWidgetState
                                 overflow: TextOverflow.ellipsis,
                               ),
                               Text(
-                                "Faculty: $pFac • Time: $pTime",
+                                subText,
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: Colors.grey.shade600,
@@ -1257,11 +1324,11 @@ class _StudentAttendanceLogWidgetState
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: _getStatusColor(pStatus),
+                            color: badgeColor,
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            pStatus,
+                            pStatus != '--' ? pStatus : (isSched ? "Scheduled" : "Free"),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 9,
@@ -1518,10 +1585,10 @@ class _StudentAttendanceLogWidgetState
             children: [
               const Icon(Icons.schedule, size: 16, color: brandBlue),
               const SizedBox(width: 6),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  "Period Attendance Performance (P1–P8)",
-                  style: TextStyle(
+                  "Period Attendance Performance (${_availablePeriods.isNotEmpty ? 'P${_availablePeriods.first}–P${_availablePeriods.last}' : 'Periods'})",
+                  style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: primaryNavy,
@@ -1541,8 +1608,7 @@ class _StudentAttendanceLogWidgetState
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: List.generate(8, (idx) {
-                final pNum = idx + 1;
+              children: _availablePeriods.map((pNum) {
                 final pStat = _periodStats[pNum.toString()] as Map? ?? {};
                 final pTot = (pStat['total'] ?? 0) as int;
                 final pPres = (pStat['present'] ?? 0) as int;
@@ -1611,7 +1677,7 @@ class _StudentAttendanceLogWidgetState
                     ],
                   ),
                 );
-              }),
+              }).toList(),
             ),
           ),
         ],
@@ -2181,14 +2247,10 @@ class _StudentAttendanceLogWidgetState
             ),
             const DataColumn(label: Text("Dept")),
             const DataColumn(label: Text("Sem-Sec")),
-            const DataColumn(label: Text("P1")),
-            const DataColumn(label: Text("P2")),
-            const DataColumn(label: Text("P3")),
-            const DataColumn(label: Text("P4")),
-            const DataColumn(label: Text("P5")),
-            const DataColumn(label: Text("P6")),
-            const DataColumn(label: Text("P7")),
-            const DataColumn(label: Text("P8")),
+            ..._availablePeriods.map((p) => DataColumn(
+              label: Text("P$p"),
+              tooltip: "Period $p",
+            )),
             const DataColumn(label: Text("Att / Tot")),
             DataColumn(
               label: const Text("Day %"),
@@ -2230,14 +2292,7 @@ class _StudentAttendanceLogWidgetState
                 )),
                 DataCell(Text("${item['dept'] ?? '--'}")),
                 DataCell(Text("S${item['semester'] ?? '-'}-${item['section'] ?? '-'}")),
-                DataCell(_buildPeriodBadge(item, 1, periods['1'])),
-                DataCell(_buildPeriodBadge(item, 2, periods['2'])),
-                DataCell(_buildPeriodBadge(item, 3, periods['3'])),
-                DataCell(_buildPeriodBadge(item, 4, periods['4'])),
-                DataCell(_buildPeriodBadge(item, 5, periods['5'])),
-                DataCell(_buildPeriodBadge(item, 6, periods['6'])),
-                DataCell(_buildPeriodBadge(item, 7, periods['7'])),
-                DataCell(_buildPeriodBadge(item, 8, periods['8'])),
+                ..._availablePeriods.map((p) => DataCell(_buildPeriodBadge(item, p, periods['$p']))),
                 DataCell(Text(
                   "${item['attended_periods'] ?? 0} / ${item['total_periods'] ?? 0}",
                   style: const TextStyle(fontWeight: FontWeight.bold),
@@ -2286,7 +2341,7 @@ class _StudentAttendanceLogWidgetState
       Map<String, dynamic> studentDay, int periodNum, dynamic pData) {
     if (pData is! Map) {
       return Container(
-        width: 24,
+        width: 28,
         height: 22,
         alignment: Alignment.center,
         decoration: BoxDecoration(
@@ -2300,8 +2355,12 @@ class _StudentAttendanceLogWidgetState
       );
     }
 
+    final isScheduled = pData['is_scheduled'] == true;
     final status = (pData['status'] ?? '--').toString();
     final subCode = (pData['subject_code'] ?? '--').toString();
+    final subName = (pData['subject_name'] ?? '--').toString();
+    final faculty = (pData['faculty_name'] ?? '--').toString();
+    final room = (pData['room_or_lab'] ?? '').toString();
 
     String label = "--";
     if (status == 'Present') {
@@ -2316,17 +2375,30 @@ class _StudentAttendanceLogWidgetState
       label = "H";
     }
 
-    final color = _getStatusColor(status);
-    final bgColor = _getStatusBgColor(status);
+    Color color;
+    Color bgColor;
+    String tooltipMsg;
+
+    if (status != '--') {
+      color = _getStatusColor(status);
+      bgColor = _getStatusBgColor(status);
+      tooltipMsg = "P$periodNum: $status\nSubject: $subName ($subCode)\nFaculty: $faculty${room.isNotEmpty ? '\nRoom: $room' : ''}";
+    } else if (isScheduled) {
+      color = accentBlue;
+      bgColor = const Color(0xFFEFF6FF);
+      tooltipMsg = "P$periodNum: Scheduled Class\nSubject: $subName ($subCode)\nFaculty: $faculty${room.isNotEmpty ? '\nRoom: $room' : ''}\nStatus: Session pending / not marked";
+    } else {
+      color = Colors.grey.shade500;
+      bgColor = Colors.grey.shade100;
+      tooltipMsg = "Period $periodNum: Free Period\n(Not in timetable for ${studentDay['day_of_week'] ?? 'this day'})";
+    }
 
     return InkWell(
       onTap: () => _showPeriodDetailModal(
           studentDay, periodNum, Map<String, dynamic>.from(pData)),
       borderRadius: BorderRadius.circular(4),
       child: Tooltip(
-        message: status != '--'
-            ? "P$periodNum: $status\nSubject: $subCode\nFaculty: ${pData['faculty_name'] ?? '--'}"
-            : "Period $periodNum: Free",
+        message: tooltipMsg,
         child: Container(
           width: 28,
           height: 22,
@@ -2334,7 +2406,12 @@ class _StudentAttendanceLogWidgetState
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
+            border: Border.all(
+              color: isScheduled && status == '--'
+                  ? accentBlue.withValues(alpha: 0.5)
+                  : color.withValues(alpha: 0.4),
+              width: 0.8,
+            ),
           ),
           child: Text(
             label,
@@ -2632,9 +2709,11 @@ class _StudentAttendanceLogWidgetState
   // DROPDOWN FILTER BUILDERS
   // -------------------------------------------------------------
   Widget _buildDeptDropdown() {
+    final validDept = _departments.contains(_selectedDept) ? _selectedDept : "ALL";
     return DropdownButtonFormField<String>(
+      key: ValueKey("dept_${validDept}_${_departments.length}"),
       isExpanded: true,
-      initialValue: _selectedDept,
+      initialValue: validDept,
       decoration: InputDecoration(
         labelText: "Department",
         floatingLabelBehavior: FloatingLabelBehavior.always,
@@ -2666,10 +2745,12 @@ class _StudentAttendanceLogWidgetState
   }
 
   Widget _buildPeriodDropdown() {
-    final periods = ["ALL", "1", "2", "3", "4", "5", "6", "7", "8"];
+    final periods = ["ALL", ..._availablePeriods.map((p) => p.toString())];
+    final validPeriod = periods.contains(_selectedPeriod) ? _selectedPeriod : "ALL";
     return DropdownButtonFormField<String>(
+      key: ValueKey("period_${validPeriod}_${_availablePeriods.length}"),
       isExpanded: true,
-      initialValue: _selectedPeriod,
+      initialValue: validPeriod,
       decoration: InputDecoration(
         labelText: "Period",
         floatingLabelBehavior: FloatingLabelBehavior.always,
