@@ -80,13 +80,22 @@ class StudentFilterBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
     const primaryBlue = Color(0xFF2563EB);
 
+    final searchHint = isMobile
+        ? (isStaff ? 'Search advisees or Reg No...' : 'Search students or Reg No...')
+        : (isStaff ? 'Search advisees by student name, Reg No, or Roll No...' : 'Search by student name, Reg No, or Roll No...');
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 12 : 16,
+        vertical: isMobile ? 10 : 14,
+      ),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(isMobile ? 14 : 18),
         border: Border.all(
           color: isDark ? Colors.white12 : Colors.grey.shade200,
         ),
@@ -104,18 +113,21 @@ class StudentFilterBar extends StatelessWidget {
           // Search Input Field
           TextField(
             onChanged: onSearchChanged,
+            style: TextStyle(fontSize: isMobile ? 13 : 14),
             decoration: InputDecoration(
-              hintText: isStaff
-                  ? 'Search advisees by student name, Reg No, or Roll No...'
-                  : 'Search by student name, Reg No, or Roll No...',
-              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              hintText: searchHint,
+              hintStyle: TextStyle(
+                fontSize: isMobile ? 12 : 13,
+                color: isDark ? Colors.white38 : Colors.grey.shade500,
+              ),
+              prefixIcon: Icon(Icons.search_rounded, size: isMobile ? 18 : 20),
               suffixIcon: searchQuery.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.clear, size: 18),
+                      icon: Icon(Icons.clear, size: isMobile ? 16 : 18),
                       onPressed: () => onSearchChanged?.call(''),
                     )
                   : null,
-              contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 14),
+              contentPadding: EdgeInsets.symmetric(vertical: 0, horizontal: isMobile ? 10 : 14),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(

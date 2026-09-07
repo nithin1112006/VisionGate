@@ -708,6 +708,9 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: _isLoading
@@ -732,19 +735,22 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
                   onRefresh: _loadAllData,
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(20),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isMobile ? 12 : 20,
+                      vertical: isMobile ? 12 : 20,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildTopHeader(),
-                        const SizedBox(height: 16),
-                        _buildDigestBanner(),
-                        const SizedBox(height: 16),
-                        _buildSubjectFilterRow(),
-                        const SizedBox(height: 16),
-                        _buildViewTabBar(),
-                        const SizedBox(height: 16),
-                        if (_activeViewMode == 0) _buildWorkingListQueueView(),
+                        _buildTopHeader(isMobile: isMobile),
+                        const SizedBox(height: 14),
+                        _buildDigestBanner(isMobile: isMobile),
+                        const SizedBox(height: 14),
+                        _buildSubjectFilterRow(isMobile: isMobile),
+                        const SizedBox(height: 14),
+                        _buildViewTabBar(isMobile: isMobile),
+                        const SizedBox(height: 14),
+                        if (_activeViewMode == 0) _buildWorkingListQueueView(isMobile: isMobile),
                         if (_activeViewMode == 1) _buildMonthCalendarMatrixView(),
                         if (_activeViewMode == 2) _buildDayTimelineView(),
                         if (_activeViewMode == 3) _buildAssignedSubjectsCatalogView(),
@@ -756,26 +762,28 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
-  Widget _buildTopHeader() {
+  Widget _buildTopHeader({bool isMobile = false}) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isNarrow = constraints.maxWidth < 650;
+        final isNarrow = constraints.maxWidth < 650 || isMobile;
         final titleBlock = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              "Schedule & Upcoming Sessions Hub",
+            Text(
+              isNarrow ? "Schedule & Sessions" : "Schedule & Upcoming Sessions Hub",
               style: TextStyle(
-                fontSize: 18,
+                fontSize: isNarrow ? 17 : 18,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF0F172A),
+                color: const Color(0xFF0F172A),
                 fontStyle: FontStyle.normal,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
-              "Instructional matrix, active classes & working duty queue for $_staffName",
-              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
+              isNarrow
+                  ? "Today's timetable & working queue"
+                  : "Active classes & instructional schedule for $_staffName",
+              style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
             ),
           ],
         );
@@ -786,28 +794,28 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             OutlinedButton.icon(
-              icon: const Icon(Icons.download_rounded, size: 15),
-              label: const Text("Export (.ics)", style: TextStyle(fontSize: 12)),
+              icon: const Icon(Icons.download_rounded, size: 14),
+              label: Text(isNarrow ? "Export" : "Export (.ics)", style: const TextStyle(fontSize: 12)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF1E3A8A),
                 side: const BorderSide(color: Color(0xFFCBD5E1)),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               ),
               onPressed: _exportCalendarICS,
             ),
             IconButton(
-              icon: const Icon(Icons.notifications_active_outlined, color: Color(0xFF1E3A8A), size: 20),
+              icon: const Icon(Icons.notifications_active_outlined, color: Color(0xFF1E3A8A), size: 19),
               tooltip: "Reminder Preferences",
               onPressed: _showReminderSettingsModal,
               constraints: const BoxConstraints(),
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(7),
             ),
             IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E3A8A), size: 20),
+              icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E3A8A), size: 19),
               tooltip: "Refresh Schedule",
               onPressed: _loadAllData,
               constraints: const BoxConstraints(),
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(7),
             ),
           ],
         );
@@ -817,7 +825,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               titleBlock,
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               actionRow,
             ],
           );
@@ -836,7 +844,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
-  Widget _buildDigestBanner() {
+  Widget _buildDigestBanner({bool isMobile = false}) {
     if (_dailyDigest == null) return const SizedBox.shrink();
     final metrics = _dailyDigest!['metrics'] ?? {};
     final nextSession = metrics['next_session'];
@@ -844,7 +852,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     final countdownMins = metrics['next_session_countdown_mins'];
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(isMobile ? 14 : 20),
       decoration: BoxDecoration(
         color: const Color(0xFF1E3A8A),
         borderRadius: BorderRadius.circular(16),
@@ -864,86 +872,86 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             children: [
               Text(
                 "Today • ${_dailyDigest!['date']} (${_dailyDigest!['day_of_week']})",
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF93C5FD)),
+                style: TextStyle(fontSize: isMobile ? 13 : 14, fontWeight: FontWeight.w600, color: const Color(0xFF93C5FD)),
               ),
               if (_dailyDigest!['is_holiday'] == true)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(color: Colors.red.shade700, borderRadius: BorderRadius.circular(6)),
-                  child: const Text("INSTITUTIONAL HOLIDAY", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                  child: const Text("HOLIDAY", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
                 )
               else if (_dailyDigest!['day_order'] != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)),
-                  child: Text("Day Order ${_dailyDigest!['day_order']}", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                  child: Text("Day Order ${_dailyDigest!['day_order']}", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
                 ),
             ],
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: isMobile ? 10 : 14),
           if (activeSession != null) ...[
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(color: const Color(0xFF059669), borderRadius: BorderRadius.circular(6)),
-                  child: const Text("LIVE NOW", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                  child: const Text("LIVE NOW", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     "${activeSession['subject_code']} - ${activeSession['subject_name']}",
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                    style: TextStyle(fontSize: isMobile ? 14 : 16, fontWeight: FontWeight.w700, color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 5),
             Text(
               "Period ${activeSession['period_number']} (${activeSession['start_time']} - ${activeSession['end_time']}) • Venue: ${activeSession['effective_venue']} (Sec ${activeSession['section']})",
-              style: const TextStyle(fontSize: 13, color: Color(0xFFE2E8F0)),
+              style: TextStyle(fontSize: isMobile ? 12 : 13, color: const Color(0xFFE2E8F0)),
             ),
           ] else if (nextSession != null) ...[
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(color: const Color(0xFF2563EB), borderRadius: BorderRadius.circular(6)),
                   child: Text(
                     countdownMins != null && countdownMins > 0 ? "Starts in ${countdownMins}m" : "UPCOMING NEXT",
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     "${nextSession['subject_code']} - ${nextSession['subject_name']}",
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                    style: TextStyle(fontSize: isMobile ? 14 : 16, fontWeight: FontWeight.w700, color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 5),
             Text(
               "Period ${nextSession['period_number']} at ${nextSession['start_time']} • Venue: ${nextSession['effective_venue']}",
-              style: const TextStyle(fontSize: 13, color: Color(0xFFE2E8F0)),
+              style: TextStyle(fontSize: isMobile ? 12 : 13, color: const Color(0xFFE2E8F0)),
             ),
           ] else ...[
-            const Text(
+            Text(
               "All scheduled sessions for today are completed.",
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
+              style: TextStyle(fontSize: isMobile ? 13 : 14, fontWeight: FontWeight.w600, color: Colors.white),
             ),
           ],
-          const Divider(color: Color(0xFF3B82F6), height: 28),
+          Divider(color: const Color(0xFF3B82F6), height: isMobile ? 20 : 28),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildMetricStat("Today's Classes", "${metrics['total_classes'] ?? 0}"),
-              _buildMetricStat("Completed", "${metrics['completed_classes'] ?? 0}"),
-              _buildMetricStat("Remaining", "${metrics['remaining_classes'] ?? 0}"),
-              _buildMetricStat("Teaching Hours", "${metrics['total_teaching_hours'] ?? 0}h"),
+              _buildMetricStat(isMobile ? "Classes" : "Today's Classes", "${metrics['total_classes'] ?? 0}", isMobile: isMobile),
+              _buildMetricStat(isMobile ? "Done" : "Completed", "${metrics['completed_classes'] ?? 0}", isMobile: isMobile),
+              _buildMetricStat(isMobile ? "Left" : "Remaining", "${metrics['remaining_classes'] ?? 0}", isMobile: isMobile),
+              _buildMetricStat(isMobile ? "Hours" : "Teaching Hours", "${metrics['total_teaching_hours'] ?? 0}h", isMobile: isMobile),
             ],
           ),
         ],
@@ -951,17 +959,17 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
-  Widget _buildMetricStat(String label, String value) {
+  Widget _buildMetricStat(String label, String value, {bool isMobile = false}) {
     return Column(
       children: [
-        Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white)),
+        Text(value, style: TextStyle(fontSize: isMobile ? 18 : 20, fontWeight: FontWeight.w700, color: Colors.white)),
         const SizedBox(height: 2),
-        Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF93C5FD), fontWeight: FontWeight.w500)),
+        Text(label, style: TextStyle(fontSize: isMobile ? 10 : 11, color: const Color(0xFF93C5FD), fontWeight: FontWeight.w500)),
       ],
     );
   }
 
-  Widget _buildSubjectFilterRow() {
+  Widget _buildSubjectFilterRow({bool isMobile = false}) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
@@ -969,7 +977,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ChoiceChip(
-              label: const Text("All Assigned Subjects"),
+              label: Text(isMobile ? "All Subjects" : "All Assigned Subjects", style: TextStyle(fontSize: isMobile ? 11 : 12)),
               selected: _selectedSubjectFilter == null,
               onSelected: (val) {
                 if (val) {
@@ -986,7 +994,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text("$code (${sub['section']})"),
+                label: Text("$code (${sub['section']})", style: TextStyle(fontSize: isMobile ? 11 : 12)),
                 selected: isSelected,
                 onSelected: (val) {
                   setState(() => _selectedSubjectFilter = val ? code : null);
@@ -1001,7 +1009,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
-  Widget _buildViewTabBar() {
+  Widget _buildViewTabBar({bool isMobile = false}) {
     final hasActiveLiveSession = _todayPeriods.any((p) {
       final s = p['session'];
       return s != null && (s['status'] == 'checkin_open' || s['status'] == 'checkout_open');
@@ -1017,26 +1025,26 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _buildTabItem(4, hasActiveLiveSession ? "Live Attendance ●" : "Live Attendance", Icons.sensors_rounded),
-            _buildTabItem(0, "Working List / Action Queue", Icons.checklist_rounded),
-            _buildTabItem(1, "Month Calendar", Icons.calendar_month_rounded),
-            _buildTabItem(2, "Day Timeline", Icons.view_day_rounded),
-            _buildTabItem(3, "Assigned Subjects", Icons.menu_book_rounded),
+            _buildTabItem(4, isMobile ? (hasActiveLiveSession ? "Live ●" : "Live") : (hasActiveLiveSession ? "Live Attendance ●" : "Live Attendance"), Icons.sensors_rounded, isMobile: isMobile),
+            _buildTabItem(0, isMobile ? "Queue" : "Working Queue", Icons.checklist_rounded, isMobile: isMobile),
+            _buildTabItem(1, isMobile ? "Calendar" : "Month Calendar", Icons.calendar_month_rounded, isMobile: isMobile),
+            _buildTabItem(2, isMobile ? "Timeline" : "Day Timeline", Icons.view_day_rounded, isMobile: isMobile),
+            _buildTabItem(3, isMobile ? "Subjects" : "Assigned Subjects", Icons.menu_book_rounded, isMobile: isMobile),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildTabItem(int index, String title, IconData icon) {
+  Widget _buildTabItem(int index, String title, IconData icon, {bool isMobile = false}) {
     final isSelected = _activeViewMode == index;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 4),
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 2 : 3, vertical: isMobile ? 3 : 4),
       child: InkWell(
         onTap: () => setState(() => _activeViewMode = index),
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 14, vertical: isMobile ? 8 : 10),
           decoration: BoxDecoration(
             color: isSelected ? const Color(0xFF1E3A8A) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
@@ -1045,12 +1053,12 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: isSelected ? Colors.white : const Color(0xFF64748B)),
-              const SizedBox(width: 6),
+              Icon(icon, size: isMobile ? 14 : 16, color: isSelected ? Colors.white : const Color(0xFF64748B)),
+              SizedBox(width: isMobile ? 4 : 6),
               Text(
                 title,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: isMobile ? 11 : 12,
                   fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                   color: isSelected ? Colors.white : const Color(0xFF64748B),
                 ),
@@ -1062,17 +1070,17 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
-  Widget _buildWorkingListQueueView() {
+  Widget _buildWorkingListQueueView({bool isMobile = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
-                "Actionable Working Queue (Next 14 Days)",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                isMobile ? "Working Queue (14 Days)" : "Actionable Working Queue (Next 14 Days)",
+                style: TextStyle(fontSize: isMobile ? 14 : 15, fontWeight: FontWeight.w700, color: const Color(0xFF0F172A)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -1080,7 +1088,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             const SizedBox(width: 8),
             Text(
               "${_upcomingSessions.length} active",
-              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontWeight: FontWeight.w600),
+              style: TextStyle(fontSize: isMobile ? 11 : 12, color: const Color(0xFF64748B), fontWeight: FontWeight.w600),
             ),
           ],
         ),

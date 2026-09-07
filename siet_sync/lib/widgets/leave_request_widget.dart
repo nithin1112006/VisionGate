@@ -302,49 +302,58 @@ class _LeaveRequestFormState extends State<LeaveRequestForm> {
 
             const SizedBox(height: 12),
             if (_loadingBalances)
-              const LinearProgressIndicator(color: const Color(0xFF0067B8))
-            else
-              Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+              const LinearProgressIndicator(color: Color(0xFF0067B8))
+            else ...[
+              Builder(
+                builder: (context) {
+                  final clVal = _availableCL ?? 0.0;
+                  final cclVal = _availableCCL ?? 0.0;
+                  final clStr = clVal % 1 == 0 ? clVal.toInt().toString() : clVal.toString();
+                  final cclStr = cclVal % 1 == 0 ? cclVal.toInt().toString() : cclVal.toString();
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Casual Leaves Left', style: TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w500)),
+                              const SizedBox(height: 4),
+                              Text('$clStr CL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue)),
+                            ],
+                          ),
+                        ),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Casual Leaves Left', style: TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w500)),
-                          const SizedBox(height: 4),
-                          Text('${_availableCL ?? 0.0} CL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue)),
-                        ],
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0067B8).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF0067B8).withValues(alpha: 0.3)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Earned Leaves Left', style: TextStyle(fontSize: 12, color: Color(0xFF0067B8), fontWeight: FontWeight.w500)),
+                              const SizedBox(height: 4),
+                              Text('$cclStr EL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0067B8))),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0067B8).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF0067B8).withValues(alpha: 0.3)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Earned Leaves Left', style: TextStyle(fontSize: 12, color: const Color(0xFF0067B8), fontWeight: FontWeight.w500)),
-                          const SizedBox(height: 4),
-                          Text('${_availableCCL ?? 0.0} EL', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF0067B8))),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
+            ],
 
             const SizedBox(height: 16),
 
@@ -2147,16 +2156,19 @@ class _StaffLeaveRequestTabState extends State<StaffLeaveRequestTab>
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
+
     final List<Widget> tabs = [
-      const Tab(text: 'Apply Leave'),
-      const Tab(text: 'My Requests'),
+      Tab(text: isMobile ? 'Apply' : 'Apply Leave'),
+      Tab(text: isMobile ? 'Requests' : 'My Requests'),
       Tab(
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Coverage Requests'),
+            Text(isMobile ? 'Coverage' : 'Coverage Requests'),
             if (_altBadge > 0) ...[
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               Container(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 5, vertical: 1),
@@ -2176,13 +2188,13 @@ class _StaffLeaveRequestTabState extends State<StaffLeaveRequestTab>
           ],
         ),
       ),
-      const Tab(text: 'Expired Leaves'),
+      Tab(text: isMobile ? 'History' : 'Expired Leaves'),
     ];
 
     if (widget.isHod) {
-      tabs.add(const Tab(text: 'Dept Staff Approvals'));
+      tabs.add(Tab(text: isMobile ? 'Approvals' : 'Dept Staff Approvals'));
     } else if (widget.isAdmin) {
-      tabs.add(const Tab(text: 'All Staff Approvals'));
+      tabs.add(Tab(text: isMobile ? 'Approvals' : 'All Staff Approvals'));
     }
 
     final List<Widget> tabViews = [
@@ -2227,6 +2239,16 @@ class _StaffLeaveRequestTabState extends State<StaffLeaveRequestTab>
           labelColor: widget.accentColor,
           unselectedLabelColor: Colors.grey,
           isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelPadding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
+          labelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 13,
+            fontWeight: FontWeight.w700,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 13,
+            fontWeight: FontWeight.w500,
+          ),
           tabs: tabs,
         ),
         Expanded(

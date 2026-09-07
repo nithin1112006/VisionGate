@@ -115,6 +115,9 @@ class _StaffAlternateLeaveTabState extends State<StaffAlternateLeaveTab>
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
+
     return Column(
       children: [
         TabBar(
@@ -122,16 +125,27 @@ class _StaffAlternateLeaveTabState extends State<StaffAlternateLeaveTab>
           labelColor: widget.accentColor,
           unselectedLabelColor: _kSubtext,
           indicatorColor: widget.accentColor,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelPadding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
+          labelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 13,
+            fontWeight: FontWeight.w700,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontSize: isMobile ? 12 : 13,
+            fontWeight: FontWeight.w500,
+          ),
           tabs: [
-            const Tab(text: 'Submit Request'),
-            const Tab(text: 'My Requests'),
+            Tab(text: isMobile ? 'Submit' : 'Submit Request'),
+            Tab(text: isMobile ? 'Requests' : 'My Requests'),
             Tab(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Coverage Requests'),
+                  Text(isMobile ? 'Coverage' : 'Coverage Requests'),
                   if (_pendingBadge > 0) ...[
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
                     _Badge(_pendingBadge),
                   ],
                 ],
@@ -574,11 +588,20 @@ class _StaffSubmitRequestPaneState extends State<StaffSubmitRequestPane> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
     final workingDays = _calculateWorkingDays();
     final effectiveDays = _isHalfDay ? 0.5 : workingDays.toDouble();
 
+    final clStr = (_availableCL ?? 0.0) % 1 == 0
+        ? '${(_availableCL ?? 0.0).toInt()}'
+        : '${_availableCL ?? 0.0}';
+    final cclStr = (_availableCCL ?? 0.0) % 1 == 0
+        ? '${(_availableCCL ?? 0.0).toInt()}'
+        : '${_availableCCL ?? 0.0}';
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(isMobile ? 12 : 16),
       child: Form(
         key: _formKey,
         child: Column(
@@ -592,12 +615,12 @@ class _StaffSubmitRequestPaneState extends State<StaffSubmitRequestPane> {
               )
             else
               Padding(
-                padding: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.only(bottom: 14),
                 child: Row(
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.all(12),
+                        padding: EdgeInsets.all(isMobile ? 10 : 12),
                         decoration: BoxDecoration(
                           color: _kPrimary.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(10),
@@ -607,25 +630,25 @@ class _StaffSubmitRequestPaneState extends State<StaffSubmitRequestPane> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Casual Leaves (CL)',
+                            Text(isMobile ? 'Casual Leave (CL)' : 'Casual Leaves (CL)',
                                 style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: isMobile ? 11 : 12,
                                     color: _kPrimary,
                                     fontWeight: FontWeight.w600)),
                             const SizedBox(height: 4),
-                            Text('${_availableCL ?? 0.0} Available',
-                                style: const TextStyle(
-                                    fontSize: 16,
+                            Text('$clStr Available',
+                                style: TextStyle(
+                                    fontSize: isMobile ? 15 : 16,
                                     fontWeight: FontWeight.w700,
                                     color: _kPrimary)),
                           ],
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    SizedBox(width: isMobile ? 8 : 12),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.all(12),
+                        padding: EdgeInsets.all(isMobile ? 10 : 12),
                         decoration: BoxDecoration(
                           color: _kSuccess.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(10),
@@ -635,15 +658,15 @@ class _StaffSubmitRequestPaneState extends State<StaffSubmitRequestPane> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Earned Leaves (EL)',
+                            Text(isMobile ? 'Earned Leave (EL)' : 'Earned Leaves (EL)',
                                 style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: isMobile ? 11 : 12,
                                     color: _kSuccess,
                                     fontWeight: FontWeight.w600)),
                             const SizedBox(height: 4),
-                            Text('${_availableCCL ?? 0.0} Available',
-                                style: const TextStyle(
-                                    fontSize: 16,
+                            Text('$cclStr Available',
+                                style: TextStyle(
+                                    fontSize: isMobile ? 15 : 16,
                                     fontWeight: FontWeight.w700,
                                     color: _kSuccess)),
                           ],
@@ -863,19 +886,21 @@ class _StaffSubmitRequestPaneState extends State<StaffSubmitRequestPane> {
             _SectionLabel(_hasClasses == true
                 ? 'Nominate an alternate (Required)'
                 : 'Nominate an alternate (Optional)'),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               _hasClasses == true
-                  ? 'The nominated staff member will cover your $_classCount scheduled class period(s). They have 24 hours to respond.'
-                  : 'Optionally nominate a colleague for department coverage. They have 24 hours to respond.',
-              style: const TextStyle(fontSize: 12, color: _kSubtext),
+                  ? 'The nominated staff will cover your $_classCount scheduled period(s).'
+                  : 'Optionally nominate a colleague for coverage.',
+              style: TextStyle(fontSize: isMobile ? 11 : 12, color: _kSubtext),
             ),
             const SizedBox(height: 8),
             if (_loadingAlternates)
               const Center(child: CircularProgressIndicator())
             else ...[
               TextField(
-                decoration: _inputDeco('Search by name, department, staff ID, or role'),
+                decoration: _inputDeco(isMobile
+                    ? 'Search colleague by name or ID...'
+                    : 'Search by name, department, staff ID, or role'),
                 onChanged: (v) => setState(() => _altSearch = v),
               ),
               const SizedBox(height: 8),

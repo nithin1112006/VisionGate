@@ -416,6 +416,8 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 650;
     final totalStudents = _students.length;
     final faceEnrolledCount = _students.where((s) => s['has_face'] == true || (s['face_samples_count'] ?? 0) > 0).length;
     final activeCount = _students.where((s) => s['suspended'] != true).length;
@@ -431,7 +433,10 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
       },
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.symmetric(
+          horizontal: isMobile ? 12 : 20,
+          vertical: isMobile ? 12 : 20,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -464,7 +469,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                               const SizedBox(height: 2),
                               Text(
                                 widget.isStaff
-                                    ? 'View and verify advisee class students and biometric profiles'
+                                    ? 'Advisee class students & biometric status'
                                     : (widget.isHod
                                         ? 'Manage department students, multi-semester scoping, and biometric profiles'
                                         : 'Manage enrolled university students, multi-semester scoping, and biometric profiles'),
@@ -524,24 +529,24 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                             style: TextStyle(
                               fontFamily: 'Inter',
                               fontWeight: FontWeight.w700,
-                              fontSize: 18,
+                              fontSize: 17,
                               color: isDark ? Colors.white : const Color(0xFF0F172A),
                             ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             widget.isStaff
-                                ? 'View and verify advisee class students and biometric profiles'
+                                ? 'Advisee class students & biometric status'
                                 : (widget.isHod
-                                    ? 'Manage department students, multi-semester scoping, and biometric profiles'
-                                    : 'Manage enrolled students and biometric profiles'),
+                                    ? 'Department students & biometric profiles'
+                                    : 'Manage enrolled students'),
                             style: TextStyle(
                               fontFamily: 'Inter',
                               color: isDark ? Colors.white60 : const Color(0xFF64748B),
-                              fontSize: 12,
+                              fontSize: 11,
                             ),
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 10),
                           Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -549,22 +554,22 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                               OutlinedButton.icon(
                                 onPressed: _exportStudentsToCSV,
                                 style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                 ),
-                                icon: const Icon(Icons.file_download_outlined, size: 16),
-                                label: const Text('Export CSV'),
+                                icon: const Icon(Icons.file_download_outlined, size: 15),
+                                label: const Text('Export CSV', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                               ),
                               OutlinedButton.icon(
                                 onPressed: _openBulkImportDialog,
                                 style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   side: const BorderSide(color: primaryBlue),
                                   foregroundColor: primaryBlue,
                                 ),
-                                icon: const Icon(Icons.file_upload_outlined, size: 16),
-                                label: const Text('Bulk Import'),
+                                icon: const Icon(Icons.file_upload_outlined, size: 15),
+                                label: const Text('Bulk Import', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                               ),
                               if (!widget.isStaff)
                                 ElevatedButton.icon(
@@ -572,11 +577,11 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: primaryBlue,
                                     foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   ),
-                                  icon: const Icon(Icons.person_add_alt_1_rounded, size: 16),
-                                  label: const Text('Register Student'),
+                                  icon: const Icon(Icons.person_add_alt_1_rounded, size: 15),
+                                  label: const Text('Register Student', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                                 ),
                             ],
                           ),
@@ -585,7 +590,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
               },
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
 
             // -------------------------------------------------------------
             // STAFF DUAL-SECTION SEGMENTED SWITCHER (Exclusive to Staff Role)
@@ -593,10 +598,10 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
             if (widget.isStaff) ...[
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(4),
+                padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(
                   color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                 ),
                 child: Row(
                   children: [
@@ -604,14 +609,15 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                     Expanded(
                       child: _buildStaffSectionTab(
                         index: 0,
-                        title: 'My Advised Class',
+                        title: isMobile ? 'Advised Class' : 'My Advised Class',
                         subtitle: advisedClasses.isNotEmpty
-                            ? '${(advisedClasses[_selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1)] as Map<String, dynamic>)['dept']} • ${(advisedClasses[_selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1)] as Map<String, dynamic>)['section']}'
+                            ? '${(advisedClasses[_selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1)] as Map<String, dynamic>)['dept']} • Sec ${(advisedClasses[_selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1)] as Map<String, dynamic>)['section']}'
                             : 'Class Advisor',
                         icon: Icons.assignment_ind_rounded,
                         countBadge: advisedClasses.length,
                         isSelected: _staffActiveSection == 0,
                         isDark: isDark,
+                        isMobile: isMobile,
                       ),
                     ),
                     const SizedBox(width: 4),
@@ -619,12 +625,13 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                     Expanded(
                       child: _buildStaffSectionTab(
                         index: 1,
-                        title: 'Handled Classes & Subjects',
-                        subtitle: '${teachingAllocations.length} Subjects Assigned',
+                        title: isMobile ? 'Handled Classes' : 'Handled Classes & Subjects',
+                        subtitle: isMobile ? '${teachingAllocations.length} Subjects' : '${teachingAllocations.length} Subjects Assigned',
                         icon: Icons.menu_book_rounded,
                         countBadge: teachingAllocations.length,
                         isSelected: _staffActiveSection == 1,
                         isDark: isDark,
+                        isMobile: isMobile,
                       ),
                     ),
                   ],
@@ -637,7 +644,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                   valueColor: AlwaysStoppedAnimation<Color>(primaryBlue),
                 ),
               ],
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
             ],
 
             // -------------------------------------------------------------
@@ -664,8 +671,8 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
 
               // Advised Class Banner for Staff
               if (widget.isStaff && advisedClasses.isNotEmpty) ...[
-                _buildAdvisedClassBanner(advisedClasses, isDark),
-                const SizedBox(height: 16),
+                _buildAdvisedClassBanner(advisedClasses, isDark, isMobile: isMobile),
+                const SizedBox(height: 14),
               ],
 
               // Metric Summary Strip
@@ -673,36 +680,39 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                 children: [
                   Expanded(
                     child: _buildMetricTile(
-                      widget.isStaff ? 'Advisees Enrolled' : 'Total Enrolled',
+                      isMobile ? 'Advisees' : (widget.isStaff ? 'Advisees Enrolled' : 'Total Enrolled'),
                       '$totalStudents',
                       Icons.groups_outlined,
                       primaryBlue,
                       isDark,
+                      isMobile: isMobile,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: isMobile ? 8 : 10),
                   Expanded(
                     child: _buildMetricTile(
-                      'Biometric Ready',
+                      isMobile ? 'Biometric' : 'Biometric Ready',
                       '$facePct%',
                       Icons.face_rounded,
                       emeraldGreen,
                       isDark,
+                      isMobile: isMobile,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: isMobile ? 8 : 10),
                   Expanded(
                     child: _buildMetricTile(
-                      'Active Records',
+                      isMobile ? 'Active' : 'Active Records',
                       '$activeCount',
                       Icons.verified_user_outlined,
                       indigoAccent,
                       isDark,
+                      isMobile: isMobile,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
 
               // Filter Bar
               StudentFilterBar(
@@ -921,6 +931,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
     required int countBadge,
     required bool isSelected,
     required bool isDark,
+    bool isMobile = false,
   }) {
     return Material(
       color: Colors.transparent,
@@ -936,7 +947,10 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
         borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 8 : 14,
+            vertical: isMobile ? 8 : 10,
+          ),
           decoration: BoxDecoration(
             color: isSelected
                 ? (isDark ? const Color(0xFF0F172A) : Colors.white)
@@ -955,19 +969,19 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: EdgeInsets.all(isMobile ? 6 : 8),
                 decoration: BoxDecoration(
                   color: (isSelected ? primaryBlue : (isDark ? Colors.white12 : Colors.grey.shade300))
                       .withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(isMobile ? 8 : 10),
                 ),
                 child: Icon(
                   icon,
-                  size: 20,
+                  size: isMobile ? 16 : 20,
                   color: isSelected ? primaryBlue : (isDark ? Colors.white60 : Colors.grey.shade700),
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: isMobile ? 6 : 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -978,7 +992,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                       style: TextStyle(
                         fontFamily: 'Inter',
                         fontWeight: FontWeight.w700,
-                        fontSize: 13,
+                        fontSize: isMobile ? 12 : 13,
                         color: isSelected
                             ? (isDark ? Colors.white : const Color(0xFF0F172A))
                             : (isDark ? Colors.white60 : const Color(0xFF64748B)),
@@ -990,7 +1004,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                       subtitle,
                       style: TextStyle(
                         fontFamily: 'Inter',
-                        fontSize: 11,
+                        fontSize: isMobile ? 10 : 11,
                         color: isSelected ? primaryBlue : (isDark ? Colors.white38 : Colors.grey.shade500),
                       ),
                       maxLines: 1,
@@ -1001,7 +1015,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
               ),
               if (countBadge > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: EdgeInsets.symmetric(horizontal: isMobile ? 6 : 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: (isSelected ? primaryBlue : Colors.grey).withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
@@ -1011,7 +1025,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                     style: TextStyle(
                       fontFamily: 'Inter',
                       fontWeight: FontWeight.w700,
-                      fontSize: 11,
+                      fontSize: isMobile ? 10 : 11,
                       color: isSelected ? primaryBlue : Colors.grey.shade600,
                     ),
                   ),
@@ -1023,7 +1037,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
     );
   }
 
-  Widget _buildAdvisedClassBanner(List<dynamic> advisedClasses, bool isDark) {
+  Widget _buildAdvisedClassBanner(List<dynamic> advisedClasses, bool isDark, {bool isMobile = false}) {
     final activeAdv = advisedClasses[_selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1)] as Map<String, dynamic>;
     final dept = (activeAdv['dept'] ?? _selectedDept).toString();
     final batch = (activeAdv['batch'] ?? _selectedBatch).toString();
@@ -1045,10 +1059,10 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(isMobile ? 12 : 16),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
         border: Border.all(
           color: isDark ? const Color(0xFF334155) : const Color(0xFFBFDBFE),
         ),
@@ -1057,14 +1071,14 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: EdgeInsets.all(isMobile ? 8 : 12),
             decoration: BoxDecoration(
               color: primaryBlue.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(isMobile ? 10 : 14),
             ),
-            child: const Icon(Icons.school_rounded, color: primaryBlue, size: 28),
+            child: Icon(Icons.school_rounded, color: primaryBlue, size: isMobile ? 22 : 28),
           ),
-          const SizedBox(width: 14),
+          SizedBox(width: isMobile ? 10 : 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1075,17 +1089,17 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: emeraldGreen.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        advisorType.contains('CO') ? 'CO-ADVISOR CLASS' : 'PRIMARY CLASS ADVISOR',
+                        advisorType.contains('CO') ? 'CO-ADVISOR' : 'PRIMARY ADVISOR',
                         style: const TextStyle(
                           fontFamily: 'Inter',
                           fontWeight: FontWeight.w700,
-                          fontSize: 10,
+                          fontSize: 9,
                           color: emeraldGreen,
                           letterSpacing: 0.5,
                         ),
@@ -1095,7 +1109,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                       '• Batch $batch',
                       style: TextStyle(
                         fontFamily: 'Inter',
-                        fontSize: 12,
+                        fontSize: isMobile ? 11 : 12,
                         color: isDark ? Colors.white60 : const Color(0xFF64748B),
                       ),
                     ),
@@ -1103,11 +1117,13 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Department of $dept • Semester $sem-$sec • $studentCount Advisees',
+                  isMobile
+                      ? '$dept • Sem $sem-$sec • $studentCount Advisees'
+                      : 'Department of $dept • Semester $sem-$sec • $studentCount Advisees',
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontWeight: FontWeight.w700,
-                    fontSize: 16,
+                    fontSize: isMobile ? 14 : 16,
                     color: isDark ? Colors.white : const Color(0xFF0F172A),
                   ),
                   maxLines: 2,
@@ -1115,7 +1131,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                 ),
                 if (activeAdv['is_teaching_in_this_class'] == true &&
                     (activeAdv['taught_subjects'] as List?)?.isNotEmpty == true) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Wrap(
                     spacing: 6,
                     runSpacing: 4,
@@ -1131,20 +1147,20 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.menu_book_rounded, size: 13, color: primaryBlue),
-                            const SizedBox(width: 5),
-                            Flexible(
-                              child: Text(
-                                'Also Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => '${s['subject_code']} - ${s['subject_name']}').join(' • ')}',
-                                style: const TextStyle(
-                                  fontFamily: 'Inter',
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 11,
-                                  color: primaryBlue,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                                maxLines: 1,
+                            const Icon(Icons.menu_book_rounded, size: 12, color: primaryBlue),
+                            const SizedBox(width: 4),
+                            Text(
+                              isMobile
+                                  ? 'Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => s['subject_code']).join(', ')}'
+                                  : 'Also Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => '${s['subject_code']} - ${s['subject_name']}').join(' • ')}',
+                              style: const TextStyle(
+                                fontFamily: 'Inter',
+                                fontWeight: FontWeight.w600,
+                                fontSize: 11,
+                                color: primaryBlue,
                               ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
                             ),
                           ],
                         ),
@@ -1169,7 +1185,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                'Open Subject View',
+                                'Subject View',
                                 style: TextStyle(
                                   fontFamily: 'Inter',
                                   fontWeight: FontWeight.w700,
@@ -1191,10 +1207,10 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
           ),
           if (advisedClasses.length > 1) ...[
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
                 border: Border.all(
                   color: isDark ? Colors.white24 : const Color(0xFFBFDBFE),
                 ),
@@ -1206,16 +1222,16 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                   style: TextStyle(
                     fontFamily: 'Inter',
                     fontWeight: FontWeight.w600,
-                    fontSize: 12,
+                    fontSize: isMobile ? 11 : 12,
                     color: isDark ? Colors.white : const Color(0xFF0F172A),
                   ),
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: primaryBlue),
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: primaryBlue),
                   items: List.generate(advisedClasses.length, (idx) {
                     final c = advisedClasses[idx] as Map<String, dynamic>;
                     final batchStr = c['batch'] != null && c['batch'].toString().isNotEmpty ? ' (${c['batch']})' : '';
                     return DropdownMenuItem<int>(
                       value: idx,
-                      child: Text('${c['dept']} - Section ${c['section']}$batchStr'),
+                      child: Text('${c['dept']} - Sec ${c['section']}$batchStr'),
                     );
                   }),
                   onChanged: (val) {
@@ -1240,7 +1256,58 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
     );
   }
 
-  Widget _buildMetricTile(String label, String value, IconData icon, Color color, bool isDark) {
+  Widget _buildMetricTile(String label, String value, IconData icon, Color color, bool isDark, {bool isMobile = false}) {
+    if (isMobile) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(icon, color: color, size: 16),
+                ),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                fontSize: 11,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
