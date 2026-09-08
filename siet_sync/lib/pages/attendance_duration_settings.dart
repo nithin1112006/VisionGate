@@ -109,30 +109,188 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
     }
   }
 
-  Future<void> _saveSettings() async {
-    // Validate Extension Durations (Max 60 mins)
-    if (_autoExpandCheckinEnabled || _autoExpandCheckoutEnabled) {
-      if (_autoExpandFnMins > 60) {
-        _showConflictDialog('FN Extension Duration cannot exceed 60 minutes. Current value: $_autoExpandFnMins mins.');
-        return;
+  int _timeToMinutes(String timeStr) {
+    try {
+      final parts = timeStr.split(':');
+      return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  String _minutesToTime(int totalMinutes) {
+    final clamped = totalMinutes < 0 ? 0 : totalMinutes;
+    final h = (clamped ~/ 60) % 24;
+    final m = clamped % 60;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
+  int _calculateSlotEffectiveDuration(Map<String, dynamic> slot) {
+    final dur = (slot['duration_minutes'] as num?)?.toInt() ?? 30;
+    final slotType = slot['slot_type'] ?? 'check_in';
+    final slotHalf = slot['slot_half'] ?? 'full_day';
+
+    int ext = 0;
+    if (slotType == 'check_in' && _autoExpandCheckinEnabled) {
+      if (slotHalf == 'first_half') {
+        ext = _autoExpandFnMins;
+      } else if (slotHalf == 'second_half') {
+        ext = _autoExpandAnMins;
+      } else {
+        ext = _autoExpandMins;
       }
-      if (_autoExpandAnMins > 60) {
-        _showConflictDialog('AN Extension Duration cannot exceed 60 minutes. Current value: $_autoExpandAnMins mins.');
-        return;
+    } else if (slotType == 'check_out' && _autoExpandCheckoutEnabled) {
+      if (slotHalf == 'first_half') {
+        ext = _autoExpandFnMins;
+      } else if (slotHalf == 'second_half') {
+        ext = _autoExpandAnMins;
+      } else {
+        ext = _autoExpandMins;
+      }
+    }
+    return dur + ext;
+  }
+
+  Map<int, List<String>> _getSlotConflicts() {
+    final Map<int, List<String>> slotConflicts = {};
+    final fhStartMin = _timeToMinutes(_fhStart);
+    final fhEndMin = _timeToMinutes(_fhEnd);
+    final shStartMin = _timeToMinutes(_shStart);
+    final shEndMin = _timeToMinutes(_shEnd);
+
+    for (int i = 0; i < _slots.length; i++) {
+      slotConflicts[i] = [];
+      final slot = _slots[i];
+      final isEnabled = slot['is_enabled'] ?? true;
+      if (!isEnabled) continue;
+
+      final slotHalf = slot['slot_half'] ?? 'full_day';
+      final dur = (slot['duration_minutes'] as num?)?.toInt() ?? 30;
+
+      if (dur < 1 || dur > 120) {
+        slotConflicts[i]!.add('Duration must be between 1 and 120 minutes (currently $dur min).');
+      }
+
+      final startMin = _timeToMinutes(slot['start_time'] ?? '09:00');
+      // Extra time (auto-extension) is a grace buffer; schedule containment is based on base duration
+      final baseEndMin = startMin + dur;
+
+      if (slotHalf == 'first_half') {
+        if (startMin < fhStartMin || baseEndMin > fhEndMin) {
+          slotConflicts[i]!.add(
+            'Window (${slot['start_time']} - ${_minutesToTime(baseEndMin)}) exceeds First Half session boundary ($_fhStart - $_fhEnd).',
+          );
+        }
+      } else if (slotHalf == 'second_half') {
+        if (startMin < shStartMin || baseEndMin > shEndMin) {
+          slotConflicts[i]!.add(
+            'Window (${slot['start_time']} - ${_minutesToTime(baseEndMin)}) exceeds Second Half session boundary ($_shStart - $_shEnd).',
+          );
+        }
       }
     }
 
-    // Validate Normal Slot Durations (Max 120 mins, Min 1 min)
+    // Cross-slot checks for enabled slots
     for (int i = 0; i < _slots.length; i++) {
-      final dur = _slots[i]['duration_minutes'];
-      if (dur == null || dur <= 0) {
-        _showConflictDialog('Slot ${i + 1} duration must be greater than 0 minutes.');
-        return;
+      if (!(_slots[i]['is_enabled'] ?? true)) continue;
+      final startI = _timeToMinutes(_slots[i]['start_time'] ?? '09:00');
+      final durI = (_slots[i]['duration_minutes'] as num?)?.toInt() ?? 30;
+      final baseEndI = startI + durI;
+      final typeI = _slots[i]['slot_type'] ?? 'check_in';
+      final halfI = _slots[i]['slot_half'] ?? 'full_day';
+
+      for (int j = i + 1; j < _slots.length; j++) {
+        if (!(_slots[j]['is_enabled'] ?? true)) continue;
+        final startJ = _timeToMinutes(_slots[j]['start_time'] ?? '09:00');
+        final durJ = (_slots[j]['duration_minutes'] as num?)?.toInt() ?? 30;
+        final baseEndJ = startJ + durJ;
+        final typeJ = _slots[j]['slot_type'] ?? 'check_in';
+        final halfJ = _slots[j]['slot_half'] ?? 'full_day';
+
+        // Check full_day vs half_day mix
+        if ((halfI == 'full_day' && (halfJ == 'first_half' || halfJ == 'second_half')) ||
+            (halfJ == 'full_day' && (halfI == 'first_half' || halfI == 'second_half'))) {
+          slotConflicts[i]!.add('Cannot mix Full Day (Slot ${i + 1}) with Half Day (Slot ${j + 1}).');
+          slotConflicts[j]!.add('Cannot mix Full Day (Slot ${i + 1}) with Half Day (Slot ${j + 1}).');
+        }
+
+        // Mutual time window overlap based on base duration:
+        // Extra time / auto-extension is an extension grace buffer and does NOT constitute a conflict
+        if (startI < baseEndJ && startJ < baseEndI) {
+          slotConflicts[i]!.add('Time window overlaps with Slot ${j + 1} (${_slots[j]['start_time']} - ${_minutesToTime(baseEndJ)}).');
+          slotConflicts[j]!.add('Time window overlaps with Slot ${i + 1} (${_slots[i]['start_time']} - ${_minutesToTime(baseEndI)}).');
+        }
+
+        // Ordering: Check-In before Check-Out within same session
+        if (halfI == halfJ) {
+          if (typeI == 'check_in' && typeJ == 'check_out') {
+            if (startI >= startJ) {
+              slotConflicts[i]!.add('Check-In (Slot ${i + 1}) must start before Check-Out (Slot ${j + 1}).');
+              slotConflicts[j]!.add('Check-Out (Slot ${j + 1}) must start after Check-In (Slot ${i + 1}).');
+            } else if (baseEndI > startJ) {
+              slotConflicts[i]!.add('Check-In (Slot ${i + 1}) base time ends after Check-Out (Slot ${j + 1}) starts.');
+              slotConflicts[j]!.add('Check-Out (Slot ${j + 1}) starts before Check-In (Slot ${i + 1}) base time ends.');
+            }
+          } else if (typeI == 'check_out' && typeJ == 'check_in') {
+            if (startJ >= startI) {
+              slotConflicts[j]!.add('Check-In (Slot ${j + 1}) must start before Check-Out (Slot ${i + 1}).');
+              slotConflicts[i]!.add('Check-Out (Slot ${i + 1}) must start after Check-In (Slot ${j + 1}).');
+            } else if (baseEndJ > startI) {
+              slotConflicts[j]!.add('Check-In (Slot ${j + 1}) base time ends after Check-Out (Slot ${i + 1}) starts.');
+              slotConflicts[i]!.add('Check-Out (Slot ${i + 1}) starts before Check-In (Slot ${j + 1}) base time ends.');
+            }
+          }
+        }
       }
-      if (dur > 120) {
-        _showConflictDialog('Slot ${i + 1} duration cannot exceed 120 minutes (2 hours). Current value: $dur mins.');
-        return;
+    }
+
+    return slotConflicts;
+  }
+
+  List<String> _validateAllSettings() {
+    final List<String> errors = [];
+    final fhStartMin = _timeToMinutes(_fhStart);
+    final fhEndMin = _timeToMinutes(_fhEnd);
+    final shStartMin = _timeToMinutes(_shStart);
+    final shEndMin = _timeToMinutes(_shEnd);
+
+    if (fhStartMin >= fhEndMin) {
+      errors.add('First Half start time ($_fhStart) must be earlier than First Half end time ($_fhEnd).');
+    }
+    if (shStartMin >= shEndMin) {
+      errors.add('Second Half start time ($_shStart) must be earlier than Second Half end time ($_shEnd).');
+    }
+    if (shStartMin < fhEndMin) {
+      errors.add('Second Half start time ($_shStart) cannot overlap First Half end time ($_fhEnd).');
+    }
+
+    if (_autoExpandCheckinEnabled || _autoExpandCheckoutEnabled) {
+      if (_autoExpandFnMins > 60) {
+        errors.add('FN Extension Duration cannot exceed 60 minutes.');
       }
+      if (_autoExpandAnMins > 60) {
+        errors.add('AN Extension Duration cannot exceed 60 minutes.');
+      }
+    }
+
+    final slotConflicts = _getSlotConflicts();
+    slotConflicts.forEach((slotIdx, conflicts) {
+      for (final conflict in conflicts) {
+        final entry = 'Slot ${slotIdx + 1}: $conflict';
+        if (!errors.contains(entry)) {
+          errors.add(entry);
+        }
+      }
+    });
+
+    return errors;
+  }
+
+  Future<void> _saveSettings() async {
+    final conflicts = _validateAllSettings();
+    if (conflicts.isNotEmpty) {
+      _showConflictDialog(conflicts.join('\n\n'));
+      return;
     }
 
     setState(() {
@@ -732,7 +890,74 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
+
+                  // Live Timing Conflicts Warning Card
+                  Builder(
+                    builder: (context) {
+                      final allConflicts = _validateAllSettings();
+                      if (allConflicts.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      final isDark = Theme.of(context).brightness == Brightness.dark;
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 20),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF3B1E1E) : const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFEF4444), width: 1.5),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 22),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Timing Conflicts Detected (${allConflicts.length})',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: isDark ? const Color(0xFFFCA5A5) : const Color(0xFF991B1B),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'The following timing configuration conflicts must be resolved before settings can be saved:',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white70 : const Color(0xFF7F1D1D),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            ...allConflicts.map((c) => Padding(
+                              padding: const EdgeInsets.only(bottom: 5),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('• ', style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.bold)),
+                                  Expanded(
+                                    child: Text(
+                                      c,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: isDark ? Colors.white : const Color(0xFF450A0A),
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
 
                   // Slots List
                   ListView.builder(
@@ -740,8 +965,18 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: _slots.length,
                     itemBuilder: (context, index) {
+                      final slotConflictsMap = _getSlotConflicts();
+                      final thisSlotConflicts = slotConflictsMap[index] ?? [];
+                      final hasConflict = thisSlotConflicts.isNotEmpty && (_slots[index]['is_enabled'] ?? true);
+
                       return Card(
                         margin: const EdgeInsets.only(bottom: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: hasConflict
+                              ? const BorderSide(color: Color(0xFFDC2626), width: 1.5)
+                              : BorderSide.none,
+                        ),
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Column(
@@ -755,14 +990,18 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                                       vertical: 6,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: Colors.deepPurple.withValues(alpha: 0.1),
+                                      color: hasConflict
+                                          ? const Color(0xFFFEE2E2)
+                                          : Colors.deepPurple.withValues(alpha: 0.1),
                                       borderRadius: BorderRadius.circular(20),
                                     ),
                                     child: Text(
                                       'Slot ${index + 1}',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontWeight: FontWeight.bold,
-                                        color: Colors.deepPurple,
+                                        color: hasConflict
+                                            ? const Color(0xFFDC2626)
+                                            : Colors.deepPurple,
                                       ),
                                     ),
                                   ),
@@ -783,6 +1022,37 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
                                   ),
                                 ],
                               ),
+                              if (hasConflict) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFEF2F2),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: const Color(0xFFFCA5A5)),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: thisSlotConflicts.map((err) => Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 16),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            err,
+                                            style: const TextStyle(
+                                              color: Color(0xFF991B1B),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )).toList(),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 16),
 
                               // Slot Type & Slot Half Selector
@@ -1111,17 +1381,18 @@ class _AttendanceDurationSettingsState extends State<AttendanceDurationSettings>
   String _calculateEndTime(Map<String, dynamic> slot) {
     try {
       final startTime = slot['start_time'] ?? '09:00';
-      final duration = slot['duration_minutes'] ?? 30;
-      
-      final parts = startTime.split(':');
-      final hours = int.parse(parts[0]);
-      final minutes = int.parse(parts[1]);
-      
-      final totalMinutes = hours * 60 + minutes + duration;
-      final endHours = totalMinutes ~/ 60;
-      final endMinutes = totalMinutes % 60;
-      
-      return '${endHours.toString().padLeft(2, '0')}:${endMinutes.toString().padLeft(2, '0')}';
+      final baseDuration = (slot['duration_minutes'] as num?)?.toInt() ?? 30;
+      final effectiveDuration = _calculateSlotEffectiveDuration(slot);
+      final ext = effectiveDuration - baseDuration;
+
+      final startMin = _timeToMinutes(startTime);
+      final baseEnd = _minutesToTime(startMin + baseDuration);
+      final effEnd = _minutesToTime(startMin + effectiveDuration);
+
+      if (ext > 0) {
+        return '$baseEnd (+$ext min auto-ext = $effEnd)';
+      }
+      return baseEnd;
     } catch (e) {
       return '09:30';
     }

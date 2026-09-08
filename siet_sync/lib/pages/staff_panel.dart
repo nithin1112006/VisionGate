@@ -3883,9 +3883,16 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
   bool _alreadyMarkedCurrentSlot = false;
   String? _checkInTime;
   String? _checkOutTime;
+  String? _fnInTime;
+  String? _fnOutTime;
+  String? _anInTime;
+  String? _anOutTime;
+  Map<String, dynamic>? _nextSlot;
+  String? _windowMessage;
   bool _isCheckedIn = false;
   bool _isCheckedOut = false;
   String _todayAttendanceStatus = '';
+  Timer? _windowTimer;
 
   @override
   void initState() {
@@ -3893,6 +3900,17 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
     _checkFaceStatus();
     _checkTodayAttendance();
     PreVerificationService.instance.forceRefresh();
+    _windowTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) {
+        _checkTodayAttendance();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _windowTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _checkFaceStatus() async {
@@ -3917,8 +3935,12 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
 
   Future<void> _checkTodayAttendance() async {
     try {
+      final regNo = widget.user['regNo'] ?? widget.user['reg_no'] ?? '';
+      final checkUri = regNo.toString().isNotEmpty
+          ? Uri.parse("$API_URL/admin/attendance/duration/check?reg_no=$regNo")
+          : Uri.parse("$API_URL/admin/attendance/duration/check");
       final slotResponse = await http.get(
-        Uri.parse("$API_URL/admin/attendance/duration/check"),
+        checkUri,
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       
@@ -3930,6 +3952,9 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
       String? holTitle;
       String? holReason;
       String dayType = 'WORKING_DAY';
+      Map<String, dynamic>? nextSlot;
+      String? windowMsg;
+      List<Map<String, dynamic>> activeSlots = [];
       
       if (slotResponse.statusCode == 200) {
         final slotData = jsonDecode(slotResponse.body);
@@ -3941,82 +3966,123 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
         holTitle = slotData['holiday_title']?.toString() ?? slotData['occasion_title']?.toString();
         holReason = slotData['holiday_reason']?.toString() ?? slotData['reason']?.toString() ?? slotData['message']?.toString();
         dayType = slotData['day_type']?.toString() ?? 'WORKING_DAY';
+        if (slotData['next_slot'] is Map<String, dynamic>) {
+          nextSlot = Map<String, dynamic>.from(slotData['next_slot']);
+        }
+        windowMsg = slotData['message']?.toString();
+        if (slotData['active_slots'] is List) {
+          activeSlots = (slotData['active_slots'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+        }
       }
 
-      // Check if already marked for the current session (slotType & slotHalf)
-      bool alreadyMarked = false;
+      String? fnIn;
+      String? fnOut;
+      String? anIn;
+      String? anOut;
       String? inTime;
       String? outTime;
-      bool checkedIn = false;
-      bool checkedOut = false;
       String statusStr = '';
       final today = DateTime.now().toString().split(' ')[0];
 
-      if (slotHalf == 'first_half' || slotHalf == 'second_half') {
-        final response = await http.get(
-          Uri.parse("$API_URL/api/attendance/personal?start_date=$today&end_date=$today"),
-          headers: {'Authorization': 'Bearer ${widget.token}'},
+      // Query personal attendance endpoint which provides full daily status columns
+      final response = await http.get(
+        Uri.parse("$API_URL/api/attendance/personal?start_date=$today&end_date=$today"),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final records = (data['attendance'] as List? ?? data['records'] as List? ?? []);
+        final todayRecord = records.firstWhere(
+          (r) => r['date']?.toString().startsWith(today) == true || r['timestamp']?.toString().startsWith(today) == true,
+          orElse: () => null,
         );
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final records = (data['attendance'] as List? ?? data['records'] as List? ?? []);
-          final todayRecord = records.firstWhere(
-            (r) => r['date']?.toString().startsWith(today) == true || r['timestamp']?.toString().startsWith(today) == true,
-            orElse: () => null,
-          );
 
-          if (todayRecord != null) {
-            statusStr = todayRecord['status']?.toString() ?? 'Present';
-            inTime = todayRecord['first_half_in_time']?.toString() ?? todayRecord['second_half_in_time']?.toString() ?? todayRecord['in_time']?.toString();
-            outTime = todayRecord['first_half_out_time']?.toString() ?? todayRecord['second_half_out_time']?.toString() ?? todayRecord['out_time']?.toString();
-            checkedIn = inTime != null || todayRecord['first_half_status'] == 'Present' || todayRecord['second_half_status'] == 'Present';
-            checkedOut = outTime != null;
-
-            if (slotHalf == 'first_half') {
-              if (slotType == 'check_in') {
-                alreadyMarked = todayRecord['first_half_in_time'] != null || todayRecord['first_half_status'] == 'Present';
-              } else if (slotType == 'check_out') {
-                alreadyMarked = todayRecord['first_half_out_time'] != null;
-              }
-            } else if (slotHalf == 'second_half') {
-              if (slotType == 'check_in') {
-                alreadyMarked = todayRecord['second_half_in_time'] != null || todayRecord['second_half_status'] == 'Present';
-              } else if (slotType == 'check_out') {
-                alreadyMarked = todayRecord['second_half_out_time'] != null;
-              }
-            }
-          }
+        if (todayRecord != null) {
+          statusStr = todayRecord['status']?.toString() ?? 'Present';
+          fnIn = todayRecord['first_half_in_time']?.toString();
+          fnOut = todayRecord['first_half_out_time']?.toString();
+          anIn = todayRecord['second_half_in_time']?.toString();
+          anOut = todayRecord['second_half_out_time']?.toString();
+          inTime = todayRecord['in_time']?.toString() ?? fnIn ?? anIn;
+          outTime = todayRecord['out_time']?.toString() ?? anOut ?? fnOut;
         }
-      } else {
-        // Legacy full-day check
-        final response = await http.get(
+      }
+
+      // Fallback check on staff attendance if daily records are not present
+      if (fnIn == null && inTime == null) {
+        final fResponse = await http.get(
           Uri.parse("$API_URL/staff/attendance?date=$today"),
           headers: {'Authorization': 'Bearer ${widget.token}'},
         );
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final attendance = data['attendance'] as List? ?? [];
-          final regNo = widget.user['regNo'] ?? widget.user['reg_no'] ?? '';
+        if (fResponse.statusCode == 200) {
+          final fData = jsonDecode(fResponse.body);
+          final attendance = fData['attendance'] as List? ?? [];
           final userRecords = attendance.where((record) => record['reg_no'] == regNo).toList();
-          if (userRecords.isNotEmpty) {
-            for (var r in userRecords) {
-              final st = r['status']?.toString().toLowerCase();
-              final ts = r['timestamp']?.toString() ?? '';
-              final timePart = ts.contains(' ') ? ts.split(' ')[1] : (ts.contains('T') ? ts.split('T')[1] : ts);
-              if (st == 'check_in' || st == 'present') {
-                checkedIn = true;
-                inTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
-              } else if (st == 'check_out') {
-                checkedOut = true;
-                outTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
-              }
+          for (var r in userRecords) {
+            final st = r['status']?.toString().toLowerCase();
+            final ts = r['timestamp']?.toString() ?? '';
+            final timePart = ts.contains(' ') ? ts.split(' ')[1] : (ts.contains('T') ? ts.split('T')[1] : ts);
+            final cleanTime = timePart.length >= 5 ? timePart.substring(0, 5) : timePart;
+            if (st == 'check_in' || st == 'present') {
+              inTime ??= cleanTime;
+            } else if (st == 'check_out') {
+              outTime ??= cleanTime;
             }
-            alreadyMarked = userRecords.any((record) => record['status'] == slotType);
-            statusStr = checkedIn ? 'Present' : '';
           }
         }
       }
 
+      // If multiple slots are active concurrently (e.g. check-in grace period + check-out window active)
+      if (activeSlots.length > 1) {
+        final bool userHasCin = (slotHalf == 'first_half')
+            ? fnIn != null
+            : (slotHalf == 'second_half')
+                ? anIn != null
+                : (inTime != null || fnIn != null || anIn != null);
+
+        Map<String, dynamic>? coutMatch;
+        Map<String, dynamic>? cinMatch;
+        for (final s in activeSlots) {
+          if (s['slot_type'] == 'check_out' && coutMatch == null) {
+            coutMatch = s;
+          } else if (s['slot_type'] == 'check_in' && cinMatch == null) {
+            cinMatch = s;
+          }
+        }
+
+        if (userHasCin && coutMatch != null) {
+          slotType = coutMatch['slot_type']?.toString() ?? 'check_out';
+          slotHalf = coutMatch['slot_half']?.toString() ?? slotHalf;
+        } else if (cinMatch != null) {
+          slotType = cinMatch['slot_type']?.toString() ?? 'check_in';
+          slotHalf = cinMatch['slot_half']?.toString() ?? slotHalf;
+        }
+      }
+
+      // Calculate slot-specific alreadyMarked
+      bool alreadyMarked = false;
+      if (slotHalf == 'first_half') {
+        if (slotType == 'check_in') {
+          alreadyMarked = fnIn != null;
+        } else if (slotType == 'check_out') {
+          alreadyMarked = fnOut != null;
+        }
+      } else if (slotHalf == 'second_half') {
+        if (slotType == 'check_in') {
+          alreadyMarked = anIn != null;
+        } else if (slotType == 'check_out') {
+          alreadyMarked = anOut != null;
+        }
+      } else {
+        // Full day mode
+        if (slotType == 'check_in') {
+          alreadyMarked = inTime != null;
+        } else if (slotType == 'check_out') {
+          alreadyMarked = outTime != null;
+        }
+      }
 
       setState(() {
         _isWindowAllowed = allowed;
@@ -4027,11 +4093,17 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
         _dayType = dayType;
         _activeSlotType = slotType;
         _activeSlotHalf = slotHalf;
+        _nextSlot = nextSlot;
+        _windowMessage = windowMsg;
         _alreadyMarkedCurrentSlot = alreadyMarked;
+        _fnInTime = fnIn;
+        _fnOutTime = fnOut;
+        _anInTime = anIn;
+        _anOutTime = anOut;
         _checkInTime = inTime;
         _checkOutTime = outTime;
-        _isCheckedIn = checkedIn;
-        _isCheckedOut = checkedOut;
+        _isCheckedIn = inTime != null || fnIn != null || anIn != null;
+        _isCheckedOut = outTime != null;
         _todayAttendanceStatus = statusStr;
         _isLoading = false;
       });
@@ -4118,11 +4190,30 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
     final textColor = isDark ? Colors.white : const Color(0xFF1A1A2E);
     final infoBg = isDark ? const Color(0xFF2A2A30) : const Color(0xFFF8F5FF);
     final isCheckOutSlot = _activeSlotType == 'check_out';
-    final isCheckOutDone = _isCheckedOut || (_alreadyMarkedCurrentSlot && isCheckOutSlot);
+    final isCurrentSlotCompleted = _alreadyMarkedCurrentSlot;
+
+    // Check-out requires prior check-in for the active session
+    bool canCheckOutCurrentSession = true;
+    if (isCheckOutSlot) {
+      if (_activeSlotHalf == 'first_half') {
+        canCheckOutCurrentSession = _fnInTime != null;
+      } else if (_activeSlotHalf == 'second_half') {
+        canCheckOutCurrentSession = _anInTime != null;
+      } else {
+        canCheckOutCurrentSession = _isCheckedIn;
+      }
+    }
+
+    final isButtonEnabled = _isRegistered &&
+        _isWindowAllowed &&
+        !isCurrentSlotCompleted &&
+        (!isCheckOutSlot || canCheckOutCurrentSession) &&
+        !_isHoliday &&
+        !_isSpecialOccasion;
 
     if (_isLoading) {
-      return Center(
-        child: CircularProgressIndicator(color: const Color(0xFF007AFF)),
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF007AFF)),
       );
     }
 
@@ -4137,7 +4228,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: (isCheckOutDone ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.1),
+                  color: (isCurrentSlotCompleted ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.1),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -4153,7 +4244,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
-                            colors: isCheckOutDone
+                            colors: isCurrentSlotCompleted
                                 ? const [Color(0xFF10B981), Color(0xFF059669)]
                                 : (_isHoliday
                                     ? const [Color(0xFF2563EB), Color(0xFF3B82F6)]
@@ -4164,7 +4255,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Icon(
-                          isCheckOutDone
+                          isCurrentSlotCompleted
                               ? Icons.check_circle_rounded
                               : (_isHoliday
                                   ? Icons.beach_access_rounded
@@ -4181,31 +4272,35 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              isCheckOutDone
-                                  ? 'Check-Out Done Successfully'
+                              isCurrentSlotCompleted
+                                  ? '${_activeSlotHalf == 'first_half' ? 'FN ' : _activeSlotHalf == 'second_half' ? 'AN ' : ''}${isCheckOutSlot ? 'Check-Out' : 'Check-In'} Completed'
                                   : (_isHoliday
                                       ? (_holidayTitle?.isNotEmpty == true ? "Declared Holiday — $_holidayTitle" : "Declared Institutional Holiday")
                                       : (_isSpecialOccasion
                                           ? (_holidayTitle?.isNotEmpty == true ? "Special Occasion — $_holidayTitle" : "Special Institutional Occasion")
-                                          : 'Mark Your Attendance')),
+                                          : (!_isWindowAllowed
+                                              ? 'Attendance Window Closed'
+                                              : (isCheckOutSlot && !canCheckOutCurrentSession
+                                                  ? 'Check-In Required'
+                                                  : 'Mark Your Attendance')))),
                               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textColor),
                             ),
                             const SizedBox(height: 3),
                             Text(
-                              isCheckOutDone
-                                  ? (_checkOutTime != null ? "Checked out at $_checkOutTime. Attendance recorded." : "Check-out completed for today.")
+                              isCurrentSlotCompleted
+                                  ? "Marked at ${isCheckOutSlot ? (_activeSlotHalf == 'first_half' ? _fnOutTime : (_activeSlotHalf == 'second_half' ? _anOutTime : _checkOutTime)) : (_activeSlotHalf == 'first_half' ? _fnInTime : (_activeSlotHalf == 'second_half' ? _anInTime : _checkInTime))}. Attendance recorded."
                                   : (_isHoliday
                                       ? (_holidayReason?.isNotEmpty == true ? _holidayReason! : "Institutional Holiday — No biometric attendance required today.")
                                       : (_isSpecialOccasion
                                           ? (_holidayReason?.isNotEmpty == true ? _holidayReason! : "Special Institutional Occasion — Regular attendance suspended.")
                                           : (!_isWindowAllowed
-                                              ? "Outside active attendance window"
-                                              : (_alreadyMarkedCurrentSlot
-                                                  ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN (Morning)' : _activeSlotHalf == 'second_half' ? 'AN (Afternoon)' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'} today"
-                                                  : "Active: ${_activeSlotHalf == 'first_half' ? 'FN Morning Slot' : _activeSlotHalf == 'second_half' ? 'AN Afternoon Slot' : _activeSlotType == 'check_in' ? 'Check-In Slot' : 'Check-Out Slot'} — Tap to mark")))),
+                                              ? (_windowMessage ?? (_nextSlot != null ? "Next: ${_nextSlot!['start_time']} (${_nextSlot!['effective_duration_minutes'] ?? _nextSlot!['duration_minutes']} min)" : "Outside active attendance window"))
+                                              : (isCheckOutSlot && !canCheckOutCurrentSession
+                                                  ? "Please scan check-in first before checking out for this session."
+                                                  : "Active: ${_activeSlotHalf == 'first_half' ? 'FN ' : _activeSlotHalf == 'second_half' ? 'AN ' : ''}${isCheckOutSlot ? 'Check-Out' : 'Check-In'} Slot — Tap to mark")))),
                               style: TextStyle(
                                 fontSize: 13,
-                                color: isCheckOutDone
+                                color: isCurrentSlotCompleted
                                     ? Colors.green[700]
                                     : (_isHoliday
                                         ? const Color(0xFF1D4ED8)
@@ -4213,7 +4308,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                                             ? const Color(0xFF6D28D9)
                                             : (!_isWindowAllowed
                                                 ? Colors.red[700]
-                                                : (_alreadyMarkedCurrentSlot ? Colors.green[700] : Colors.orange[700])))),
+                                                : (isCheckOutSlot && !canCheckOutCurrentSession ? Colors.orange[800] : Colors.orange[700])))),
                               ),
                             ),
                           ],
@@ -4228,7 +4323,7 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                     decoration: BoxDecoration(
                       color: infoBg,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: (isCheckOutDone ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.2)),
+                      border: Border.all(color: (isCurrentSlotCompleted ? const Color(0xFF10B981) : const Color(0xFF007AFF)).withValues(alpha: 0.2)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4238,40 +4333,81 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                         _buildInfoRow(Icons.badge_outlined, "ID", widget.user['regNo'] ?? 'N/A'),
                         const SizedBox(height: 10),
                         _buildInfoRow(Icons.school_outlined, "Department", widget.user['dept'] ?? 'N/A'),
-                        if (_isCheckedIn || _isCheckedOut) ...[
+                        if (_isCheckedIn || _isCheckedOut || _fnInTime != null || _anInTime != null) ...[
                           const Divider(height: 20),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Check-In", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                  const SizedBox(height: 2),
-                                  Text(_checkInTime ?? (_isCheckedIn ? "Present" : "--"), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                ],
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Check-Out", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                  const SizedBox(height: 2),
-                                  Text(_checkOutTime ?? (_isCheckedOut ? "Completed" : "--"), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedOut ? Colors.green.shade700 : null)),
-                                ],
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
-                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
+                          if (_fnInTime != null || _fnOutTime != null || _anInTime != null || _anOutTime != null) ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text("FN Session", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      "${_fnInTime ?? '--'} / ${_fnOutTime ?? '--'}",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Text("AN Session", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      "${_anInTime ?? '--'} / ${_anOutTime ?? '--'}",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ] else ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text("Check-In", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(_checkInTime ?? (_isCheckedIn ? "Present" : "--"), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ],
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text("Check-Out", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(_checkOutTime ?? (_isCheckedOut ? "Completed" : "--"), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedOut ? Colors.green.shade700 : null)),
+                                  ],
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ],
                     ),
@@ -4281,24 +4417,22 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton.icon(
-                      onPressed: (_isRegistered && _isWindowAllowed && !_alreadyMarkedCurrentSlot && !isCheckOutDone && !_isHoliday && !_isSpecialOccasion)
-                          ? _navigateToMarkAttendance
-                          : null,
+                      onPressed: isButtonEnabled ? _navigateToMarkAttendance : null,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: isCheckOutDone
+                        backgroundColor: isCurrentSlotCompleted
                             ? const Color(0xFF059669)
                             : (_isHoliday
                                 ? const Color(0xFF2563EB)
                                 : (_isSpecialOccasion ? const Color(0xFF7C3AED) : const Color(0xFF007AFF))),
                         foregroundColor: Colors.white,
-                        disabledBackgroundColor: isCheckOutDone
+                        disabledBackgroundColor: isCurrentSlotCompleted
                             ? const Color(0xFF10B981).withValues(alpha: 0.25)
                             : (_isHoliday
                                 ? const Color(0xFF2563EB).withValues(alpha: 0.2)
                                 : (_isSpecialOccasion
                                     ? const Color(0xFF8B5CF6).withValues(alpha: 0.2)
                                     : null)),
-                        disabledForegroundColor: isCheckOutDone
+                        disabledForegroundColor: isCurrentSlotCompleted
                             ? const Color(0xFF047857)
                             : (_isHoliday
                                 ? const Color(0xFF1D4ED8)
@@ -4306,26 +4440,28 @@ class _StaffMarkAttendanceTabState extends State<StaffMarkAttendanceTab> {
                                     ? const Color(0xFF6D28D9)
                                     : null)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        elevation: (isCheckOutDone || _isHoliday || _isSpecialOccasion) ? 0 : 8,
+                        elevation: (isCurrentSlotCompleted || _isHoliday || _isSpecialOccasion) ? 0 : 8,
                         shadowColor: const Color(0xFF007AFF).withValues(alpha: 0.4),
                       ),
-                      icon: Icon(isCheckOutDone
+                      icon: Icon(isCurrentSlotCompleted
                           ? Icons.check_circle_rounded
                           : (_isHoliday
                               ? Icons.beach_access_rounded
                               : (_isSpecialOccasion ? Icons.emoji_events_rounded : Icons.qr_code_scanner))),
                       label: Text(
-                        isCheckOutDone
-                            ? "Checked Out Successfully"
-                            : (_isHoliday
-                                ? (_holidayTitle?.isNotEmpty == true ? "Holiday: $_holidayTitle" : "Institutional Holiday — Attendance Exempted")
-                                : (_isSpecialOccasion
-                                    ? (_holidayTitle?.isNotEmpty == true ? "Event: $_holidayTitle" : "Special Occasion — Attendance Exempted")
-                                    : (!_isWindowAllowed
-                                        ? "Outside Window"
-                                        : (_alreadyMarkedCurrentSlot
-                                            ? "Already marked ${_activeSlotHalf == 'first_half' ? 'FN' : _activeSlotHalf == 'second_half' ? 'AN' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}"
-                                            : "Mark ${_activeSlotHalf == 'first_half' ? 'FN Attendance' : _activeSlotHalf == 'second_half' ? 'AN Attendance' : _activeSlotType == 'check_in' ? 'Check-In' : 'Check-Out'}")))),
+                        _isHoliday
+                            ? (_holidayTitle?.isNotEmpty == true ? "Holiday: $_holidayTitle" : "Institutional Holiday")
+                            : (_isSpecialOccasion
+                                ? (_holidayTitle?.isNotEmpty == true ? "Special: $_holidayTitle" : "Special Occasion")
+                                : (!_isWindowAllowed
+                                    ? (_nextSlot != null ? "Next: ${_nextSlot!['start_time']}" : "Outside Window")
+                                    : (isCurrentSlotCompleted
+                                        ? "Already Marked"
+                                        : (isCheckOutSlot && !canCheckOutCurrentSession
+                                            ? "Check-In Required First"
+                                            : "Mark ${_activeSlotHalf == 'first_half' ? 'FN ' : _activeSlotHalf == 'second_half' ? 'AN ' : ''}${isCheckOutSlot ? 'Check-Out' : 'Check-In'}")))),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ),

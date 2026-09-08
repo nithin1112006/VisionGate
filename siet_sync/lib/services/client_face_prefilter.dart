@@ -42,7 +42,7 @@ class ClientFacePreFilterService {
         performanceMode: mode,
         enableLandmarks: false,
         enableContours: false,
-        enableClassification: false,
+        enableClassification: true,
         minFaceSize: 0.12,
       ),
     );
@@ -95,6 +95,19 @@ class ClientFacePreFilterService {
           headEulerZ: roll,
           headEulerY: yaw,
           message: 'Head is tilted. Please hold device straight and upright.',
+        );
+      }
+
+      // Evaluate Eye Open Probability (ensure subject is alert with open eyes)
+      final leftEye = primary.leftEyeOpenProbability;
+      final rightEye = primary.rightEyeOpenProbability;
+      if (leftEye != null && rightEye != null && leftEye < 0.15 && rightEye < 0.15) {
+        return FacePreFilterResult(
+          isValid: false,
+          faceCount: faces.length,
+          headEulerZ: roll,
+          headEulerY: yaw,
+          message: 'Eyes appear closed. Please look directly at the camera with eyes open.',
         );
       }
 

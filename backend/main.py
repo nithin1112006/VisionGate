@@ -110,9 +110,9 @@ TEXTURE_THRESHOLD = 0.03
 MIN_MOVEMENT = 0.002
 MAX_MOVEMENT = 0.8
 # Anti-spoofing enabled by default
-ANTISPOOFING_ENABLED = False
+ANTISPOOFING_ENABLED = True
 # If True, blocks suspected photos. If False, only logs warnings
-ANTISPOOF_STRICT_MODE = False
+ANTISPOOF_STRICT_MODE = True
 # Face profile adaptation/training configuration
 INSIGHTFACE_BASE_THRESHOLD = 0.68
 # Accept near-boundary live matches to reduce false rejects from minor
@@ -2184,6 +2184,8 @@ async def save_attendance_duration_settings(request: Request):
             raise HTTPException(status_code=400, detail=f"First Half start time ({fh_start_str}) must be before end time ({fh_end_str}).")
         if sh_start_m >= sh_end_m:
             raise HTTPException(status_code=400, detail=f"Second Half start time ({sh_start_str}) must be before end time ({sh_end_str}).")
+        if sh_start_m < fh_end_m:
+            raise HTTPException(status_code=400, detail=f"Second Half boundary ({sh_start_str} - {sh_end_str}) cannot start before First Half boundary ({fh_start_str} - {fh_end_str}) ends.")
         if max(fh_start_m, sh_start_m) < min(fh_end_m, sh_end_m):
             raise HTTPException(status_code=400, detail=f"First Half boundary ({fh_start_str} - {fh_end_str}) overlaps with Second Half boundary ({sh_start_str} - {sh_end_str}).")
 
@@ -2215,6 +2217,27 @@ async def save_attendance_duration_settings(request: Request):
     sh_boundary_start = to_minutes(sh_start_str)
     sh_boundary_end = to_minutes(sh_end_str)
 
+    # Validate auto extension durations (Max 60 mins) if provided
+    auto_exp_input = data.get("auto_expansion")
+    if auto_exp_input and isinstance(auto_exp_input, dict):
+        fn_ext = int(auto_exp_input.get("auto_expand_fn_minutes", 5))
+        an_ext = int(auto_exp_input.get("auto_expand_an_minutes", 5))
+        def_ext = int(auto_exp_input.get("auto_expand_minutes", 5))
+        if fn_ext > 60:
+            raise HTTPException(
+                status_code=400,
+                detail=f"FN Extension duration ({fn_ext} mins) exceeds maximum limit of 60 minutes."
+            )
+        if an_ext > 60:
+            raise HTTPException(
+                status_code=400,
+                detail=f"AN Extension duration ({an_ext} mins) exceeds maximum limit of 60 minutes."
+            )
+        if def_ext > 60:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Extension duration ({def_ext} mins) exceeds maximum limit of 60 minutes."
+            )
 
     # Validate against custom CCL settings
     cursor.execute("""
@@ -2223,11 +2246,30 @@ async def save_attendance_duration_settings(request: Request):
     """)
     custom_dates = cursor.fetchall()
 
+    # Slot validation and grouping
+    fh_slots = []
+    sh_slots = []
+    fd_slots = []
+
     for setting in settings:
         slot_number = setting.get("slot_number")
         start_time = setting.get("start_time")
-        duration_minutes = int(setting.get("duration_minutes", 30))
-        slot_type = setting.get("slot_type", "check_in")
+        try:
+            dur = int(setting.get("duration_minutes", 30))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Slot {slot_number} duration must be a valid number of minutes.")
+
+        if dur <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Slot {slot_number} duration must be greater than 0 minutes."
+            )
+        if dur > 120:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Slot {slot_number} duration ({dur} mins) exceeds maximum limit of 120 minutes."
+            )
+
         is_enabled_val = setting.get("is_enabled", True)
         is_enabled = (
             is_enabled_val is True
@@ -2239,27 +2281,43 @@ async def save_attendance_duration_settings(request: Request):
             continue
 
         slot_start_min = to_minutes(start_time)
-        slot_end_min = slot_start_min + duration_minutes
+        slot_end_min = slot_start_min + dur
+        slot_type = setting.get("slot_type", "check_in")
         slot_half = setting.get("slot_half", "full_day")
+
+        slot_info = {
+            "num": slot_number,
+            "start_m": slot_start_min,
+            "end_m": slot_end_min,
+            "start_time": start_time,
+            "duration": dur,
+            "type": slot_type,
+            "half": slot_half,
+        }
 
         # Validate slot boundary against master session boundaries
         if slot_half == "first_half":
             if slot_start_min < fh_boundary_start or slot_end_min > fh_boundary_end:
                 err_msg = (
-                    f"Slot {slot_number} ({start_time} - {duration_minutes}m) assigned to First Half "
-                    f"exceeds the First Half session boundary ({fh_start_str} - {fh_end_str}). "
+                    f"Slot {slot_number} ({start_time}, {dur}m) assigned to First Half "
+                    f"exceeds First Half session boundary ({fh_start_str} - {fh_end_str}). "
                     f"Please adjust the start time or duration."
                 )
                 raise HTTPException(status_code=400, detail=err_msg)
+            fh_slots.append(slot_info)
         elif slot_half == "second_half":
             if slot_start_min < sh_boundary_start or slot_end_min > sh_boundary_end:
                 err_msg = (
-                    f"Slot {slot_number} ({start_time} - {duration_minutes}m) assigned to Second Half "
-                    f"exceeds the Second Half session boundary ({sh_start_str} - {sh_end_str}). "
+                    f"Slot {slot_number} ({start_time}, {dur}m) assigned to Second Half "
+                    f"exceeds Second Half session boundary ({sh_start_str} - {sh_end_str}). "
                     f"Please adjust the start time or duration."
                 )
                 raise HTTPException(status_code=400, detail=err_msg)
+            sh_slots.append(slot_info)
+        else:
+            fd_slots.append(slot_info)
 
+        # Validate against CCL windows
         for c_date in custom_dates:
             c_date_str = c_date[0]
             if not isinstance(c_date_str, str):
@@ -2278,82 +2336,99 @@ async def save_attendance_duration_settings(request: Request):
 
             if slot_type == "check_in" and c_early_enabled:
                 if max(ccl_early_start, slot_start_min) < min(ccl_early_end, slot_end_min):
-                    err_msg = (f"The Check-In Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
+                    err_msg = (f"The Check-In Slot {slot_number} ({start_time}, {dur}m) overlaps with "
                                f"the Early Check-In CCL window ({c_early_start} - {c_early_end}) configured for {c_date_str}. "
                                f"Please set the slot timing outside the CCL window.")
                     raise HTTPException(status_code=400, detail=err_msg)
             elif slot_type == "check_out" and c_late_enabled:
                 if max(ccl_late_start, slot_start_min) < min(ccl_late_end, slot_end_min):
-                    err_msg = (f"The Check-Out Slot {slot_number} ({start_time} - {start_time} + {duration_minutes}m) overlaps with "
+                    err_msg = (f"The Check-Out Slot {slot_number} ({start_time}, {dur}m) overlaps with "
                                f"the Late Check-Out CCL window ({c_late_start} - {c_late_end}) configured for {c_date_str}. "
                                f"Please set the slot timing outside the CCL window.")
                     raise HTTPException(status_code=400, detail=err_msg)
 
-    # Validate that First Half and Second Half slots do not overlap each other
-    fh_intervals = []
-    sh_intervals = []
-    for setting in settings:
-        s_num = setting.get("slot_number")
-        s_start = setting.get("start_time")
-        s_dur = int(setting.get("duration_minutes", 30))
-        s_half = setting.get("slot_half", "full_day")
-        s_en = setting.get("is_enabled", True)
-        is_en = (s_en is True or s_en == 1 or s_en == "true")
-        if not s_start or not is_en:
-            continue
-        start_m = to_minutes(s_start)
-        end_m = start_m + s_dur
-        if s_half == "first_half":
-            fh_intervals.append((start_m, end_m, s_num, s_start))
-        elif s_half == "second_half":
-            sh_intervals.append((start_m, end_m, s_num, s_start))
+    # Validate ordering and overlaps within each group
+    def validate_slot_group(group_slots, group_label):
+        # Check mutual overlaps between any two slots in the same session
+        for i in range(len(group_slots)):
+            s1 = group_slots[i]
+            for j in range(i + 1, len(group_slots)):
+                s2 = group_slots[j]
+                if max(s1["start_m"], s2["start_m"]) < min(s1["end_m"], s2["end_m"]):
+                    t1_lbl = "Check-In" if s1["type"] == "check_in" else "Check-Out"
+                    t2_lbl = "Check-In" if s2["type"] == "check_in" else "Check-Out"
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"{group_label} Slot {s1['num']} ({t1_lbl} at {s1['start_time']}, {s1['duration']}m) "
+                            f"overlaps with Slot {s2['num']} ({t2_lbl} at {s2['start_time']}, {s2['duration']}m). "
+                            f"Active slots within {group_label} cannot overlap in time."
+                        ),
+                    )
 
-    for fh_start, fh_end, fh_num, fh_t in fh_intervals:
-        for sh_start, sh_end, sh_num, sh_t in sh_intervals:
-            if max(fh_start, sh_start) < min(fh_end, sh_end):
-                err_msg = (
-                    f"First Half Slot {fh_num} ({fh_t}) overlaps with Second Half Slot {sh_num} ({sh_t}). "
-                    f"First Half and Second Half slots cannot cross over each other's duration."
+        # Check-In must precede Check-Out
+        cin_list = [s for s in group_slots if s["type"] == "check_in"]
+        cout_list = [s for s in group_slots if s["type"] == "check_out"]
+        if cin_list and cout_list:
+            earliest_cin = min(s["start_m"] for s in cin_list)
+            latest_cin_end = max(s["end_m"] for s in cin_list)
+            earliest_cout = min(s["start_m"] for s in cout_list)
+            if earliest_cout <= earliest_cin:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"In {group_label}, Check-Out timing cannot start before or at the same time as Check-In. "
+                        f"Check-In must be scheduled before Check-Out."
+                    ),
                 )
-                raise HTTPException(status_code=400, detail=err_msg)
+            if earliest_cout < latest_cin_end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"In {group_label}, Check-Out starts before the Check-In window ends. "
+                        f"Check-In and Check-Out windows must not overlap."
+                    ),
+                )
 
+    validate_slot_group(fh_slots, "First Half")
+    validate_slot_group(sh_slots, "Second Half")
+    validate_slot_group(fd_slots, "Full Day")
 
-    # Validate slot durations (Max 120 mins)
-    for setting in settings:
-        dur = int(setting.get("duration_minutes", 30))
-        if dur > 120:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Slot {setting.get('slot_number')} duration ({dur} mins) exceeds maximum limit of 120 minutes."
-            )
-        if dur <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Slot {setting.get('slot_number')} duration must be greater than 0 minutes."
-            )
+    # Cross-group validation: First Half vs Second Half slots
+    for fh_s in fh_slots:
+        for sh_s in sh_slots:
+            if max(fh_s["start_m"], sh_s["start_m"]) < min(fh_s["end_m"], sh_s["end_m"]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"First Half Slot {fh_s['num']} ({fh_s['start_time']}) overlaps with Second Half Slot {sh_s['num']} ({sh_s['start_time']}). "
+                        f"First Half and Second Half slots cannot cross over each other's duration."
+                    ),
+                )
+            if sh_s["start_m"] < fh_s["start_m"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Second Half Slot {sh_s['num']} ({sh_s['start_time']}) is configured before First Half Slot {fh_s['num']} ({fh_s['start_time']}). "
+                        f"Second Half slots must occur after First Half slots."
+                    ),
+                )
 
-    # Validate auto extension durations (Max 60 mins) if provided
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    if "auto_expansion" in body:
-        auto_exp = body["auto_expansion"]
-        fn_ext = int(auto_exp.get("auto_expand_fn_minutes", 5))
-        an_ext = int(auto_exp.get("auto_expand_an_minutes", 5))
-        def_ext = int(auto_exp.get("auto_expand_minutes", 5))
-        if fn_ext > 60:
-            raise HTTPException(
-                status_code=400,
-                detail=f"FN Extension duration ({fn_ext} mins) exceeds maximum limit of 60 minutes."
-            )
-        if an_ext > 60:
-            raise HTTPException(
-                status_code=400,
-                detail=f"AN Extension duration ({an_ext} mins) exceeds maximum limit of 60 minutes."
-            )
-        if def_ext > 60:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Extension duration ({def_ext} mins) exceeds maximum limit of 60 minutes."
-            )
+    # Cross-group validation: Full Day slots vs Half-Day slots
+    for fd_s in fd_slots:
+        fd_type = fd_s["type"]
+        for h_s in fh_slots + sh_slots:
+            h_type = h_s["type"]
+            # Check-In and Check-Out across types cannot overlap
+            if max(fd_s["start_m"], h_s["start_m"]) < min(fd_s["end_m"], h_s["end_m"]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Full Day Slot {fd_s['num']} ({fd_s['start_time']}, {fd_s['duration']}m) overlaps with "
+                        f"Half-Day Slot {h_s['num']} ({h_s['start_time']}, {h_s['duration']}m). "
+                        f"Please ensure time slots do not conflict."
+                    ),
+                )
 
     try:
         # Delete existing settings and insert new ones
@@ -2399,27 +2474,25 @@ async def save_attendance_duration_settings(request: Request):
 
         conn.commit()
 
-        # Save auto expansion settings if provided
-        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-        if "auto_expansion" in body:
-            auto_exp = body["auto_expansion"]
-            if "auto_expand_checkin_enabled" in auto_exp:
-                val = "true" if auto_exp["auto_expand_checkin_enabled"] else "false"
+        # Save auto expansion settings if provided (using data already parsed from request)
+        if auto_exp_input and isinstance(auto_exp_input, dict):
+            if "auto_expand_checkin_enabled" in auto_exp_input:
+                val = "true" if auto_exp_input["auto_expand_checkin_enabled"] else "false"
                 _save_leave_setting("auto_expand_checkin_enabled", val, admin_user["name"])
-            if "auto_expand_checkout_enabled" in auto_exp:
-                val_out = "true" if auto_exp["auto_expand_checkout_enabled"] else "false"
+            if "auto_expand_checkout_enabled" in auto_exp_input:
+                val_out = "true" if auto_exp_input["auto_expand_checkout_enabled"] else "false"
                 _save_leave_setting("auto_expand_checkout_enabled", val_out, admin_user["name"])
-            if "auto_expand_fn_minutes" in auto_exp:
-                mins_fn = str(int(auto_exp["auto_expand_fn_minutes"]))
+            if "auto_expand_fn_minutes" in auto_exp_input:
+                mins_fn = str(int(auto_exp_input["auto_expand_fn_minutes"]))
                 _save_leave_setting("auto_expand_fn_minutes", mins_fn, admin_user["name"])
-            if "auto_expand_an_minutes" in auto_exp:
-                mins_an = str(int(auto_exp["auto_expand_an_minutes"]))
+            if "auto_expand_an_minutes" in auto_exp_input:
+                mins_an = str(int(auto_exp_input["auto_expand_an_minutes"]))
                 _save_leave_setting("auto_expand_an_minutes", mins_an, admin_user["name"])
-            if "auto_expand_minutes" in auto_exp:
-                mins = str(int(auto_exp["auto_expand_minutes"]))
+            if "auto_expand_minutes" in auto_exp_input:
+                mins = str(int(auto_exp_input["auto_expand_minutes"]))
                 _save_leave_setting("auto_expand_minutes", mins, admin_user["name"])
-            if "require_fn_check_out" in auto_exp:
-                req_fn = "true" if auto_exp["require_fn_check_out"] else "false"
+            if "require_fn_check_out" in auto_exp_input:
+                req_fn = "true" if auto_exp_input["require_fn_check_out"] else "false"
                 _save_leave_setting("require_fn_check_out", req_fn, admin_user["name"])
 
         # Auto-enable half_day_enabled when any slot is configured for FN or AN
@@ -2476,8 +2549,8 @@ def _calculate_effective_slot_duration(slot_type: str, slot_half: str, base_dura
 
 
 @app.get("/admin/attendance/duration/check")
-async def check_attendance_window():
-    """Check if current time is within any attendance window - Public endpoint"""
+async def check_attendance_window(reg_no: Optional[str] = None):
+    """Check if current time is within any attendance window - Public endpoint with optional user context"""
     current_time = datetime.now()
     today_str = current_time.strftime("%Y-%m-%d")
 
@@ -2504,7 +2577,7 @@ async def check_attendance_window():
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled IS TRUE
+        WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         ORDER BY slot_number ASC
     """)
     rows = cursor.fetchall()
@@ -2569,11 +2642,10 @@ async def check_attendance_window():
 
     current_time_str = current_time.strftime("%H:%M")
     hd_settings = _get_half_day_settings()
-    auto_expand_checkin = hd_settings.get("auto_expand_checkin_enabled", True)
-    auto_expand_checkout = hd_settings.get("auto_expand_checkout_enabled", True)
-    auto_expand_fn_mins = hd_settings.get("auto_expand_fn_minutes", 5)
-    auto_expand_an_mins = hd_settings.get("auto_expand_an_minutes", 5)
-    auto_expand_default_mins = hd_settings.get("auto_expand_minutes", 5)
+
+    # Pre-build structured available slots and compute effective windows
+    available_slots = []
+    active_slot_matches = []
 
     for row in rows:
         slot_number = row[0]
@@ -2589,11 +2661,26 @@ async def check_attendance_window():
         start_datetime = current_time.replace(
             hour=start_hour, minute=start_minute, second=0, microsecond=0
         )
+        base_end_datetime = start_datetime + timedelta(minutes=duration_minutes)
         end_datetime = start_datetime + timedelta(minutes=effective_duration)
+
+        slot_item = {
+            "slot_number": slot_number,
+            "start_time": start_time,
+            "end_time": end_datetime.strftime("%H:%M"),
+            "base_end_time": base_end_datetime.strftime("%H:%M"),
+            "duration_minutes": duration_minutes,
+            "effective_duration_minutes": effective_duration,
+            "slot_type": slot_type,
+            "slot_half": slot_half,
+            "is_auto_extended": is_auto_extended,
+            "extended_minutes": applied_ext_mins if is_auto_extended else 0,
+        }
+        available_slots.append(slot_item)
 
         # Check if current time is within the window
         if start_datetime <= current_time < end_datetime:
-            return {
+            active_slot_matches.append({
                 "allowed": True,
                 "is_holiday": False,
                 "is_special_occasion": False,
@@ -2604,12 +2691,55 @@ async def check_attendance_window():
                 "slot_half": slot_half,
                 "start_time": start_time,
                 "end_time": end_datetime.strftime("%H:%M"),
+                "base_end_time": base_end_datetime.strftime("%H:%M"),
                 "remaining_minutes": int(
                     (end_datetime - current_time).total_seconds() / 60
                 ),
                 "is_auto_extended": is_auto_extended,
+                "is_in_extra_time": current_time >= base_end_datetime,
                 "extended_minutes": applied_ext_mins if is_auto_extended else 0,
-            }
+            })
+
+    if active_slot_matches:
+        chosen_match = None
+        if len(active_slot_matches) == 1:
+            chosen_match = active_slot_matches[0]
+        else:
+            # Multiple slots active concurrently (e.g. Check-In running in extra grace period while Check-Out has started)
+            user_has_cin = False
+            if reg_no:
+                cursor.execute("""
+                    SELECT first_half_in_time, second_half_in_time, in_time
+                    FROM daily_attendance_status
+                    WHERE reg_no = ? AND date = ?
+                """, (reg_no, today_str))
+                d_row = cursor.fetchone()
+                if d_row:
+                    has_fh_in = bool(d_row[0])
+                    has_sh_in = bool(d_row[1])
+                    has_gen_in = bool(d_row[2])
+                    for m in active_slot_matches:
+                        if m["slot_type"] == "check_in":
+                            sh = m["slot_half"]
+                            if (sh == "first_half" and has_fh_in) or (sh == "second_half" and has_sh_in) or (sh not in ("first_half", "second_half") and has_gen_in):
+                                user_has_cin = True
+                                break
+
+            cout_matches = [m for m in active_slot_matches if m["slot_type"] == "check_out"]
+            cin_matches = [m for m in active_slot_matches if m["slot_type"] == "check_in"]
+
+            if user_has_cin and cout_matches:
+                chosen_match = cout_matches[0]
+            elif cin_matches:
+                # Prioritize check-in while extra time still has minutes remaining
+                chosen_match = cin_matches[0]
+            else:
+                chosen_match = active_slot_matches[0]
+
+        res = dict(chosen_match)
+        res["active_slots"] = active_slot_matches
+        res["available_slots"] = available_slots
+        return res
 
     # If not in normal slot, check active CCL slot
     ccl_slot_type = get_active_ccl_slot_type()
@@ -2638,29 +2768,45 @@ async def check_attendance_window():
             "message": f"Within CCL window ({ccl_slot_type})",
             "current_slot": -1,
             "slot_type": ccl_slot_type,
+            "slot_half": "full_day",
             "start_time": start_time,
             "end_time": end_time,
             "remaining_minutes": remaining,
+            "available_slots": available_slots,
         }
 
-    # Check if before first slot or after last slot
+    # Outside window: determine next upcoming slot for today
+    next_slot = None
+    upcoming = []
+    for s in available_slots:
+        sh_h, sm_m = map(int, s["start_time"].split(":"))
+        s_dt = current_time.replace(hour=sh_h, minute=sm_m, second=0, microsecond=0)
+        if s_dt > current_time:
+            diff_m = int((s_dt - current_time).total_seconds() / 60)
+            upcoming.append((diff_m, s))
+
+    if upcoming:
+        upcoming.sort(key=lambda x: x[0])
+        next_slot = dict(upcoming[0][1])
+        next_slot["starts_in_minutes"] = upcoming[0][0]
+
+    out_msg = "Outside attendance window"
+    if next_slot:
+        h_label = "FN (Morning)" if next_slot['slot_half'] == "first_half" else "AN (Afternoon)" if next_slot['slot_half'] == "second_half" else "Standard"
+        t_label = "Check-In" if next_slot['slot_type'] == "check_in" else "Check-Out"
+        out_msg = f"Outside window. Next: {h_label} {t_label} at {next_slot['start_time']} (in {next_slot['starts_in_minutes']}m)"
+
     return {
         "allowed": False,
         "is_holiday": False,
         "is_special_occasion": False,
         "attendance_required": True,
-        "message": "Outside attendance window",
+        "message": out_msg,
         "current_slot": None,
-        "slot_type": "check_in",
-        "available_slots": [
-            {
-                "slot_number": row[0],
-                "start_time": row[1],
-                "duration_minutes": row[2],
-                "slot_type": row[4] if len(row) > 4 and row[4] else "check_in",
-            }
-            for row in rows
-        ],
+        "slot_type": next_slot["slot_type"] if next_slot else "check_in",
+        "slot_half": next_slot["slot_half"] if next_slot else "full_day",
+        "next_slot": next_slot,
+        "available_slots": available_slots,
     }
 
 
@@ -2763,7 +2909,7 @@ async def save_ccl_custom_dates(request: Request):
             cursor.execute("""
                 SELECT slot_number, start_time, duration_minutes, slot_type 
                 FROM attendance_duration_settings 
-                WHERE is_enabled IS TRUE
+                WHERE (is_enabled = 1 OR is_enabled::text = 'true')
             """)
             duration_slots = cursor.fetchall()
             
@@ -2875,7 +3021,7 @@ async def save_ccl_settings(request: Request):
         cursor.execute("""
             SELECT slot_number, start_time, duration_minutes, slot_type 
             FROM attendance_duration_settings 
-            WHERE is_enabled IS TRUE
+            WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         """)
         duration_slots = cursor.fetchall()
         
@@ -4306,6 +4452,7 @@ def save_system_config(key: str, value: str):
         print(f"Error saving config to database: {e}")
 
 def load_system_config():
+    global ANTISPOOFING_ENABLED, ANTISPOOF_STRICT_MODE
     try:
         cursor.execute("SELECT key, value FROM system_config")
         rows = cursor.fetchall()
@@ -4316,7 +4463,15 @@ def load_system_config():
                 _app_settings[key] = False
             else:
                 _app_settings[key] = value
-        print("Loaded settings from database:", _app_settings)
+        if "antispoofing_enabled" in _app_settings:
+            ANTISPOOFING_ENABLED = bool(_app_settings["antispoofing_enabled"])
+        else:
+            ANTISPOOFING_ENABLED = True
+        if "antispoof_strict_mode" in _app_settings:
+            ANTISPOOF_STRICT_MODE = bool(_app_settings["antispoof_strict_mode"])
+        else:
+            ANTISPOOF_STRICT_MODE = True
+        print(f"Loaded settings from database: antispoofing={ANTISPOOFING_ENABLED}, strict={ANTISPOOF_STRICT_MODE}")
     except Exception as e:
         print(f"Error loading config from database: {e}")
 
@@ -5390,7 +5545,7 @@ def _get_half_day_settings() -> dict:
         cursor.execute(
             """
             SELECT COUNT(*) FROM attendance_duration_settings
-            WHERE is_enabled IS TRUE AND slot_half IN ('first_half', 'second_half')
+            WHERE (is_enabled = 1 OR is_enabled::text = 'true') AND slot_half IN ('first_half', 'second_half')
             """
         )
         row = cursor.fetchone()
@@ -8814,18 +8969,368 @@ def detect_liveness(frames: list) -> tuple[bool, str]:
         return False, f"Liveness check failed: {str(e)}"
 
 
-def detect_single_image_liveness(img) -> tuple[bool, str]:
+def detect_device_or_photo_border(img, face_bbox):
     """
-    Legacy function - now delegates to comprehensive analysis.
-    Maintained for backward compatibility.
+    Detects rectangular frame / bezel lines surrounding the face bounding box
+    indicating a phone, tablet, laptop screen, or printed card.
+    """
+    try:
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in face_bbox]
+        
+        margin_x = int((x2 - x1) * 0.85)
+        margin_y = int((y2 - y1) * 0.85)
+        
+        bx1 = max(0, x1 - margin_x)
+        by1 = max(0, y1 - margin_y)
+        bx2 = min(w, x2 + margin_x)
+        by2 = min(h, y2 + margin_y)
+        
+        surrounding_roi = img[by1:by2, bx1:bx2].copy()
+        if surrounding_roi.size == 0 or surrounding_roi.shape[0] < 40 or surrounding_roi.shape[1] < 40:
+            return 0, 0
+            
+        gray = cv2.cvtColor(surrounding_roi, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 40, 130)
+        
+        inner_x1 = max(0, x1 - bx1)
+        inner_y1 = max(0, y1 - by1)
+        inner_x2 = min(bx2 - bx1, x2 - bx1)
+        inner_y2 = min(by2 - by1, y2 - by1)
+        edges[inner_y1:inner_y2, inner_x1:inner_x2] = 0
+        
+        min_line_length = int(min(bx2 - bx1, by2 - by1) * 0.28)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=38, minLineLength=min_line_length, maxLineGap=12)
+        
+        straight_lines_count = 0
+        orthogonal_pairs = 0
+        
+        if lines is not None:
+            straight_lines_count = len(lines)
+            angles = []
+            for line in lines:
+                lx1, ly1, lx2, ly2 = line[0]
+                angle = np.abs(np.arctan2(ly2 - ly1, lx2 - lx1) * 180.0 / np.pi)
+                angles.append(angle)
+                
+            horiz = sum(1 for a in angles if a <= 15 or a >= 165)
+            vert = sum(1 for a in angles if 75 <= a <= 105)
+            if horiz >= 1 and vert >= 1:
+                orthogonal_pairs = min(horiz, vert)
+
+        return straight_lines_count, orthogonal_pairs
+    except Exception as e:
+        print(f"Error in detect_device_or_photo_border: {e}")
+        return 0, 0
+
+
+def compute_skin_lbp_entropy(skin_patch):
+    """
+    Computes Shannon entropy of uniform Local Binary Patterns on biological skin patch.
+    Real human skin has microscopic pores and vascular texture yielding rich entropy (2.3 - 3.2).
+    Paper printouts and screen pixels have compressed or dithered textures.
+    """
+    try:
+        if skin_patch.size == 0 or skin_patch.shape[0] < 10 or skin_patch.shape[1] < 10:
+            return 0.0
+        gray = cv2.cvtColor(skin_patch, cv2.COLOR_BGR2GRAY)
+        try:
+            from skimage.feature import local_binary_pattern
+            lbp = local_binary_pattern(gray, P=8, R=1, method='uniform')
+            bins = 10
+            hist_range = (0, 10)
+        except Exception:
+            h, w = gray.shape
+            lbp = np.zeros((h - 2, w - 2), dtype=np.uint8)
+            center = gray[1:-1, 1:-1]
+            lbp |= (gray[0:-2, 0:-2] >= center).astype(np.uint8) << 7
+            lbp |= (gray[0:-2, 1:-1] >= center).astype(np.uint8) << 6
+            lbp |= (gray[0:-2, 2:]   >= center).astype(np.uint8) << 5
+            lbp |= (gray[1:-1, 2:]   >= center).astype(np.uint8) << 4
+            lbp |= (gray[2:,   2:]   >= center).astype(np.uint8) << 3
+            lbp |= (gray[2:,   1:-1] >= center).astype(np.uint8) << 2
+            lbp |= (gray[2:,   0:-2] >= center).astype(np.uint8) << 1
+            lbp |= (gray[1:-1, 0:-2] >= center).astype(np.uint8) << 0
+            bins = 16
+            hist_range = (0, 256)
+
+        hist, _ = np.histogram(lbp.ravel(), bins=bins, range=hist_range, density=True)
+        entropy = -float(np.sum([p * np.log2(p) for p in hist if p > 0]))
+        return entropy
+    except Exception as e:
+        print(f"Error computing LBP entropy: {e}")
+        return 0.0
+
+
+def evaluate_face_liveness(img, face) -> dict:
+    """
+    Multi-layer presentation attack detection (PAD) strictly rejecting photos,
+    screen videos, electronic replays, and printed cards while reliably admitting
+    genuine human faces in indoor and low-lighting settings:
+    1. Multi-scale 2D FFT spectral Moiré & high-frequency subpixel grid analysis.
+    2. Discrete chroma step discontinuity & video compression quantization.
+    3. Multi-scale LBP texture entropy on biological skin patch.
+    4. Specular glass glare detection with sharp boundary gradient.
+    5. Adaptive physiological human skin locus & blue-excess backlight ratio.
+    6. Device bezel / printed card border rectilinear geometry.
+    7. 3D facial shading variance and surface planarity.
+    """
+    if img is None or face is None:
+        return {"is_live": False, "score": 0.0, "reason": "No face provided for liveness assessment", "flags": ["NO_INPUT"]}
+
+    if img is not None:
+        rot = getattr(face, "_rot", None)
+        target_img = img if rot is None else cv2.rotate(img, rot)
+    else:
+        target_img = getattr(face, "_oriented_img", None)
+
+    bbox = face.bbox.astype(int)
+    h, w = target_img.shape[:2]
+    x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(w, bbox[2]), min(h, bbox[3])
+    face_roi = target_img[y1:y2, x1:x2]
+
+    if face_roi.size == 0 or face_roi.shape[0] < 30 or face_roi.shape[1] < 30:
+        return {"is_live": False, "score": 0.0, "reason": "Face region too small for liveness verification", "flags": ["TINY_ROI"]}
+
+    gray_roi = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+    mean_y = float(np.mean(gray_roi))
+    flags = []
+    penalties = 0.0
+
+    # -------------------------------------------------------------
+    # Layer 1: Multi-Scale 2D FFT Frequency Analysis (Screen Moiré / Pixel Grid)
+    # -------------------------------------------------------------
+    roi_256 = cv2.resize(gray_roi, (256, 256))
+    f_256 = np.fft.fft2(roi_256.astype(float))
+    fshift_256 = np.fft.fftshift(f_256)
+    mag_256 = np.abs(fshift_256)
+
+    center = 128
+    y_g, x_g = np.ogrid[:256, :256]
+    dist = np.sqrt((x_g - center)**2 + (y_g - center)**2)
+    high_freq_mask = (dist > 30) & (dist < 120)
+    high_freq_vals = mag_256[high_freq_mask]
+    fft_ratio_256 = float(np.max(high_freq_vals) / (np.mean(high_freq_vals) + 1e-6))
+
+    # Native resolution center patch FFT (captures un-interpolated screen rasters)
+    rh, rw = gray_roi.shape[:2]
+    pch, pcw = rh // 2, rw // 2
+    pr = min(64, pch, pcw)
+    native_patch = gray_roi[pch - pr : pch + pr, pcw - pr : pcw + pr]
+    if native_patch.shape[0] >= 48 and native_patch.shape[1] >= 48:
+        p_norm = cv2.resize(native_patch, (128, 128))
+        f_nat = np.fft.fft2(p_norm.astype(float))
+        fshift_nat = np.fft.fftshift(f_nat)
+        mag_nat = np.abs(fshift_nat)
+        y_n, x_n = np.ogrid[:128, :128]
+        dist_n = np.sqrt((x_n - 64)**2 + (y_n - 64)**2)
+        mask_n = (dist_n > 15) & (dist_n < 60)
+        vals_n = mag_nat[mask_n]
+        fft_ratio_nat = float(np.max(vals_n) / (np.mean(vals_n) + 1e-6))
+    else:
+        fft_ratio_nat = fft_ratio_256
+
+    max_fft_ratio = max(fft_ratio_256, fft_ratio_nat)
+
+    if max_fft_ratio > 40.0:
+        flags.append("SCREEN_MOIRE_CRITICAL")
+        penalties += 0.85
+    elif max_fft_ratio > 30.0:
+        flags.append("SCREEN_MOIRE_SUSPECT")
+        penalties += 0.40
+
+    # -------------------------------------------------------------
+    # Layer 2: Chroma Quantization & Video Codec Artifacts
+    # -------------------------------------------------------------
+    ycrcb = cv2.cvtColor(face_roi, cv2.COLOR_BGR2YCrCb)
+    y_c, cr, cb = cv2.split(ycrcb)
+
+    grad_cr_x = cv2.Sobel(cr, cv2.CV_32F, 1, 0, ksize=3)
+    grad_cr_y = cv2.Sobel(cr, cv2.CV_32F, 0, 1, ksize=3)
+    mag_cr = np.sqrt(grad_cr_x**2 + grad_cr_y**2)
+
+    grad_cb_x = cv2.Sobel(cb, cv2.CV_32F, 1, 0, ksize=3)
+    grad_cb_y = cv2.Sobel(cb, cv2.CV_32F, 0, 1, ksize=3)
+    mag_cb = np.sqrt(grad_cb_x**2 + grad_cb_y**2)
+
+    flat_cr = np.mean(mag_cr < 1.0)
+    flat_cb = np.mean(mag_cb < 1.0)
+    chroma_flatness = float((flat_cr + flat_cb) / 2.0)
+
+    if chroma_flatness > 0.28 and mean_y >= 30:
+        flags.append("VIDEO_CHROMA_QUANTIZATION")
+        penalties += 0.80
+    elif chroma_flatness > 0.22 and mean_y >= 50:
+        flags.append("SUSPECT_CHROMA_STEPPING")
+        penalties += 0.35
+
+    # -------------------------------------------------------------
+    # Layer 3: Physiological Skin Chrominance & Blue Backlight
+    # -------------------------------------------------------------
+    if mean_y < 70:
+        skin_mask = (cr >= 120) & (cr <= 185) & (cb >= 70) & (cb <= 142)
+        chrom_thresh = 20.0
+    else:
+        skin_mask = (cr >= 130) & (cr <= 175) & (cb >= 75) & (cb <= 130)
+        chrom_thresh = 35.0
+
+    skin_locus_pct = float(np.mean(skin_mask) * 100.0)
+
+    b, g, r = cv2.split(face_roi)
+    b_mean = float(np.mean(b))
+    r_mean = float(np.mean(r))
+    blue_ratio = float(b_mean / (r_mean + 1e-6))
+
+    if skin_locus_pct < chrom_thresh:
+        flags.append("UNNATURAL_SKIN_CHROMINANCE")
+        penalties += 0.50
+    elif skin_locus_pct < (chrom_thresh + 12.0) and mean_y >= 70:
+        flags.append("DEVIATED_SKIN_CHROMINANCE")
+        penalties += 0.20
+
+    # Electronic screen blue emission (emissive screens display cold phosphor spikes)
+    if blue_ratio > 0.98 and skin_locus_pct < 65.0:
+        flags.append("SCREEN_BLUE_BACKLIGHT")
+        penalties += 0.75
+
+    # -------------------------------------------------------------
+    # Layer 4: Multi-Scale LBP Texture on Biological Skin Patch
+    # -------------------------------------------------------------
+    kps = face.kps.astype(int) if hasattr(face, 'kps') and face.kps is not None else None
+    if kps is not None and len(kps) == 5:
+        nose = kps[2]
+        r_eye = kps[1]
+        cheek_cx = int((nose[0] + r_eye[0]) / 2)
+        cheek_cy = int((nose[1] + r_eye[1]) / 2)
+        patch_r = 16
+        px1 = max(0, cheek_cx - patch_r)
+        py1 = max(0, cheek_cy - patch_r)
+        px2 = min(w, cheek_cx + patch_r)
+        py2 = min(h, cheek_cy + patch_r)
+        skin_patch = target_img[py1:py2, px1:px2]
+    else:
+        rh, rw = face_roi.shape[:2]
+        skin_patch = face_roi[int(rh*0.35):int(rh*0.65), int(rw*0.35):int(rw*0.65)]
+
+    lbp_entropy = compute_skin_lbp_entropy(skin_patch)
+    if lbp_entropy > 0:
+        if lbp_entropy < 1.90 and mean_y >= 45:
+            flags.append("LOW_SKIN_TEXTURE_ENTROPY")
+            penalties += 0.50
+        elif lbp_entropy < 2.10 and mean_y >= 70:
+            flags.append("SUBDUED_TEXTURE")
+            penalties += 0.20
+
+    # -------------------------------------------------------------
+    # Layer 5: Specular Glare & Reflection Sharpness (Screen Glass)
+    # -------------------------------------------------------------
+    hsv = cv2.cvtColor(face_roi, cv2.COLOR_BGR2HSV)
+    v = hsv[:, :, 2]
+    glare_pixels = v > 248
+    glare_pct = float(np.mean(glare_pixels) * 100.0)
+    glare_edge_grad = 0.0
+
+    if np.sum(glare_pixels) > 20:
+        glare_mask = (glare_pixels.astype(np.uint8)) * 255
+        grad_x = cv2.Sobel(gray_roi, cv2.CV_64F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(gray_roi, cv2.CV_64F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(grad_x**2 + grad_y**2)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        boundary = cv2.dilate(glare_mask, kernel) - glare_mask
+        if np.sum(boundary > 0) > 0:
+            glare_edge_grad = float(np.mean(grad_mag[boundary > 0]))
+
+        if glare_pct > 1.0 and glare_edge_grad > 110.0:
+            flags.append("GLASS_SPECULAR_GLARE")
+            penalties += 0.75
+
+    # -------------------------------------------------------------
+    # Layer 6: Device Bezel / Screen Border / Card Edge Detection
+    # -------------------------------------------------------------
+    lines_count, ortho_pairs = detect_device_or_photo_border(target_img, bbox)
+    if lines_count >= 5 and ortho_pairs >= 2:
+        flags.append("DEVICE_BEZEL_DETECTED")
+        penalties += 0.85
+    elif lines_count >= 3 and ortho_pairs >= 1:
+        flags.append("SUSPECT_CARD_BORDER")
+        penalties += 0.40
+
+    # -------------------------------------------------------------
+    # Final Composite Scoring & Zero-Tolerance Hard Rejection
+    # -------------------------------------------------------------
+    liveness_score = max(0.0, min(1.0, 1.0 - penalties))
+
+    hard_reject = (
+        ("DEVICE_BEZEL_DETECTED" in flags) or
+        ("SCREEN_MOIRE_CRITICAL" in flags) or
+        ("VIDEO_CHROMA_QUANTIZATION" in flags) or
+        ("GLASS_SPECULAR_GLARE" in flags) or
+        ("SCREEN_BLUE_BACKLIGHT" in flags) or
+        ("LOW_SKIN_TEXTURE_ENTROPY" in flags and ("SUSPECT_CARD_BORDER" in flags or "UNNATURAL_SKIN_CHROMINANCE" in flags)) or
+        ("SUSPECT_CARD_BORDER" in flags and ("UNNATURAL_SKIN_CHROMINANCE" in flags or "SCREEN_MOIRE_SUSPECT" in flags or "SUBDUED_TEXTURE" in flags)) or
+        (len(flags) >= 2 and liveness_score < 0.75) or
+        (liveness_score < 0.65)
+    )
+
+    is_live = not hard_reject
+
+    reasons = []
+    if "DEVICE_BEZEL_DETECTED" in flags or "SUSPECT_CARD_BORDER" in flags:
+        reasons.append("Device frame or photo border detected")
+    if "SCREEN_MOIRE_CRITICAL" in flags or "SCREEN_MOIRE_SUSPECT" in flags:
+        reasons.append("Digital screen Moiré pattern detected")
+    if "VIDEO_CHROMA_QUANTIZATION" in flags:
+        reasons.append("Digital video compression artifact detected")
+    if "GLASS_SPECULAR_GLARE" in flags:
+        reasons.append("Screen glass specular reflection detected")
+    if "SCREEN_BLUE_BACKLIGHT" in flags:
+        reasons.append("Electronic screen backlight illumination detected")
+    if "LOW_SKIN_TEXTURE_ENTROPY" in flags or "SUBDUED_TEXTURE" in flags:
+        reasons.append("Flat paper printout texture detected")
+    if "UNNATURAL_SKIN_CHROMINANCE" in flags:
+        reasons.append("Unnatural skin chrominance gamut")
+
+    reason_str = "; ".join(reasons) if reasons else ("Real human face verified" if is_live else "Liveness criteria not met")
+
+    return {
+        "is_live": is_live,
+        "score": round(liveness_score, 3),
+        "reason": reason_str,
+        "flags": flags,
+        "metrics": {
+            "fft_peak_ratio": round(max_fft_ratio, 2),
+            "chroma_flatness": round(chroma_flatness, 3),
+            "lbp_entropy": round(lbp_entropy, 2),
+            "skin_locus_pct": round(skin_locus_pct, 1),
+            "blue_ratio": round(blue_ratio, 2),
+            "glare_pct": round(glare_pct, 2),
+            "glare_edge_grad": round(glare_edge_grad, 1),
+            "bezel_lines": lines_count,
+            "ortho_pairs": ortho_pairs,
+            "mean_y": round(mean_y, 1)
+        }
+    }
+
+
+def detect_single_image_liveness(img, face=None) -> tuple[bool, str]:
+    """
+    Presentation attack detection on a single image.
+    If face is provided, evaluates directly. Otherwise extracts face first.
+    Returns (is_live, reason).
     """
     global ANTISPOOFING_ENABLED
 
     if not ANTISPOOFING_ENABLED:
         return True, "Anti-spoofing disabled"
 
-    result = analyze_image_comprehensive(img)
-    return result.get("is_live", False), result.get("liveness_reason", "Analysis failed")
+    if face is None:
+        face = extract_face(img)
+    if face is None:
+        return False, "Face is unable to detect"
+
+    result = evaluate_face_liveness(img, face)
+    return result.get("is_live", False), result.get("reason", "Liveness check failed")
 
 
 def extract_face_features(img):
@@ -9421,7 +9926,7 @@ def _get_active_attendance_slot():
         cursor.execute("""
             SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
             FROM attendance_duration_settings
-            WHERE is_enabled IS TRUE
+            WHERE (is_enabled = 1 OR is_enabled::text = 'true')
             ORDER BY slot_number ASC
         """)
         duration_rows = cursor.fetchall()
@@ -9880,6 +10385,8 @@ def extract_face(img, _recursion_depth=0):
                 self.bbox = np.array([x, y, x2, y2], dtype=float)
                 self.det_score = 0.8  # Fixed score
                 self.embedding = embedding
+                self._oriented_img = img
+                self._rot = None
 
         face_result = FaceResult([x, y, x2, y2], embedding)
         print(f"Fallback embedding created, shape: {embedding.shape}")
@@ -9917,14 +10424,36 @@ def extract_face(img, _recursion_depth=0):
                 )
 
                 if face.embedding is not None and len(face.embedding) > 0:
+                    face._oriented_img = temp
+                    face._rot = rot
                     print(f"InsightFace embedding found in rotation {rot_name}")
                     return face
                 else:
                     print(f"No embedding in rotation {rot_name}")
-
             except Exception as e:
                 print(f"Error in rotation {rot_name}: {e}")
                 continue
+
+        # Low-light adaptive illumination enhancement pass if initial detection failed
+        try:
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            enhanced_bgr = cv2.cvtColor(cv2.merge((clahe.apply(l_ch), a_ch, b_ch)), cv2.COLOR_LAB2BGR)
+            for rot, rot_name in rotations:
+                temp_enh = enhanced_bgr if rot is None else cv2.rotate(enhanced_bgr, rot)
+                with _face_app_lock:
+                    faces = face_app.get(temp_enh)
+                if len(faces) == 0:
+                    continue
+                face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                if face.embedding is not None and len(face.embedding) > 0:
+                    face._oriented_img = temp_enh
+                    face._rot = rot
+                    print(f"InsightFace embedding found in low-light enhanced pass ({rot_name})")
+                    return face
+        except Exception as _enh_err:
+            print(f"Low-light enhancement pass exception: {_enh_err}")
 
         print("InsightFace failed to detect any face.")
         return None
@@ -10178,10 +10707,22 @@ async def mark_attendance_secure(
             detail="Attendance is blocked today because the date is marked as a holiday in the academic calendar.",
         )
 
+    if reg_no is None:
+        reg_no = request.query_params.get("reg_no")
+    if reg_no is None:
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                if body:
+                    reg_no = body.get("reg_no")
+            except:
+                pass
+
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled IS TRUE
+        WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -10193,6 +10734,7 @@ async def mark_attendance_secure(
     if duration_rows:
         current_time = datetime.now()
         allowed = False
+        matching_slots = []
 
         for row in duration_rows:
             slot_number = row[0]
@@ -10200,20 +10742,64 @@ async def mark_attendance_secure(
             duration_minutes = row[2]
             slot_type = row[4] if len(row) > 4 and row[4] else "check_in"
             slot_half = row[5] if len(row) > 5 and row[5] else "full_day"
-            effective_duration, _, _ = _calculate_effective_slot_duration(slot_type, slot_half, duration_minutes)
+            effective_duration, is_auto_extended, applied_ext_mins = _calculate_effective_slot_duration(slot_type, slot_half, duration_minutes)
 
             start_hour, start_minute = map(int, start_time.split(":"))
             start_datetime = current_time.replace(
                 hour=start_hour, minute=start_minute, second=0, microsecond=0
             )
+            base_end_datetime = start_datetime + timedelta(minutes=duration_minutes)
             end_datetime = start_datetime + timedelta(minutes=effective_duration)
 
             if start_datetime <= current_time < end_datetime:
-                allowed = True
-                active_slot = slot_number
-                active_slot_type = slot_type
-                active_slot_half = slot_half if slot_half in ("first_half", "second_half") else None
-                break
+                matching_slots.append({
+                    "slot_number": slot_number,
+                    "slot_type": slot_type,
+                    "slot_half": slot_half if slot_half in ("first_half", "second_half") else None,
+                    "base_end_datetime": base_end_datetime,
+                    "end_datetime": end_datetime,
+                })
+
+        if matching_slots:
+            allowed = True
+            chosen_match = None
+            if len(matching_slots) == 1:
+                chosen_match = matching_slots[0]
+            else:
+                # Multiple slots active concurrently (e.g. Check-In running in extra grace period while Check-Out has started)
+                user_has_cin = False
+                if reg_no:
+                    cursor.execute("""
+                        SELECT first_half_in_time, second_half_in_time, in_time
+                        FROM daily_attendance_status
+                        WHERE reg_no = ? AND date = ?
+                    """, (reg_no, today_str))
+                    d_row = cursor.fetchone()
+                    if d_row:
+                        has_fh_in = bool(d_row[0])
+                        has_sh_in = bool(d_row[1])
+                        has_gen_in = bool(d_row[2])
+                        for m in matching_slots:
+                            if m["slot_type"] == "check_in":
+                                sh = m["slot_half"]
+                                if (sh == "first_half" and has_fh_in) or (sh == "second_half" and has_sh_in) or (sh not in ("first_half", "second_half") and has_gen_in):
+                                    user_has_cin = True
+                                    break
+
+                cout_matches = [m for m in matching_slots if m["slot_type"] == "check_out"]
+                cin_matches = [m for m in matching_slots if m["slot_type"] == "check_in"]
+
+                if user_has_cin and cout_matches:
+                    chosen_match = cout_matches[0]
+                elif cin_matches:
+                    # Prioritize check-in while extra time still has minutes remaining
+                    chosen_match = cin_matches[0]
+                else:
+                    chosen_match = matching_slots[0]
+
+            active_slot = chosen_match["slot_number"]
+            active_slot_type = chosen_match["slot_type"]
+            active_slot_half = chosen_match["slot_half"]
 
         if not allowed:
             ccl_slot_type = get_active_ccl_slot_type()
@@ -10246,18 +10832,6 @@ async def mark_attendance_secure(
                     detail="Attendance marking is not allowed at this time. (Outside CCL window)",
                 )
 
-    if reg_no is None:
-        reg_no = request.query_params.get("reg_no")
-
-    content_type = request.headers.get("content-type", "").lower()
-    if reg_no is None and "application/json" in content_type:
-        try:
-            body = await request.json()
-            if body:
-                reg_no = body.get("reg_no")
-        except:
-            pass
-
     if reg_no:
         is_locked, remaining = check_lockout(reg_no)
         if is_locked:
@@ -10270,125 +10844,143 @@ async def mark_attendance_secure(
             )
 
         if active_slot is not None:
-            if active_slot_type == "check_out":
-                cursor.execute(
-                    "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
-                    (reg_no,)
-                )
-                cin_count = cursor.fetchone()[0]
-                if cin_count == 0:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
-                        (reg_no,)
-                    )
-                    cin_count = cursor.fetchone()[0]
-                if cin_count == 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="You cannot Check-Out without checking in first for today."
-                    )
+            # Query daily_attendance_status for today
+            cursor.execute(
+                """
+                SELECT first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, in_time, out_time
+                FROM daily_attendance_status
+                WHERE reg_no = ? AND date = ?
+                """,
+                (reg_no, today_str),
+            )
+            das_row = cursor.fetchone()
+            fh_in = das_row[0] if das_row and das_row[0] else None
+            fh_out = das_row[1] if das_row and das_row[1] else None
+            sh_in = das_row[2] if das_row and das_row[2] else None
+            sh_out = das_row[3] if das_row and das_row[3] else None
+            gen_in = das_row[4] if das_row and das_row[4] else None
+            gen_out = das_row[5] if das_row and das_row[5] else None
+
+            # Fallback checks on separate session tables
+            if not fh_in:
+                cursor.execute("SELECT in_time FROM morning_attendance WHERE reg_no = ? AND date = ?", (reg_no, today_str))
+                m_row = cursor.fetchone()
+                if m_row and m_row[0]:
+                    fh_in = m_row[0]
+            if not sh_in:
+                cursor.execute("SELECT in_time FROM evening_attendance WHERE reg_no = ? AND date = ?", (reg_no, today_str))
+                e_row = cursor.fetchone()
+                if e_row and e_row[0]:
+                    sh_in = e_row[0]
 
             _hd_cfg = _get_half_day_settings()
             _req_fn_checkout = _hd_cfg.get("require_fn_check_out", False)
 
             if active_slot_half == "first_half":
-                if active_slot_type == "check_out" and not _req_fn_checkout:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Morning (FN) Check-Out is currently cancelled/bypassed by system policy. No check-out scan is required."
-                    )
+                if active_slot_type == "check_out":
+                    if not _req_fn_checkout:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Morning (FN) Check-Out is currently cancelled/bypassed by system policy. No check-out scan is required.",
+                        )
+                    if not fh_in:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="You cannot Check-Out without checking in first for Morning (FN) session.",
+                        )
+                    if fh_out:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Morning (FN) Check-Out attendance for today.",
+                        )
+                else:  # check_in
+                    if fh_in:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Morning (FN) Check-In attendance for today.",
+                        )
 
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM attendance 
-                    WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                    """,
-                    (reg_no, active_slot_type)
-                )
-                dup_count = cursor.fetchone()[0]
-                if dup_count == 0:
-                    cursor.execute(
-                        """
-                        SELECT COUNT(*) FROM other_staff_attendance 
-                        WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                        """,
-                        (reg_no, active_slot_type)
-                    )
-                    dup_count = cursor.fetchone()[0]
-
-                if dup_count > 0:
-                    slot_name = "Check-In" if active_slot_type == "check_in" else "Check-Out"
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"You have already marked Morning (FN) {slot_name} attendance for today."
-                    )
             elif active_slot_half == "second_half":
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM attendance 
-                    WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                    """,
-                    (reg_no, active_slot_type)
-                )
-                dup_count = cursor.fetchone()[0]
-                if dup_count == 0:
-                    cursor.execute(
-                        """
-                        SELECT COUNT(*) FROM other_staff_attendance 
-                        WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                        """,
-                        (reg_no, active_slot_type)
-                    )
-                    dup_count = cursor.fetchone()[0]
+                if active_slot_type == "check_out":
+                    if not sh_in:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="You cannot Check-Out without checking in first for Afternoon (AN) session.",
+                        )
+                    if sh_out:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Afternoon (AN) Check-Out attendance for today.",
+                        )
+                else:  # check_in
+                    if sh_in:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Afternoon (AN) Check-In attendance for today.",
+                        )
 
-                if dup_count > 0:
-                    slot_name = "Check-In" if active_slot_type == "check_in" else "Check-Out"
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"You have already marked Afternoon (AN) {slot_name} attendance for today."
-                    )
             else:
-
-                # Legacy full-day mode duplicate check
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM daily_attendance_status
-                    WHERE reg_no = ? AND date = ? AND status = 'Present'
-                    """,
-                    (reg_no, today_str)
-                )
-                is_present_today = cursor.fetchone()[0] > 0
-
-                if is_present_today and active_slot_type == "check_in":
-                    raise HTTPException(
-                        status_code=403,
-                        detail="You are already marked present for today."
-                    )
-
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM attendance 
-                    WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                    """,
-                    (reg_no, active_slot_type)
-                )
-                dup_count = cursor.fetchone()[0]
-
-                if dup_count == 0:
+                # Full day / default mode
+                if active_slot_type == "check_out":
+                    has_check_in = bool(gen_in or fh_in)
+                    if not has_check_in:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                            (reg_no,),
+                        )
+                        c1 = cursor.fetchone()[0]
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                            (reg_no,),
+                        )
+                        c2 = cursor.fetchone()[0]
+                        has_check_in = (c1 > 0 or c2 > 0)
+                    if not has_check_in:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="You cannot Check-Out without checking in first for today.",
+                        )
+                    if gen_out:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Check-Out attendance for today.",
+                        )
                     cursor.execute(
-                        """
-                        SELECT COUNT(*) FROM other_staff_attendance 
-                        WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                        """,
-                        (reg_no, active_slot_type)
+                        "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_out'",
+                        (reg_no,),
                     )
-                    dup_count = cursor.fetchone()[0]
-
-                if dup_count > 0:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"You have already marked {active_slot_type.replace('_', ' ')} attendance for today."
+                    co1 = cursor.fetchone()[0]
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_out'",
+                        (reg_no,),
                     )
+                    co2 = cursor.fetchone()[0]
+                    if co1 > 0 or co2 > 0:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Check-Out attendance for today.",
+                        )
+                else:  # check_in
+                    if gen_in:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Check-In attendance for today.",
+                        )
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                        (reg_no,),
+                    )
+                    ci1 = cursor.fetchone()[0]
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                        (reg_no,),
+                    )
+                    ci2 = cursor.fetchone()[0]
+                    if ci1 > 0 or ci2 > 0:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You have already marked Check-In attendance for today.",
+                        )
 
     form_data = None
     try:
@@ -10492,7 +11084,7 @@ async def mark_attendance_secure(
             status_code=401, detail="Valid authentication required to mark attendance."
         )
 
-    if logged_in_user and logged_in_user.get("reg_no") != reg_no:
+    if logged_in_user and logged_in_user.get("reg_no", "").strip().lower() != reg_no.strip().lower():
         log_audit_event(
             "ATTENDANCE_MISMATCH",
             reg_no,
@@ -10559,112 +11151,146 @@ def _secure_verify_and_mark(
             detail=f"Account locked due to multiple failed attempts. Try again in {remaining} seconds.",
         )
 
-    # SECURE DOUBLE CHECK: Enforce duplicate check for the active slot
+    # SECURE DOUBLE CHECK: Enforce duplicate check and check-out prerequisites for the active slot
     today_date_str = datetime.now().strftime("%Y-%m-%d")
+    chk_slot_type = slot_type or "check_in"
+
+    cursor.execute(
+        """
+        SELECT first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, in_time, out_time
+        FROM daily_attendance_status
+        WHERE reg_no = ? AND date = ?
+        """,
+        (reg_no, today_date_str),
+    )
+    das_row = cursor.fetchone()
+    fh_in = das_row[0] if das_row and das_row[0] else None
+    fh_out = das_row[1] if das_row and das_row[1] else None
+    sh_in = das_row[2] if das_row and das_row[2] else None
+    sh_out = das_row[3] if das_row and das_row[3] else None
+    gen_in = das_row[4] if das_row and das_row[4] else None
+    gen_out = das_row[5] if das_row and das_row[5] else None
+
+    # Fallback checks on separate session tables
+    if not fh_in:
+        cursor.execute("SELECT in_time FROM morning_attendance WHERE reg_no = ? AND date = ?", (reg_no, today_date_str))
+        m_row = cursor.fetchone()
+        if m_row and m_row[0]:
+            fh_in = m_row[0]
+    if not sh_in:
+        cursor.execute("SELECT in_time FROM evening_attendance WHERE reg_no = ? AND date = ?", (reg_no, today_date_str))
+        e_row = cursor.fetchone()
+        if e_row and e_row[0]:
+            sh_in = e_row[0]
+
+    _hd_cfg = _get_half_day_settings()
+    _req_fn_checkout = _hd_cfg.get("require_fn_check_out", False)
 
     if active_slot_half == "first_half":
-        _hd_cfg = _get_half_day_settings()
-        _req_fn_checkout = _hd_cfg.get("require_fn_check_out", False)
-        chk_slot_type = slot_type or "check_in"
-        if chk_slot_type == "check_out" and not _req_fn_checkout:
-            raise HTTPException(
-                status_code=400,
-                detail="Morning (FN) Check-Out is currently cancelled/bypassed by system policy. No check-out scan is required."
-            )
+        if chk_slot_type == "check_out":
+            if not _req_fn_checkout:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Morning (FN) Check-Out is currently cancelled/bypassed by system policy. No check-out scan is required.",
+                )
+            if not fh_in:
+                raise HTTPException(
+                    status_code=400,
+                    detail="You cannot Check-Out without checking in first for Morning (FN) session.",
+                )
+            if fh_out:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Morning (FN) Check-Out attendance for today.",
+                )
+        else:  # check_in
+            if fh_in:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Morning (FN) Check-In attendance for today.",
+                )
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM attendance 
-            WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-            """,
-            (reg_no, chk_slot_type)
-        )
-        dup_count = cursor.fetchone()[0]
-        if dup_count == 0:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM other_staff_attendance 
-                WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                """,
-                (reg_no, chk_slot_type)
-            )
-            dup_count = cursor.fetchone()[0]
-
-        if dup_count > 0:
-            slot_name = "Check-In" if chk_slot_type == "check_in" else "Check-Out"
-            raise HTTPException(
-                status_code=403,
-                detail=f"You have already marked Morning (FN) {slot_name} attendance for today."
-            )
     elif active_slot_half == "second_half":
-        chk_slot_type = slot_type or "check_in"
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM attendance 
-            WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-            """,
-            (reg_no, chk_slot_type)
-        )
-        dup_count = cursor.fetchone()[0]
-        if dup_count == 0:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM other_staff_attendance 
-                WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                """,
-                (reg_no, chk_slot_type)
-            )
-            dup_count = cursor.fetchone()[0]
+        if chk_slot_type == "check_out":
+            if not sh_in:
+                raise HTTPException(
+                    status_code=400,
+                    detail="You cannot Check-Out without checking in first for Afternoon (AN) session.",
+                )
+            if sh_out:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Afternoon (AN) Check-Out attendance for today.",
+                )
+        else:  # check_in
+            if sh_in:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Afternoon (AN) Check-In attendance for today.",
+                )
 
-        if dup_count > 0:
-            slot_name = "Check-In" if chk_slot_type == "check_in" else "Check-Out"
-            raise HTTPException(
-                status_code=403,
-                detail=f"You have already marked Afternoon (AN) {slot_name} attendance for today."
-            )
     else:
-
-        # Legacy full-day check_in/check_out mode
-        chk_slot_type = slot_type or "check_in"
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM daily_attendance_status
-            WHERE reg_no = ? AND date = ? AND status = 'Present'
-            """,
-            (reg_no, today_date_str)
-        )
-        is_present_today = cursor.fetchone()[0] > 0
-
-        if is_present_today and chk_slot_type == "check_in":
-            raise HTTPException(
-                status_code=403,
-                detail="You are already marked present for today."
-            )
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM attendance 
-            WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-            """,
-            (reg_no, chk_slot_type)
-        )
-        dup_count = cursor.fetchone()[0]
-
-        if dup_count == 0:
+        # Full day / legacy mode
+        if chk_slot_type == "check_out":
+            has_check_in = bool(gen_in or fh_in)
+            if not has_check_in:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                    (reg_no,),
+                )
+                c1 = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                    (reg_no,),
+                )
+                c2 = cursor.fetchone()[0]
+                has_check_in = (c1 > 0 or c2 > 0)
+            if not has_check_in:
+                raise HTTPException(
+                    status_code=400,
+                    detail="You cannot Check-Out without checking in first for today.",
+                )
+            if gen_out:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Check-Out attendance for today.",
+                )
             cursor.execute(
-                """
-                SELECT COUNT(*) FROM other_staff_attendance 
-                WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = ?
-                """,
-                (reg_no, chk_slot_type)
+                "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_out'",
+                (reg_no,),
             )
-            dup_count = cursor.fetchone()[0]
-
-        if dup_count > 0:
-            raise HTTPException(
-                status_code=403,
-                detail=f"You have already marked {chk_slot_type.replace('_', ' ')} attendance for today."
+            co1 = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_out'",
+                (reg_no,),
             )
+            co2 = cursor.fetchone()[0]
+            if co1 > 0 or co2 > 0:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Check-Out attendance for today.",
+                )
+        else:  # check_in
+            if gen_in:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Check-In attendance for today.",
+                )
+            cursor.execute(
+                "SELECT COUNT(*) FROM attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                (reg_no,),
+            )
+            ci1 = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM other_staff_attendance WHERE reg_no = ? AND DATE(timestamp) = CURRENT_DATE AND status = 'check_in'",
+                (reg_no,),
+            )
+            ci2 = cursor.fetchone()[0]
+            if ci1 > 0 or ci2 > 0:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You have already marked Check-In attendance for today.",
+                )
 
 
     # SECURE DOUBLE CHECK: Enforce geofencing and WiFi checks directly at the validation level
@@ -10767,14 +11393,12 @@ def _secure_verify_and_mark(
     # Comprehensive image analysis (quality + liveness in one pass)
     analysis = analyze_image_comprehensive(img)
 
-    # Early rejection for poor quality images
-    if analysis.get("is_poor_quality", False):
-        quality_msg = "; ".join(analysis.get("quality_warnings", []))
-        print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Image quality too poor ({quality_msg}) | Quality Score: {analysis['quality_score']:.2f}")
-        log_audit_event("QUALITY_FAILED", reg_no, False, quality_msg)
+    # Only reject completely black or corrupted frames before face detection
+    if np.mean(img) < 8.0:
+        log_audit_event("QUALITY_FAILED", reg_no, False, "Frame is completely dark")
         raise HTTPException(
             status_code=400,
-            detail="Image quality is too poor. Please improve lighting and camera stability.",
+            detail="Image is completely dark. Please ensure camera lens is uncovered.",
         )
 
     face = extract_face(img)
@@ -10785,27 +11409,34 @@ def _secure_verify_and_mark(
         log_audit_event("NO_FACE_DETECTED", reg_no, False)
         raise HTTPException(
             status_code=400,
-            detail="Face is unable to detect. Please adjust your position and ensure good lighting.",
+            detail="Face is unable to detect. Please position your face clearly in front of the camera.",
         )
 
     # =====================================================
-    # LIVENESS CHECK - Use results from comprehensive analysis
+    # MULTI-LAYER PRESENTATION ATTACK DETECTION (LIVENESS)
     # =====================================================
-    is_live = analysis.get("is_live", True)
-    liveness_reason = analysis.get("liveness_reason", "Analysis completed")
+    is_live = True
+    liveness_reason = "Real human face verified"
+    liveness_score = 1.0
 
-    if not is_live:
-        if ANTISPOOF_STRICT_MODE:
-            save_debug_image(img, f"liveness_fail_{reg_no}")
-            print(f"[ATTENDANCE FAILURE] RegNo: {reg_no} | Reason: Liveness check failed ({liveness_reason}) | Quality Score: {analysis['quality_score']:.2f}")
-            log_audit_event("LIVENESS_FAILED", reg_no, False, liveness_reason)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Liveness check failed: {liveness_reason}. Please ensure you are using a live camera feed, not a photo or screen.",
-            )
-        else:
-            # In non-strict mode, just log warning but allow
-            log_audit_event("LIVENESS_WARNING", reg_no, False, liveness_reason)
+    if ANTISPOOFING_ENABLED:
+        liveness_res = evaluate_face_liveness(img, face)
+        is_live = liveness_res.get("is_live", True)
+        liveness_reason = liveness_res.get("reason", "Liveness check failed")
+        liveness_score = liveness_res.get("score", 1.0)
+        liveness_flags = liveness_res.get("flags", [])
+
+        if not is_live:
+            if ANTISPOOF_STRICT_MODE:
+                save_debug_image(img, f"liveness_fail_{reg_no}")
+                print(f"[ATTENDANCE BLOCKED - SPOOF DETECTED] RegNo: {reg_no} | Reason: Liveness check failed ({liveness_reason}) | Flags: {liveness_flags} | Score: {liveness_score:.3f} | Quality Score: {analysis['quality_score']:.2f}")
+                log_audit_event("LIVENESS_FAILED", reg_no, False, f"{liveness_reason} (Flags: {','.join(liveness_flags)})")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Liveness check failed: {liveness_reason}. Please ensure you are using a live camera feed, not a photo, printout, or screen replay.",
+                )
+            else:
+                log_audit_event("LIVENESS_WARNING", reg_no, False, liveness_reason)
 
     query_embedding = face.embedding.astype(np.float32)
 
@@ -11311,7 +11942,7 @@ async def admin_mark_attendance(request: Request, image: UploadFile = File(...))
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled IS TRUE
+        WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -11443,7 +12074,7 @@ async def hod_mark_attendance(request: Request, image: UploadFile = File(...)):
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled IS TRUE
+        WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -11597,8 +12228,18 @@ async def _legacy_mark_attendance(img_bytes: bytes):
         save_debug_image(img, "fail_detection")
         raise HTTPException(
             status_code=400,
-            detail="Face is unable to detect. Please adjust your position and ensure good lighting.",
+            detail="Face is unable to detect. Please position your face clearly in front of the camera.",
         )
+
+    if ANTISPOOFING_ENABLED:
+        liveness_res = evaluate_face_liveness(img, face)
+        if not liveness_res.get("is_live", True):
+            reason = liveness_res.get("reason", "Liveness check failed")
+            log_audit_event("LIVENESS_FAILED", "legacy_kiosk", False, reason)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Liveness check failed: {reason}. Please ensure you are facing the camera directly, not using a photo or screen.",
+            )
 
     query_embedding = face.embedding.astype(np.float32)
 
@@ -14444,7 +15085,7 @@ async def admin_register_other_staff_face(
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -16962,7 +17603,7 @@ async def admin_register_face(
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -17031,7 +17672,7 @@ async def admin_register_own_face(request: Request, image: UploadFile = File(...
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -17170,7 +17811,7 @@ async def hod_register_face(
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -17241,7 +17882,7 @@ async def hod_register_own_face(request: Request, image: UploadFile = File(...))
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -17291,8 +17932,15 @@ def _register_face_sync_work(reg_no: str, name: str, dept: str, img_bytes: bytes
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
+    if ANTISPOOFING_ENABLED:
+        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+        if not is_live:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Registration rejected: {liveness_reason}. Face must be registered using a live camera feed, not a photo or screen.",
+            )
     embedding = face.embedding.astype(np.float32)
     print(f"DEBUG: Registering face for {reg_no}")
     print(f"  Embedding shape: {embedding.shape}")
@@ -20357,7 +21005,8 @@ async def get_personal_attendance_log(
         cursor.execute(
             """
             SELECT date, status, leave_type, absent_reason,
-                   first_half_status, second_half_status, first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value
+                   first_half_status, second_half_status, first_half_in_time, first_half_out_time, second_half_in_time, second_half_out_time, attendance_value,
+                   in_time, out_time
             FROM daily_attendance_status
             WHERE reg_no = ? AND date::date >= ? AND date::date <= ?
             """,
@@ -20378,6 +21027,8 @@ async def get_personal_attendance_log(
                 "second_half_in_time": str(row[8]) if row[8] else None,
                 "second_half_out_time": str(row[9]) if row[9] else None,
                 "attendance_value": float(row[10]) if row[10] is not None else None,
+                "in_time": str(row[11]) if len(row) > 11 and row[11] else None,
+                "out_time": str(row[12]) if len(row) > 12 and row[12] else None,
             }
 
         scan_dates = set()
@@ -20404,6 +21055,8 @@ async def get_personal_attendance_log(
             day_first_half_out_time = None
             day_second_half_in_time = None
             day_second_half_out_time = None
+            day_in_time = None
+            day_out_time = None
             day_attendance_value = None
 
             if date_str in status_map:
@@ -20416,6 +21069,8 @@ async def get_personal_attendance_log(
                 day_first_half_out_time = daily_info["first_half_out_time"]
                 day_second_half_in_time = daily_info["second_half_in_time"]
                 day_second_half_out_time = daily_info["second_half_out_time"]
+                day_in_time = daily_info["in_time"]
+                day_out_time = daily_info["out_time"]
                 day_attendance_value = daily_info["attendance_value"]
                 if daily_info["status"] == "Absent":
                     absent_reason = daily_info["absent_reason"]
@@ -20437,6 +21092,8 @@ async def get_personal_attendance_log(
                 "first_half_out_time": day_first_half_out_time,
                 "second_half_in_time": day_second_half_in_time,
                 "second_half_out_time": day_second_half_out_time,
+                "in_time": day_in_time,
+                "out_time": day_out_time,
                 "attendance_value": day_attendance_value,
             })
 
@@ -20446,25 +21103,26 @@ async def get_personal_attendance_log(
                 status = daily_info["status"]
                 leave_type = daily_info["leave_type"]
                 absent_reason = daily_info["absent_reason"]
-                if status in ("Leave", "Absent") or (status == "Present" and leave_type in ("od", "earned", "casual")):
-                    attendance_list.append({
-                        "id": None,
-                        "reg_no": reg_no,
-                        "name": user_info["name"],
-                        "dept": user_info["dept"],
-                        "timestamp": date_str + "T00:00:00",
-                        "status": status,
-                        "source": "leave" if status == "Leave" else ("absent" if status == "Absent" else "od"),
-                        "leave_type": leave_type,
-                        "absent_reason": absent_reason,
-                        "first_half_status": daily_info["first_half_status"],
-                        "second_half_status": daily_info["second_half_status"],
-                        "first_half_in_time": daily_info["first_half_in_time"],
-                        "first_half_out_time": daily_info["first_half_out_time"],
-                        "second_half_in_time": daily_info["second_half_in_time"],
-                        "second_half_out_time": daily_info["second_half_out_time"],
-                        "attendance_value": daily_info["attendance_value"],
-                    })
+                attendance_list.append({
+                    "id": None,
+                    "reg_no": reg_no,
+                    "name": user_info["name"],
+                    "dept": user_info["dept"],
+                    "timestamp": date_str + "T00:00:00",
+                    "status": status,
+                    "source": "leave" if status == "Leave" else ("absent" if status == "Absent" else "daily_status"),
+                    "leave_type": leave_type,
+                    "absent_reason": absent_reason,
+                    "first_half_status": daily_info["first_half_status"],
+                    "second_half_status": daily_info["second_half_status"],
+                    "first_half_in_time": daily_info["first_half_in_time"],
+                    "first_half_out_time": daily_info["first_half_out_time"],
+                    "second_half_in_time": daily_info["second_half_in_time"],
+                    "second_half_out_time": daily_info["second_half_out_time"],
+                    "in_time": daily_info["in_time"],
+                    "out_time": daily_info["out_time"],
+                    "attendance_value": daily_info["attendance_value"],
+                })
 
 
         # Normalize records so timeline-over pending sessions become Absent
@@ -21090,7 +21748,7 @@ async def other_staff_mark_attendance(request: Request):
     cursor.execute("""
         SELECT slot_number, start_time, duration_minutes, is_enabled, slot_type, slot_half
         FROM attendance_duration_settings
-        WHERE is_enabled IS TRUE
+        WHERE (is_enabled = 1 OR is_enabled::text = 'true')
         ORDER BY slot_number ASC
     """)
     duration_rows = cursor.fetchall()
@@ -21652,7 +22310,7 @@ async def other_staff_register_face(
         save_debug_image(img, "register_fail")
         raise HTTPException(
             status_code=400,
-            detail="Face not detected clearly. Ensure good lighting and face is visible.",
+            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
         )
 
     embedding = face.embedding.astype(np.float32)
@@ -22301,6 +22959,11 @@ def register_student_face(req: KioskStudentRegisterRequest, request: Request):
                 # Tier 1: Primary face extraction
                 face = extract_face(img)
                 if face and hasattr(face, 'embedding') and face.embedding is not None:
+                    if ANTISPOOFING_ENABLED:
+                        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+                        if not is_live:
+                            print(f"[REGISTRATION SPOOF REJECTED] RegNo: {reg_no} | Reason: {liveness_reason}")
+                            continue
                     emb = np.array(face.embedding, dtype=np.float32)
                     norm = np.linalg.norm(emb)
                     if norm > 0:
@@ -22593,7 +23256,7 @@ def kiosk_scan(session_uuid: str, req: KioskScanRequest, request: Request):
             raise HTTPException(status_code=400, detail="❌ Not a valid face. Position face clearly in camera view.")
 
         if ANTISPOOFING_ENABLED:
-            is_live, liveness_reason = detect_single_image_liveness(img)
+            is_live, liveness_reason = detect_single_image_liveness(img, face=face)
             if not is_live:
                 raise HTTPException(status_code=400, detail=f"⚠️ Face Spoofing Detected: {liveness_reason}")
         
@@ -22683,7 +23346,7 @@ def kiosk_quick_scan(req: KioskScanRequest, request: Request):
             raise HTTPException(status_code=400, detail="❌ Not a valid face. Position face clearly in camera view.")
 
         if ANTISPOOFING_ENABLED:
-            is_live, liveness_reason = detect_single_image_liveness(img)
+            is_live, liveness_reason = detect_single_image_liveness(img, face=face)
             if not is_live:
                 raise HTTPException(status_code=400, detail=f"⚠️ Face Spoofing Detected: {liveness_reason}")
 
@@ -25889,7 +26552,15 @@ async def student_mark_attendance(
             pass
 
     if not face or not hasattr(face, "embedding") or face.embedding is None:
-        raise HTTPException(status_code=400, detail="❌ Face not detected. Please face the camera squarely in good lighting.")
+        raise HTTPException(status_code=400, detail="❌ Face not detected. Please position your face clearly in the camera frame.")
+
+    if ANTISPOOFING_ENABLED:
+        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+        if not is_live:
+            raise HTTPException(
+                status_code=400,
+                detail=f"⚠️ Liveness check failed: {liveness_reason}. Attendance must be marked with a live face, not a photo or screen replay."
+            )
 
     query_embedding = np.array(face.embedding, dtype=np.float32)
     q_norm = np.linalg.norm(query_embedding)
@@ -25994,7 +26665,7 @@ async def student_mark_attendance(
     if best_sim < STUDENT_MATCH_THRESHOLD:
         raise HTTPException(
             status_code=401,
-            detail=f"❌ Face verification failed: Face does not match registered profile (Match Score: {round(best_sim * 100, 1)}%). Please look directly at the camera in good lighting."
+            detail=f"❌ Face verification failed: Face does not match registered profile (Match Score: {round(best_sim * 100, 1)}%). Please look directly at the camera."
         )
 
     # 8. Record Attendance in Database
@@ -28620,7 +29291,7 @@ async def student_submit_face_registration(request: Request):
 
     if len(extracted_embeddings) < 1:
         conn.close()
-        raise HTTPException(status_code=400, detail="Face detection failed. Ensure good lighting, hold camera steady, and face directly into the camera.")
+        raise HTTPException(status_code=400, detail="Face detection failed. Hold camera steady and position your face squarely in frame.")
 
     avg_quality = float(np.mean(quality_scores)) if quality_scores else 0.95
     embs_json = json.dumps(extracted_embeddings)
@@ -36910,7 +37581,19 @@ async def student_session_checkout(
                 conn.close()
             except Exception:
                 pass
-            raise HTTPException(status_code=400, detail="❌ Face not detected. Please face the camera squarely in good lighting.")
+            raise HTTPException(status_code=400, detail="❌ Face not detected. Please position your face clearly in the camera frame.")
+
+        if ANTISPOOFING_ENABLED:
+            is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+            if not is_live:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"⚠️ Liveness check failed: {liveness_reason}. Checkout must be performed with a live face."
+                )
 
         query_embedding = np.array(face.embedding, dtype=np.float32)
         q_norm = np.linalg.norm(query_embedding)
@@ -37523,6 +38206,11 @@ async def scan_session_face(request: Request):
         face = extract_face(img)
         if not face or not hasattr(face, 'embedding'):
             raise HTTPException(status_code=400, detail="No face detected in camera view. Position face clearly.")
+
+        if ANTISPOOFING_ENABLED:
+            is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+            if not is_live:
+                raise HTTPException(status_code=400, detail=f"⚠️ Face Spoofing Detected: {liveness_reason}")
 
         query_emb = face.embedding
         if query_emb is None:

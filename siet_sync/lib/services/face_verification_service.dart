@@ -340,42 +340,73 @@ class FaceVerificationService {
   }) {
     final msg = rawError.toLowerCase();
 
-    if (msg.contains('blurry') || msg.contains('hold camera steady')) {
-      return 'Image is blurry. Hold your phone steady and keep your face inside the frame.';
+    // 1. Presentation Attack Detection (Photo, Video, Screen Replay, Bezel)
+    if (msg.contains('liveness') ||
+        msg.contains('spoof') ||
+        msg.contains('photo') ||
+        msg.contains('screen') ||
+        msg.contains('replay') ||
+        msg.contains('border') ||
+        msg.contains('bezel') ||
+        msg.contains('printout')) {
+      return 'Liveness check failed: Photo, printout, or video replay rejected. Please use a live camera view.';
     }
-    if (msg.contains('dim') || msg.contains('lighting')) {
-      return 'Lighting is too low. Move to a brighter place and try again.';
+
+    // 2. Face Alignment & Detection
+    if (msg.contains('no face') ||
+        msg.contains('unable to detect') ||
+        msg.contains('face not detected') ||
+        msg.contains('face is unable')) {
+      return 'No face detected. Center your face in the camera frame and try again.';
     }
-    if (msg.contains('too bright') || msg.contains('overexposed')) {
-      return 'Image is too bright. Avoid strong backlight and try again.';
-    }
-    if (msg.contains('no face') || msg.contains('unable to detect')) {
-      return 'No face detected. Center your face in the camera and try again.';
-    }
+
+    // 3. Multiple Faces
     if (msg.contains('multiple faces')) {
       return 'Multiple faces detected. Make sure only your face is visible.';
     }
-    if (msg.contains('does not match') || statusCode == 401) {
+
+    // 4. Identity Mismatch
+    if (msg.contains('does not match') ||
+        msg.contains('verification failed') ||
+        statusCode == 401) {
       return 'Face verification failed. Your face does not match the registered profile.';
     }
+
+    // 5. Camera stability & motion blur
+    if (msg.contains('blurry') || msg.contains('hold camera steady')) {
+      return 'Image is blurry. Hold your phone steady and keep your face inside the frame.';
+    }
+
+    // 6. Complete darkness (uncovered lens / pitch black only)
+    if (msg.contains('pitch dark') || msg.contains('completely dark')) {
+      return 'Camera view is completely dark. Please ensure camera lens is uncovered.';
+    }
+
+    // 7. Overexposure / strong direct glare
+    if (msg.contains('too bright') || msg.contains('overexposed')) {
+      return 'Image is too bright. Avoid strong direct glare and try again.';
+    }
+
     if (msg.contains('face not registered')) {
       return 'Face not registered. Please register your face before marking attendance.';
-    }
-    if (msg.contains('liveness')) {
-      return 'Liveness check failed. Use a live camera view (not photo/screen replay).';
     }
     if (statusCode == 423 || msg.contains('locked')) {
       return 'Too many failed attempts. Account is temporarily locked. Try again later.';
     }
-    if (msg.contains('outside') || msg.contains('fence') || msg.contains('allowed location') || msg.contains('wifi') || msg.contains('wi-fi')) {
+    if (msg.contains('outside') ||
+        msg.contains('fence') ||
+        msg.contains('allowed location') ||
+        msg.contains('wifi') ||
+        msg.contains('wi-fi')) {
       return 'You are outside the allowed geofence area. Please move inside the campus to mark your attendance.';
     }
     if (msg.contains('vpn') || msg.contains('proxy')) {
       return 'VPN/proxy detected. Turn it off and try again.';
     }
     if (msg.contains('not allowed at this time') ||
-        msg.contains('available slots')) {
-      return 'Attendance is not allowed at this time. Please mark attendance during your allowed slot.';
+        msg.contains('available slots') ||
+        msg.contains('already marked')) {
+      return rawError.trim().isNotEmpty ? rawError : 'Attendance is not allowed at this time.';
     }
     if (msg.contains('empty image')) {
       return 'No image received. Please capture your face again.';
