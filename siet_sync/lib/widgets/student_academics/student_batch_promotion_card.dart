@@ -537,24 +537,23 @@ class _StudentBatchPromotionCardState extends State<StudentBatchPromotionCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Batch Lifecycle & Student Promotion Engine', style: AdminTextStyles.titleMd(isDark)),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Manage batch progression, active semester mapping, and execute bulk student promotion',
-                      style: AdminTextStyles.labelSm(isDark),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              FilledButton.icon(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 650;
+
+              final titleSection = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Batch Lifecycle & Student Promotion Engine', style: AdminTextStyles.titleMd(isDark)),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Manage batch progression, active semester mapping, and execute bulk student promotion',
+                    style: AdminTextStyles.labelSm(isDark),
+                  ),
+                ],
+              );
+
+              final wizardBtn = FilledButton.icon(
                 onPressed: _isPromoting ? null : () => _openPromotionWizard(null),
                 icon: _isPromoting
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -565,8 +564,28 @@ class _StudentBatchPromotionCardState extends State<StudentBatchPromotionCard> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 ),
-              ),
-            ],
+              );
+
+              if (isNarrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleSection,
+                    const SizedBox(height: 12),
+                    wizardBtn,
+                  ],
+                );
+              }
+
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(child: titleSection),
+                  const SizedBox(width: 12),
+                  wizardBtn,
+                ],
+              );
+            },
           ),
           const SizedBox(height: 20),
 

@@ -462,7 +462,7 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
       return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
     }
 
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

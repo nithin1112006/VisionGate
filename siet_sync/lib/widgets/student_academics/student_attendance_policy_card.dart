@@ -241,24 +241,23 @@ class _StudentAttendancePolicyCardState extends State<StudentAttendancePolicyCar
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Student Attendance Eligibility Rules', style: AdminTextStyles.titleMd(isDark)),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Set minimum attendance percentage criteria for end-semester university exam hall ticket issuance',
-                          style: AdminTextStyles.labelSm(isDark),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton.icon(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNarrow = constraints.maxWidth < 600;
+
+                  final titleSection = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Student Attendance Eligibility Rules', style: AdminTextStyles.titleMd(isDark)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Set minimum attendance percentage criteria for end-semester university exam hall ticket issuance',
+                        style: AdminTextStyles.labelSm(isDark),
+                      ),
+                    ],
+                  );
+
+                  final saveButton = ElevatedButton.icon(
                     onPressed: widget.isSaving ? null : widget.onSave,
                     icon: widget.isSaving
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -268,9 +267,30 @@ class _StudentAttendancePolicyCardState extends State<StudentAttendancePolicyCar
                       backgroundColor: AdminColors.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                     ),
-                  ),
-                ],
+                  );
+
+                  if (isNarrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        titleSection,
+                        const SizedBox(height: 12),
+                        saveButton,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(child: titleSection),
+                      const SizedBox(width: 12),
+                      saveButton,
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 20),
 
@@ -455,24 +475,23 @@ class _StudentAttendancePolicyCardState extends State<StudentAttendancePolicyCar
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Institutional Academic Milestones', style: AdminTextStyles.titleMd(isDark)),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Configure internal assessment dates, model examinations, and university exam schedules',
-                          style: AdminTextStyles.labelSm(isDark),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNarrow = constraints.maxWidth < 600;
+
+                  final titleSection = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Institutional Academic Milestones', style: AdminTextStyles.titleMd(isDark)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Configure internal assessment dates, model examinations, and university exam schedules',
+                        style: AdminTextStyles.labelSm(isDark),
+                      ),
+                    ],
+                  );
+
+                  final addBtn = OutlinedButton.icon(
                     onPressed: () => _openMilestoneDialog(),
                     icon: const Icon(Icons.add_rounded, size: 16),
                     label: const Text('Add Milestone'),
@@ -480,9 +499,30 @@ class _StudentAttendancePolicyCardState extends State<StudentAttendancePolicyCar
                       foregroundColor: AdminColors.primary,
                       side: const BorderSide(color: AdminColors.primary),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
-                  ),
-                ],
+                  );
+
+                  if (isNarrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        titleSection,
+                        const SizedBox(height: 12),
+                        addBtn,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(child: titleSection),
+                      const SizedBox(width: 12),
+                      addBtn,
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 16),
 
@@ -505,54 +545,125 @@ class _StudentAttendancePolicyCardState extends State<StudentAttendancePolicyCar
                     final String end = m['end'] ?? '';
                     final String cat = m['category'] ?? 'Academic';
 
-                    return Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AdminColors.getCardTinted(isDark),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
+                    return LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isItemNarrow = constraints.maxWidth < 560;
+
+                        if (isItemNarrow) {
+                          return Container(
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: AdminColors.primary.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(8),
+                              color: AdminColors.getCardTinted(isDark),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: AdminColors.getBorder(isDark)),
                             ),
-                            child: const Icon(Icons.flag_rounded, color: AdminColors.primary, size: 20),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  name,
-                                  style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 14),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(7),
+                                      decoration: BoxDecoration(
+                                        color: AdminColors.primary.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(Icons.flag_rounded, color: AdminColors.primary, size: 18),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        name,
+                                        style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    AdminBadge(label: cat, color: AdminColors.primary),
+                                  ],
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  end.isNotEmpty ? '$start  →  $end' : start,
-                                  style: AdminTextStyles.bodySm(isDark),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Icon(Icons.date_range_rounded, size: 14, color: AdminColors.getTextSecondary(isDark)),
+                                    const SizedBox(width: 5),
+                                    Expanded(
+                                      child: Text(
+                                        end.isNotEmpty ? '$start  →  $end' : start,
+                                        style: AdminTextStyles.bodySm(isDark),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.edit_rounded, size: 17),
+                                      tooltip: 'Edit Milestone',
+                                      padding: const EdgeInsets.all(6),
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => _openMilestoneDialog(initial: m, editIndex: i),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline_rounded, size: 17, color: AdminColors.danger),
+                                      tooltip: 'Delete Milestone',
+                                      padding: const EdgeInsets.all(6),
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => _deleteMilestone(i),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
+                          );
+                        }
+
+                        return Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AdminColors.getCardTinted(isDark),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AdminColors.getBorder(isDark)),
                           ),
-                          AdminBadge(label: cat, color: AdminColors.primary),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            icon: const Icon(Icons.edit_rounded, size: 18),
-                            tooltip: 'Edit Milestone',
-                            onPressed: () => _openMilestoneDialog(initial: m, editIndex: i),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: AdminColors.primary.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.flag_rounded, color: AdminColors.primary, size: 20),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 14),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      end.isNotEmpty ? '$start  →  $end' : start,
+                                      style: AdminTextStyles.bodySm(isDark),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              AdminBadge(label: cat, color: AdminColors.primary),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.edit_rounded, size: 18),
+                                tooltip: 'Edit Milestone',
+                                onPressed: () => _openMilestoneDialog(initial: m, editIndex: i),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AdminColors.danger),
+                                tooltip: 'Delete Milestone',
+                                onPressed: () => _deleteMilestone(i),
+                              ),
+                            ],
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AdminColors.danger),
-                            tooltip: 'Delete Milestone',
-                            onPressed: () => _deleteMilestone(i),
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 ),

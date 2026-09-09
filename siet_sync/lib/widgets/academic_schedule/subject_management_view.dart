@@ -595,7 +595,7 @@ class _SubjectManagementViewState extends State<SubjectManagementView> {
         final screenWidth = constraints.maxWidth;
         final isCompactScreen = screenWidth < 768;
 
-        return SingleChildScrollView(
+        return Padding(
           padding: EdgeInsets.symmetric(horizontal: isCompactScreen ? 14 : 24, vertical: 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

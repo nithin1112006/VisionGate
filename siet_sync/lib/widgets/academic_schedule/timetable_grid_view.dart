@@ -268,10 +268,9 @@ class TimetableGridView extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
           // Weekly Hours Tracker Chips
           if (subjectAllocations.isNotEmpty)
             Padding(
@@ -346,7 +345,7 @@ class TimetableGridView extends StatelessWidget {
           // Timetable Matrix Grid
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: SingleChildScrollView(
+            child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               child: Container(
                 decoration: BoxDecoration(
@@ -503,8 +502,7 @@ class TimetableGridView extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildSlotContent(Map<String, dynamic> slot, bool isDark) {

@@ -71,6 +71,8 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
   final List<String> _sections = ['A', 'B', 'C', 'D'];
   final List<String> _departments = ['CSE', 'ECE', 'EEE', 'MECH', 'CIVIL', 'IT', 'AI & ML', 'Data Science'];
 
+  int _selectedTabIndex = 0;
+
   bool get _isHod => widget.userRole.toLowerCase().contains('hod');
 
   @override
@@ -190,39 +192,59 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
                       style: GoogleFonts.inter(fontSize: 12.5, color: AdminColors.getTextSecondary(isDark)),
                     ),
                     const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<int>(
-                            initialValue: targetYear,
-                            decoration: InputDecoration(
-                              labelText: 'Target Year of Study',
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                            items: const [
-                              DropdownMenuItem(value: 1, child: Text('1st Year')),
-                              DropdownMenuItem(value: 2, child: Text('2nd Year')),
-                              DropdownMenuItem(value: 3, child: Text('3rd Year')),
-                              DropdownMenuItem(value: 4, child: Text('4th Year (Final)')),
+                    LayoutBuilder(
+                      builder: (context, dlgConstraints) {
+                        final isCompact = dlgConstraints.maxWidth < 420;
+
+                        final yearField = DropdownButtonFormField<int>(
+                          initialValue: targetYear,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: 'Target Year of Study',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 1, child: Text('1st Year')),
+                            DropdownMenuItem(value: 2, child: Text('2nd Year')),
+                            DropdownMenuItem(value: 3, child: Text('3rd Year')),
+                            DropdownMenuItem(value: 4, child: Text('4th Year (Final)')),
+                          ],
+                          onChanged: (v) => setDlgState(() => targetYear = v ?? targetYear),
+                        );
+
+                        final semField = DropdownButtonFormField<int>(
+                          initialValue: targetSem,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: 'Target Semester',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          items: List.generate(8, (i) => i + 1)
+                              .map((s) => DropdownMenuItem(value: s, child: Text('Semester $s')))
+                              .toList(),
+                          onChanged: (v) => setDlgState(() => targetSem = v ?? targetSem),
+                        );
+
+                        if (isCompact) {
+                          return Column(
+                            children: [
+                              yearField,
+                              const SizedBox(height: 12),
+                              semField,
                             ],
-                            onChanged: (v) => setDlgState(() => targetYear = v ?? targetYear),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: DropdownButtonFormField<int>(
-                            initialValue: targetSem,
-                            decoration: InputDecoration(
-                              labelText: 'Target Semester',
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                            items: List.generate(8, (i) => i + 1)
-                                .map((s) => DropdownMenuItem(value: s, child: Text('Semester $s')))
-                                .toList(),
-                            onChanged: (v) => setDlgState(() => targetSem = v ?? targetSem),
-                          ),
-                        ),
-                      ],
+                          );
+                        }
+
+                        return Row(
+                          children: [
+                            Expanded(child: yearField),
+                            const SizedBox(width: 12),
+                            Expanded(child: semField),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
                     if (dryRunResult != null) ...[
@@ -542,375 +564,444 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final currentYearCfg = _yearConfigs[_selectedYearIndex];
-    final isCurriculumTab = _tabController.index == 3;
+    final isCurriculumTab = _selectedTabIndex == 4;
 
-    return Column(
-      children: [
-        // Top Control Header
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          decoration: BoxDecoration(
-            color: AdminColors.getCard(isDark),
-            border: Border(bottom: BorderSide(color: AdminColors.getBorder(isDark))),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Row 1: Title & Main Action Buttons
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final isNarrow = constraints.maxWidth < 900;
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildTopHeader(isDark, currentYearCfg, isCurriculumTab),
+          _buildTabBar(isDark),
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 60),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else
+            _buildActiveTabContent(isDark),
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
 
-                  final titleSection = Row(
+  Widget _buildTabBar(bool isDark) {
+    final tabs = [
+      {'label': 'Weekly Timetable', 'icon': Icons.grid_view_rounded},
+      {'label': 'Date View & Overrides', 'icon': Icons.calendar_month_rounded},
+      {'label': 'Class Advisors', 'icon': Icons.badge_rounded},
+      {'label': 'Subject Allocations', 'icon': Icons.assignment_ind_rounded},
+      {'label': 'Subjects & Curriculum', 'icon': Icons.menu_book_rounded},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AdminColors.getCard(isDark),
+        border: Border(bottom: BorderSide(color: AdminColors.getBorder(isDark), width: 1)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: List.generate(tabs.length, (idx) {
+            final isSel = _selectedTabIndex == idx;
+            final t = tabs[idx];
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InkWell(
+                onTap: () {
+                  setState(() {
+                    _selectedTabIndex = idx;
+                    _tabController.index = idx;
+                  });
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: isSel ? AdminColors.primary : (isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF1F5F9)),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isSel ? AdminColors.primary : AdminColors.getBorder(isDark).withValues(alpha: 0.6),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isCurriculumTab ? Colors.indigo.withValues(alpha: 0.12) : AdminColors.primarySoft,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(
-                          isCurriculumTab ? Icons.menu_book_rounded : Icons.calendar_month_rounded,
-                          color: isCurriculumTab ? Colors.indigo : AdminColors.primary,
-                          size: 22,
+                      Icon(t['icon'] as IconData, size: 14, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
+                      const SizedBox(width: 6),
+                      Text(
+                        t['label'] as String,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: isSel ? FontWeight.w600 : FontWeight.w500,
+                          color: isSel ? Colors.white : AdminColors.getTextPrimary(isDark),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isCurriculumTab
-                                  ? 'Department Curriculum & Course Catalog'
-                                  : 'Academic Schedule & Timetable Matrix',
-                              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, color: AdminColors.getTextPrimary(isDark)),
-                            ),
-                            Text(
-                              isCurriculumTab
-                                  ? 'Centralized syllabus, theory & lab courses, credit framework, and degree structure'
-                                  : 'Interactive Weekly Timetables, Period Rules, Class Advisors, and Subject Matrix',
-                              style: GoogleFonts.inter(fontSize: 12, color: AdminColors.getTextSecondary(isDark)),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (isNarrow)
-                        IconButton(
-                          onPressed: _loadAllData,
-                          icon: const Icon(Icons.refresh_rounded),
-                          tooltip: 'Refresh',
-                        ),
                     ],
-                  );
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  }
 
-                  final actionsList = [
-                    if (!isCurriculumTab) ...[
-                      OutlinedButton.icon(
-                        onPressed: _openBatchPromotionDialog,
-                        icon: const Icon(Icons.upgrade_rounded, size: 16, color: Colors.teal),
-                        label: const Text('Promote Batch'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.teal,
-                          side: const BorderSide(color: Colors.teal),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _openWeeklyBuilderDialog,
-                        icon: const Icon(Icons.speed_rounded, size: 16, color: Colors.purple),
-                        label: const Text('Weekly Builder'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.purple,
-                          side: const BorderSide(color: Colors.purple),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _openDayManagementDialog,
-                        icon: const Icon(Icons.date_range_rounded, size: 16),
-                        label: const Text('Manage Days'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AdminColors.primary,
-                          side: const BorderSide(color: AdminColors.primary),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _openCopyTimetableDialog,
-                        icon: const Icon(Icons.copy_all_rounded, size: 16),
-                        label: const Text('Clone Timetable'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AdminColors.primary,
-                          side: const BorderSide(color: AdminColors.primary),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _openPeriodConfigDialog,
-                        icon: const Icon(Icons.tune_rounded, size: 16),
-                        label: const Text('Period & Breaks'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AdminColors.primary,
-                          side: const BorderSide(color: AdminColors.primary),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    if (!isNarrow)
-                      IconButton(
-                        onPressed: _loadAllData,
-                        icon: const Icon(Icons.refresh_rounded),
-                        tooltip: 'Refresh',
-                      ),
-                  ];
+  Widget _buildActiveTabContent(bool isDark) {
+    switch (_selectedTabIndex) {
+      case 0:
+        return TimetableGridView(
+          key: const PageStorageKey('timetable_grid'),
+          token: widget.token,
+          dept: _selectedDept,
+          batch: _selectedBatch,
+          semester: _selectedSemester,
+          section: _selectedSection,
+          timeline: _timeline,
+          slots: _slots,
+          facultyPool: _facultyPool,
+          subjectAllocations: _subjectAllocations,
+          availableDepartments: _availableDepartments,
+          workingDays: _workingDays,
+          onSlotUpdated: _loadAllData,
+        );
+      case 1:
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: DateTimetableView(
+            key: const PageStorageKey('date_timetable'),
+            token: widget.token,
+            dept: _selectedDept,
+            batch: _selectedBatch,
+            semester: _selectedSemester,
+            section: _selectedSection,
+            isEditableByAdmin: true,
+            onScheduleChanged: _loadAllData,
+          ),
+        );
+      case 2:
+        return ClassAdvisorView(
+          key: const PageStorageKey('class_advisors'),
+          token: widget.token,
+          dept: _selectedDept,
+          batch: _selectedBatch,
+          semester: _selectedSemester,
+          section: _selectedSection,
+          facultyPool: _facultyPool,
+          availableDepartments: _availableDepartments,
+          isHod: _isHod,
+          onAdvisorUpdated: _loadAllData,
+        );
+      case 3:
+        return SubjectAllocationView(
+          key: const PageStorageKey('subject_allocations'),
+          token: widget.token,
+          dept: _selectedDept,
+          batch: _selectedBatch,
+          semester: _selectedSemester,
+          section: _selectedSection,
+          allocations: _subjectAllocations,
+          facultyPool: _facultyPool,
+          availableDepartments: _availableDepartments,
+          onAllocationUpdated: _loadAllData,
+        );
+      case 4:
+        return SubjectManagementView(
+          key: const PageStorageKey('subject_management'),
+          token: widget.token,
+          userRole: widget.userRole,
+          userDept: widget.userDept,
+          currentSelectedDept: _selectedDept,
+          onSubjectCatalogChanged: _loadAllData,
+          onDepartmentChanged: (dept) {
+            setState(() => _selectedDept = dept);
+            _loadAllData();
+          },
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
 
-                  if (isNarrow) {
-                    return Column(
+  Widget _buildTopHeader(bool isDark, _YearConfig currentYearCfg, bool isCurriculumTab) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+      decoration: BoxDecoration(
+        color: AdminColors.getCard(isDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Row 1: Title & Main Action Buttons
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 900;
+
+              final titleSection = Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: isCurriculumTab ? Colors.indigo.withValues(alpha: 0.12) : AdminColors.primarySoft,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      isCurriculumTab ? Icons.menu_book_rounded : Icons.calendar_month_rounded,
+                      color: isCurriculumTab ? Colors.indigo : AdminColors.primary,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        titleSection,
-                        if (!isCurriculumTab) ...[
-                          const SizedBox(height: 10),
-                          SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(children: actionsList),
-                          ),
-                        ],
+                        Text(
+                          isCurriculumTab
+                              ? 'Department Curriculum & Course Catalog'
+                              : 'Academic Schedule & Timetable Matrix',
+                          style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, color: AdminColors.getTextPrimary(isDark)),
+                        ),
+                        Text(
+                          isCurriculumTab
+                              ? 'Centralized syllabus, theory & lab courses, credit framework, and degree structure'
+                              : 'Interactive Weekly Timetables, Period Rules, Class Advisors, and Subject Matrix',
+                          style: GoogleFonts.inter(fontSize: 12, color: AdminColors.getTextSecondary(isDark)),
+                        ),
                       ],
-                    );
-                  }
+                    ),
+                  ),
+                  if (isNarrow)
+                    IconButton(
+                      onPressed: _loadAllData,
+                      icon: const Icon(Icons.refresh_rounded),
+                      tooltip: 'Refresh',
+                    ),
+                ],
+              );
 
-                  return Row(
-                    children: [
-                      Expanded(child: titleSection),
-                      ...actionsList,
+              final actionsList = [
+                if (!isCurriculumTab) ...[
+                  OutlinedButton.icon(
+                    onPressed: _openBatchPromotionDialog,
+                    icon: const Icon(Icons.upgrade_rounded, size: 16, color: Colors.teal),
+                    label: const Text('Promote Batch'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.teal,
+                      side: const BorderSide(color: Colors.teal),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _openWeeklyBuilderDialog,
+                    icon: const Icon(Icons.speed_rounded, size: 16, color: Colors.purple),
+                    label: const Text('Weekly Builder'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.purple,
+                      side: const BorderSide(color: Colors.purple),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _openDayManagementDialog,
+                    icon: const Icon(Icons.date_range_rounded, size: 16),
+                    label: const Text('Manage Days'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AdminColors.primary,
+                      side: const BorderSide(color: AdminColors.primary),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _openCopyTimetableDialog,
+                    icon: const Icon(Icons.copy_all_rounded, size: 16),
+                    label: const Text('Clone Timetable'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AdminColors.primary,
+                      side: const BorderSide(color: AdminColors.primary),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _openPeriodConfigDialog,
+                    icon: const Icon(Icons.tune_rounded, size: 16),
+                    label: const Text('Period & Breaks'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AdminColors.primary,
+                      side: const BorderSide(color: AdminColors.primary),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                if (!isNarrow)
+                  IconButton(
+                    onPressed: _loadAllData,
+                    icon: const Icon(Icons.refresh_rounded),
+                    tooltip: 'Refresh',
+                  ),
+              ];
+
+              if (isNarrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleSection,
+                    if (!isCurriculumTab) ...[
+                      const SizedBox(height: 10),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(children: actionsList),
+                      ),
                     ],
-                  );
-                },
-              ),
-              const SizedBox(height: 14),
-
-              // Row 2: High-Tech Academic Navigation Bar (Year, Sem, Section, Dept)
-              Wrap(
-                spacing: 12,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _buildDeptSelector(isDark),
-
-                  if (!isCurriculumTab) ...[
-                    // 1. Year of Study Switcher Pills
-                    Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: List.generate(_yearConfigs.length, (i) {
-                          final y = _yearConfigs[i];
-                          final isSel = _selectedYearIndex == i;
-                          return InkWell(
-                            onTap: () => _onYearSelected(i),
-                            borderRadius: BorderRadius.circular(8),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: isSel ? AdminColors.primary : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.school_rounded, size: 14, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    y.title,
-                                    style: GoogleFonts.inter(fontSize: 12, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
-                      ),
-                    ),
-
-                    // 2. Active Semester Selector
-                    Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: currentYearCfg.semesters.map((sem) {
-                          final isSel = _selectedSemester == sem;
-                          return InkWell(
-                            onTap: () {
-                              setState(() => _selectedSemester = sem);
-                              _loadAllData();
-                            },
-                            borderRadius: BorderRadius.circular(8),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: isSel ? AdminColors.primary : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Sem $sem',
-                                style: GoogleFonts.inter(fontSize: 12, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
-
-                    // 3. Section Selector Pills
-                    Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: _sections.map((sec) {
-                          final isSel = _selectedSection == sec;
-                          return InkWell(
-                            onTap: () {
-                              setState(() => _selectedSection = sec);
-                              _loadAllData();
-                            },
-                            borderRadius: BorderRadius.circular(8),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: isSel ? AdminColors.primary : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Sec $sec',
-                                style: GoogleFonts.inter(fontSize: 12, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
                   ],
-                ],
-              ),
-              const SizedBox(height: 12),
+                );
+              }
 
-              // Tab Bar Navigation
-              TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                labelColor: AdminColors.primary,
-                unselectedLabelColor: AdminColors.getTextSecondary(isDark),
-                indicatorColor: AdminColors.primary,
-                indicatorWeight: 3,
-                labelStyle: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700),
-                unselectedLabelStyle: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500),
-                tabs: const [
-                  Tab(icon: Icon(Icons.grid_view_rounded, size: 16), text: 'Weekly Timetable'),
-                  Tab(icon: Icon(Icons.calendar_month_rounded, size: 16), text: 'Date View & Overrides'),
-                  Tab(icon: Icon(Icons.badge_rounded, size: 16), text: 'Class Advisors'),
-                  Tab(icon: Icon(Icons.assignment_ind_rounded, size: 16), text: 'Subject Allocations'),
-                  Tab(icon: Icon(Icons.menu_book_rounded, size: 16), text: 'Subjects & Curriculum'),
+              return Row(
+                children: [
+                  Expanded(child: titleSection),
+                  ...actionsList,
                 ],
-              ),
+              );
+            },
+          ),
+          const SizedBox(height: 14),
+
+          // Row 2: High-Tech Academic Navigation Bar (Year, Sem, Section, Dept)
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _buildDeptSelector(isDark),
+
+              if (!isCurriculumTab) ...[
+                // 1. Year of Study Switcher Pills
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AdminColors.getBorder(isDark)),
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(_yearConfigs.length, (i) {
+                        final y = _yearConfigs[i];
+                        final isSel = _selectedYearIndex == i;
+                        return InkWell(
+                          onTap: () => _onYearSelected(i),
+                          borderRadius: BorderRadius.circular(8),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: isSel ? AdminColors.primary : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.school_rounded, size: 13, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  y.title,
+                                  style: GoogleFonts.inter(fontSize: 11.5, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                ),
+
+                // 2. Active Semester Selector
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AdminColors.getBorder(isDark)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: currentYearCfg.semesters.map((sem) {
+                      final isSel = _selectedSemester == sem;
+                      return InkWell(
+                        onTap: () {
+                          setState(() => _selectedSemester = sem);
+                          _loadAllData();
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isSel ? AdminColors.primary : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Sem $sem',
+                            style: GoogleFonts.inter(fontSize: 11.5, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+
+                // 3. Section Selector Pills
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AdminColors.getBorder(isDark)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: _sections.map((sec) {
+                      final isSel = _selectedSection == sec;
+                      return InkWell(
+                        onTap: () {
+                          setState(() => _selectedSection = sec);
+                          _loadAllData();
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isSel ? AdminColors.primary : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Sec $sec',
+                            style: GoogleFonts.inter(fontSize: 11.5, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500, color: isSel ? Colors.white : AdminColors.getTextSecondary(isDark)),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
             ],
           ),
-        ),
-
-        // Main Content Area
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    TimetableGridView(
-                      token: widget.token,
-                      dept: _selectedDept,
-                      batch: _selectedBatch,
-                      semester: _selectedSemester,
-                      section: _selectedSection,
-                      timeline: _timeline,
-                      slots: _slots,
-                      facultyPool: _facultyPool,
-                      subjectAllocations: _subjectAllocations,
-                      availableDepartments: _availableDepartments,
-                      workingDays: _workingDays,
-                      onSlotUpdated: _loadAllData,
-                    ),
-                    SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: DateTimetableView(
-                        token: widget.token,
-                        dept: _selectedDept,
-                        batch: _selectedBatch,
-                        semester: _selectedSemester,
-                        section: _selectedSection,
-                        isEditableByAdmin: true,
-                        onScheduleChanged: _loadAllData,
-                      ),
-                    ),
-                    ClassAdvisorView(
-                      token: widget.token,
-                      dept: _selectedDept,
-                      batch: _selectedBatch,
-                      semester: _selectedSemester,
-                      section: _selectedSection,
-                      facultyPool: _facultyPool,
-                      availableDepartments: _availableDepartments,
-                      isHod: _isHod,
-                      onAdvisorUpdated: _loadAllData,
-                    ),
-                    SubjectAllocationView(
-                      token: widget.token,
-                      dept: _selectedDept,
-                      batch: _selectedBatch,
-                      semester: _selectedSemester,
-                      section: _selectedSection,
-                      allocations: _subjectAllocations,
-                      facultyPool: _facultyPool,
-                      availableDepartments: _availableDepartments,
-                      onAllocationUpdated: _loadAllData,
-                    ),
-                    SubjectManagementView(
-                      token: widget.token,
-                      userRole: widget.userRole,
-                      userDept: widget.userDept,
-                      currentSelectedDept: _selectedDept,
-                      onSubjectCatalogChanged: _loadAllData,
-                      onDepartmentChanged: (dept) {
-                        setState(() => _selectedDept = dept);
-                        _loadAllData();
-                      },
-                    ),
-                  ],
-                ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

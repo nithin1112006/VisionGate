@@ -116,7 +116,7 @@ class _VenueManagementViewState extends State<VenueManagementView> {
     setState(() => _isLoading = true);
     try {
       var urlStr = '${CollegeIPConfig.defaultURL}/api/v1/academics/venues?dept=ALL&';
-      if (_selectedType != 'ALL') urlStr += 'venue_type=$_selectedType&';
+      if (_selectedType != 'ALL') urlStr += 'venue_type=${Uri.encodeComponent(_selectedType.trim())}&';
       if (_selectedBlock != 'ALL') urlStr += 'block=${Uri.encodeComponent(_selectedBlock)}&';
       if (_searchQuery.trim().isNotEmpty) urlStr += 'search=${Uri.encodeComponent(_searchQuery.trim())}&';
 
@@ -167,32 +167,69 @@ class _VenueManagementViewState extends State<VenueManagementView> {
     }
   }
 
-  // Visual type styling helpers
+  // Visual type styling helpers with robust alias matching
+  static bool _matchesCategory(String venueType, String categoryCode) {
+    if (categoryCode.toUpperCase() == 'ALL') return true;
+    final vt = venueType.toUpperCase().replaceAll('_', '').replaceAll(' ', '');
+    final cc = categoryCode.toUpperCase().replaceAll('_', '').replaceAll(' ', '');
+    if (vt == cc) return true;
+    if ((cc == 'LH' || cc == 'LECTUREHALL') && (vt == 'LH' || vt == 'LECTUREHALL')) return true;
+    if ((cc == 'LAB' || cc == 'LABORATORY') && (vt == 'LAB' || vt == 'LABORATORY')) return true;
+    if ((cc == 'SMART' || cc == 'SMARTCLASSROOM') && (vt == 'SMART' || vt == 'SMARTCLASSROOM')) return true;
+    if ((cc == 'SEM' || cc == 'SEMINARHALL' || cc == 'SEMINAR') && (vt == 'SEM' || vt == 'SEMINARHALL' || vt == 'SEMINAR')) return true;
+    if ((cc == 'AUD' || cc == 'AUDITORIUM') && (vt == 'AUD' || vt == 'AUDITORIUM')) return true;
+    if ((cc == 'WS' || cc == 'WORKSHOP') && (vt == 'WS' || vt == 'WORKSHOP')) return true;
+    if ((cc == 'TUT' || cc == 'TUTORIALROOM' || cc == 'TUTORIAL') && (vt == 'TUT' || vt == 'TUTORIALROOM' || vt == 'TUTORIAL')) return true;
+    if ((cc == 'CONF' || cc == 'CONFERENCEHALL' || cc == 'CONFERENCE') && (vt == 'CONF' || vt == 'CONFERENCEHALL' || vt == 'CONFERENCE')) return true;
+    return false;
+  }
+
+  Map<String, dynamic>? _findCategoryForType(String type) {
+    for (final c in _facilityCategories) {
+      final code = (c['category_code'] ?? '').toString();
+      final name = (c['category_name'] ?? '').toString();
+      if (_matchesCategory(type, code) || _matchesCategory(type, name)) {
+        return c;
+      }
+    }
+    return null;
+  }
+
   Color _getTypeColor(String type) {
-    final match = _facilityCategories.firstWhere(
-      (c) => (c['category_code'] ?? '').toString().toUpperCase() == type.toUpperCase(),
-      orElse: () => {},
-    );
-    if (match.isNotEmpty && match['color_hex'] != null) {
+    final match = _findCategoryForType(type);
+    if (match != null && match['color_hex'] != null) {
       return _parseHexColor(match['color_hex']);
     }
 
     switch (type.toUpperCase()) {
+      case 'LAB':
       case 'LABORATORY':
         return const Color(0xFF8B5CF6);
+      case 'LH':
       case 'LECTURE_HALL':
+      case 'LECTURE HALL':
         return const Color(0xFF2563EB);
+      case 'SMART':
       case 'SMART_CLASSROOM':
+      case 'SMART CLASSROOM':
         return const Color(0xFF10B981);
+      case 'SEM':
       case 'SEMINAR_HALL':
+      case 'SEMINAR HALL':
         return const Color(0xFFF59E0B);
+      case 'AUD':
       case 'AUDITORIUM':
         return const Color(0xFFEC4899);
+      case 'WS':
       case 'WORKSHOP':
         return const Color(0xFFEA580C);
+      case 'TUT':
       case 'TUTORIAL_ROOM':
+      case 'TUTORIAL ROOM':
         return const Color(0xFF06B6D4);
+      case 'CONF':
       case 'CONFERENCE_HALL':
+      case 'CONFERENCE HALL':
         return const Color(0xFF6366F1);
       default:
         return const Color(0xFF4F46E5);
@@ -200,30 +237,40 @@ class _VenueManagementViewState extends State<VenueManagementView> {
   }
 
   IconData _getTypeIcon(String type) {
-    final match = _facilityCategories.firstWhere(
-      (c) => (c['category_code'] ?? '').toString().toUpperCase() == type.toUpperCase(),
-      orElse: () => {},
-    );
-    if (match.isNotEmpty && match['icon_name'] != null) {
+    final match = _findCategoryForType(type);
+    if (match != null && match['icon_name'] != null) {
       return _getIconDataByName(match['icon_name']);
     }
 
     switch (type.toUpperCase()) {
+      case 'LAB':
       case 'LABORATORY':
         return Icons.science_rounded;
+      case 'LH':
       case 'LECTURE_HALL':
+      case 'LECTURE HALL':
         return Icons.school_rounded;
+      case 'SMART':
       case 'SMART_CLASSROOM':
+      case 'SMART CLASSROOM':
         return Icons.tv_rounded;
+      case 'SEM':
       case 'SEMINAR_HALL':
+      case 'SEMINAR HALL':
         return Icons.theater_comedy_rounded;
+      case 'AUD':
       case 'AUDITORIUM':
         return Icons.stadium_rounded;
+      case 'WS':
       case 'WORKSHOP':
         return Icons.precision_manufacturing_rounded;
+      case 'TUT':
       case 'TUTORIAL_ROOM':
+      case 'TUTORIAL ROOM':
         return Icons.menu_book_rounded;
+      case 'CONF':
       case 'CONFERENCE_HALL':
+      case 'CONFERENCE HALL':
         return Icons.groups_3_rounded;
       default:
         return Icons.domain_rounded;
@@ -231,18 +278,18 @@ class _VenueManagementViewState extends State<VenueManagementView> {
   }
 
   String _formatTypeTitle(String type) {
-    final match = _facilityCategories.firstWhere(
-      (c) => (c['category_code'] ?? '').toString().toUpperCase() == type.toUpperCase(),
-      orElse: () => {},
-    );
-    if (match.isNotEmpty && match['category_name'] != null) {
+    final match = _findCategoryForType(type);
+    if (match != null && match['category_name'] != null) {
       return match['category_name'];
     }
 
     switch (type.toUpperCase()) {
+      case 'LAB':
       case 'LABORATORY':
         return 'Specialized Lab';
+      case 'LH':
       case 'LECTURE_HALL':
+      case 'LECTURE HALL':
         return 'Lecture Hall';
       case 'SMART_CLASSROOM':
         return 'Smart Classroom';
@@ -1074,6 +1121,10 @@ class _VenueManagementViewState extends State<VenueManagementView> {
 
   List<Map<String, dynamic>> _getProcessedVenues() {
     var list = _venues.where((v) {
+      if (_selectedType != 'ALL') {
+        final vType = (v['venue_type'] ?? '').toString();
+        if (!_matchesCategory(vType, _selectedType)) return false;
+      }
       if (_selectedStatus != 'ALL') {
         final st = (v['status'] ?? 'AVAILABLE').toString().toUpperCase();
         if (st != _selectedStatus) return false;
@@ -1101,115 +1152,227 @@ class _VenueManagementViewState extends State<VenueManagementView> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final processedVenues = _getProcessedVenues();
 
-    return Column(
-      children: [
-        _buildHeader(isDark),
-
-        // 🔍 Interactive Search, Block Dropdown, Status Filter & Sorting Bar
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(
-            color: AdminColors.getCard(isDark).withValues(alpha: 0.7),
-            border: Border(bottom: BorderSide(color: AdminColors.getBorder(isDark))),
-          ),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: TextField(
-                      decoration: InputDecoration(
-                        hintText: 'Search halls, laboratories, workstations, or custom building blocks...',
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onChanged: (v) {
-                        setState(() => _searchQuery = v);
-                        _fetchVenues();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  // Block Filter
-                  DropdownButtonHideUnderline(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: DropdownButton<String>(
-                        value: _dynamicBlocks.contains(_selectedBlock) ? _selectedBlock : 'ALL',
-                        items: _dynamicBlocks.map((b) => DropdownMenuItem(value: b, child: Text(b == 'ALL' ? '🏢 All Blocks' : b, style: const TextStyle(fontSize: 12)))).toList(),
-                        onChanged: (v) {
-                          if (v != null) {
-                            setState(() => _selectedBlock = v);
-                            _fetchVenues();
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  // Status Filter
-                  DropdownButtonHideUnderline(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: DropdownButton<String>(
-                        value: _selectedStatus,
-                        items: const [
-                          DropdownMenuItem(value: 'ALL', child: Text('⚡ All Statuses', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'AVAILABLE', child: Text('🟢 Available', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'UNDER_MAINTENANCE', child: Text('🟠 Maintenance', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'RESERVED', child: Text('🔵 Reserved', style: TextStyle(fontSize: 12))),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _selectedStatus = v);
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  // Sort Dropdown
-                  DropdownButtonHideUnderline(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: DropdownButton<String>(
-                        value: _sortBy,
-                        items: const [
-                          DropdownMenuItem(value: 'CODE', child: Text('Sort: Code (A-Z)', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'CAPACITY', child: Text('Sort: Capacity ↓', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'WORKSTATIONS', child: Text('Sort: Systems ↓', style: TextStyle(fontSize: 12))),
-                          DropdownMenuItem(value: 'STATUS', child: Text('Sort: Status', style: TextStyle(fontSize: 12))),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _sortBy = v);
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded),
-                    tooltip: 'Reload Facilities',
-                    onPressed: () {
-                      _fetchFacilityCategories();
-                      _fetchVenues();
-                    },
-                  ),
-                ],
+    return CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(
+          child: _buildHeader(isDark),
+        ),
+        SliverToBoxAdapter(
+          child: _buildFilterBar(isDark),
+        ),
+        if (_isLoading)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 60),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          )
+        else if (processedVenues.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 48),
+              child: _buildEmptyState(isDark),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.all(20),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 460,
+                mainAxisExtent: 250,
+                crossAxisSpacing: 18,
+                mainAxisSpacing: 18,
               ),
-              const SizedBox(height: 10),
+              delegate: SliverChildBuilderDelegate(
+                (ctx, i) => _buildVenueCard(processedVenues[i], isDark),
+                childCount: processedVenues.length,
+              ),
+            ),
+          ),
+        const SliverToBoxAdapter(
+          child: SizedBox(height: 40),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState(bool isDark) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.meeting_room_outlined, size: 64, color: Colors.grey.shade400),
+          const SizedBox(height: 14),
+          Text('No Campus Facilities Found', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 4),
+          Text(
+            _selectedType != 'ALL'
+                ? 'No facilities match the selected category filter. Try selecting "All Global Venues".'
+                : 'Tap "Create Custom Venue" to register your campus rooms, labs, or blocks.',
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: () => _openVenueDialog(),
+            icon: const Icon(Icons.add_business_rounded, size: 18),
+            label: const Text('Create First Venue'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterBar(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        color: AdminColors.getCard(isDark).withValues(alpha: 0.7),
+        border: Border(bottom: BorderSide(color: AdminColors.getBorder(isDark))),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 800;
+
+          final searchField = TextField(
+            decoration: InputDecoration(
+              hintText: 'Search halls, laboratories, workstations, or blocks...',
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onChanged: (v) {
+              setState(() => _searchQuery = v);
+              _fetchVenues();
+            },
+          );
+
+          final blockFilter = DropdownButtonHideUnderline(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: AdminColors.getBorder(isDark)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: DropdownButton<String>(
+                value: _dynamicBlocks.contains(_selectedBlock) ? _selectedBlock : 'ALL',
+                items: _dynamicBlocks
+                    .map((b) => DropdownMenuItem(
+                          value: b,
+                          child: Text(b == 'ALL' ? '🏢 All Blocks' : b, style: const TextStyle(fontSize: 12)),
+                        ))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) {
+                    setState(() => _selectedBlock = v);
+                    _fetchVenues();
+                  }
+                },
+              ),
+            ),
+          );
+
+          final statusFilter = DropdownButtonHideUnderline(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: AdminColors.getBorder(isDark)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: DropdownButton<String>(
+                value: _selectedStatus,
+                items: const [
+                  DropdownMenuItem(value: 'ALL', child: Text('⚡ All Statuses', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'AVAILABLE', child: Text('🟢 Available', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'UNDER_MAINTENANCE', child: Text('🟠 Maintenance', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'RESERVED', child: Text('🔵 Reserved', style: TextStyle(fontSize: 12))),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedStatus = v);
+                },
+              ),
+            ),
+          );
+
+          final sortFilter = DropdownButtonHideUnderline(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: AdminColors.getBorder(isDark)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: DropdownButton<String>(
+                value: _sortBy,
+                items: const [
+                  DropdownMenuItem(value: 'CODE', child: Text('Sort: Code (A-Z)', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'CAPACITY', child: Text('Sort: Capacity ↓', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'WORKSTATIONS', child: Text('Sort: Systems ↓', style: TextStyle(fontSize: 12))),
+                  DropdownMenuItem(value: 'STATUS', child: Text('Sort: Status', style: TextStyle(fontSize: 12))),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _sortBy = v);
+                },
+              ),
+            ),
+          );
+
+          final reloadBtn = IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Reload Facilities',
+            onPressed: () {
+              _fetchFacilityCategories();
+              _fetchVenues();
+            },
+          );
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isNarrow) ...[
+                Row(
+                  children: [
+                    Expanded(child: searchField),
+                    const SizedBox(width: 8),
+                    reloadBtn,
+                  ],
+                ),
+                const SizedBox(height: 10),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      blockFilter,
+                      const SizedBox(width: 8),
+                      statusFilter,
+                      const SizedBox(width: 8),
+                      sortFilter,
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Row(
+                  children: [
+                    Expanded(flex: 3, child: searchField),
+                    const SizedBox(width: 10),
+                    blockFilter,
+                    const SizedBox(width: 10),
+                    statusFilter,
+                    const SizedBox(width: 10),
+                    sortFilter,
+                    const SizedBox(width: 10),
+                    reloadBtn,
+                  ],
+                ),
+              ],
+              const SizedBox(height: 12),
 
               // Dynamic Category Filter Chips + Manage Facilities Action
               if (_facilityCategories.isEmpty) ...[
@@ -1249,7 +1412,6 @@ class _VenueManagementViewState extends State<VenueManagementView> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      // All Venues chip
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: FilterChip(
@@ -1269,11 +1431,10 @@ class _VenueManagementViewState extends State<VenueManagementView> {
                           },
                         ),
                       ),
-                      // Dynamic Categories Chips
                       ..._facilityCategories.map((cat) {
                         final cCode = (cat['category_code'] ?? '').toString();
                         final cName = (cat['category_name'] ?? cCode).toString();
-                        final isSel = _selectedType.toUpperCase() == cCode.toUpperCase();
+                        final isSel = _matchesCategory(_selectedType, cCode);
                         final color = _parseHexColor(cat['color_hex']);
                         final icon = _getIconDataByName(cat['icon_name'] ?? 'domain_rounded');
 
@@ -1298,7 +1459,6 @@ class _VenueManagementViewState extends State<VenueManagementView> {
                           ),
                         );
                       }),
-                      // Manage Facilities Chip
                       ActionChip(
                         avatar: const Icon(Icons.settings_rounded, size: 14, color: Color(0xFF8B5CF6)),
                         label: const Text('Manage Facilities', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF8B5CF6))),
@@ -1311,257 +1471,208 @@ class _VenueManagementViewState extends State<VenueManagementView> {
                 ),
               ],
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildVenueCard(Map<String, dynamic> v, bool isDark) {
+    final vType = v['venue_type'] ?? 'LECTURE_HALL';
+    final vStatus = (v['status'] ?? 'AVAILABLE').toString().toUpperCase();
+    final isLab = vType == 'LABORATORY' || vType == 'WORKSHOP';
+    final typeColor = _getTypeColor(vType);
+    final statusColor = _getStatusColor(vStatus);
+    final amenities = List<String>.from(v['equipment_amenities'] ?? []);
+    final hostDept = v['dept'] ?? 'GLOBAL';
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AdminColors.getCard(isDark),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AdminColors.getBorder(isDark)),
+        boxShadow: [
+          BoxShadow(
+            color: typeColor.withValues(alpha: isDark ? 0.08 : 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
-        ),
-
-        // 🏛️ Grid of Global Campus Venues
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : processedVenues.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.meeting_room_outlined, size: 64, color: Colors.grey.shade400),
-                          const SizedBox(height: 14),
-                          Text('No Campus Facilities Found', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16)),
-                          const SizedBox(height: 4),
-                          Text('Tap "Create Custom Venue" to register your campus rooms, labs, or blocks.', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-                          const SizedBox(height: 16),
-                          ElevatedButton.icon(
-                            onPressed: () => _openVenueDialog(),
-                            icon: const Icon(Icons.add_business_rounded, size: 18),
-                            label: const Text('Create First Venue'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2563EB),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                        ],
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: typeColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: typeColor.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(_getTypeIcon(vType), size: 14, color: typeColor),
+                    const SizedBox(width: 6),
+                    Text(
+                      v['venue_code'] ?? '',
+                      style: TextStyle(
+                        color: typeColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
                       ),
-                    )
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(20),
-                      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 460,
-                        mainAxisExtent: 250,
-                        crossAxisSpacing: 18,
-                        mainAxisSpacing: 18,
-                      ),
-                      itemCount: processedVenues.length,
-                      itemBuilder: (ctx, i) {
-                        final v = processedVenues[i];
-                        final vType = v['venue_type'] ?? 'LECTURE_HALL';
-                        final vStatus = (v['status'] ?? 'AVAILABLE').toString().toUpperCase();
-                        final isLab = vType == 'LABORATORY' || vType == 'WORKSHOP';
-                        final typeColor = _getTypeColor(vType);
-                        final statusColor = _getStatusColor(vStatus);
-                        final amenities = List<String>.from(v['equipment_amenities'] ?? []);
-                        final hostDept = v['dept'] ?? 'GLOBAL';
-
-                        return Container(
-                          padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: AdminColors.getCard(isDark),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AdminColors.getBorder(isDark)),
-                            boxShadow: [
-                              BoxShadow(
-                                color: typeColor.withValues(alpha: isDark ? 0.08 : 0.04),
-                                blurRadius: 16,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Top Header: Code, Type Badge, Live Status & Actions
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                    decoration: BoxDecoration(
-                                      color: typeColor.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(color: typeColor.withValues(alpha: 0.3)),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(_getTypeIcon(vType), size: 14, color: typeColor),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          v['venue_code'] ?? '',
-                                          style: TextStyle(
-                                            color: typeColor,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  // Live Status Toggler Menu
-                                  PopupMenuButton<String>(
-                                    tooltip: 'Change Status',
-                                    initialValue: vStatus,
-                                    onSelected: (newSt) => _updateVenueStatus(v, newSt),
-                                    itemBuilder: (ctx) => [
-                                      const PopupMenuItem(value: 'AVAILABLE', child: Text('🟢 Available')),
-                                      const PopupMenuItem(value: 'UNDER_MAINTENANCE', child: Text('🟠 Under Maintenance')),
-                                      const PopupMenuItem(value: 'RESERVED', child: Text('🔵 Reserved')),
-                                      const PopupMenuItem(value: 'OFFLINE', child: Text('⚪ Offline')),
-                                    ],
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: statusColor.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: statusColor.withValues(alpha: 0.3)),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Container(width: 6, height: 6, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            _formatStatusLabel(vStatus),
-                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: statusColor),
-                                          ),
-                                          const Icon(Icons.arrow_drop_down, size: 14),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  IconButton(
-                                    icon: const Icon(Icons.calendar_month_rounded, size: 18),
-                                    tooltip: 'Live Timetable Schedule Matrix',
-                                    onPressed: () => _showVenueWeeklySchedule(v),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.edit_rounded, size: 18),
-                                    tooltip: 'Edit Facility',
-                                    onPressed: () => _openVenueDialog(initialVenue: v),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.red),
-                                    tooltip: 'Remove Facility',
-                                    onPressed: () => _confirmDeleteVenue(v),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-
-                              // Facility Name
-                              Text(
-                                v['venue_name'] ?? '',
-                                style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 14),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-
-                              // Location info & Dept
-                              Row(
-                                children: [
-                                  Icon(Icons.location_on_outlined, size: 13, color: Colors.grey.shade500),
-                                  const SizedBox(width: 4),
-                                  Expanded(
-                                    child: Text(
-                                      '${_formatTypeTitle(vType)} • ${v['block_building']} • ${v['floor_number']} • ${hostDept == 'GLOBAL' ? 'Global' : hostDept}',
-                                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-
-                              // Metrics: Capacity & Systems
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.people_alt_outlined, size: 13, color: Colors.grey),
-                                        const SizedBox(width: 4),
-                                        Text('${v['capacity']} seats', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                                      ],
-                                    ),
-                                  ),
-                                  if (isLab && (v['lab_workstations'] ?? 0) > 0) ...[
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF8B5CF6).withValues(alpha: 0.12),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          const Icon(Icons.computer_rounded, size: 13, color: Color(0xFF8B5CF6)),
-                                          const SizedBox(width: 4),
-                                          Text('${v['lab_workstations']} Systems', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8B5CF6))),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                  if ((v['in_charge_staff_name'] ?? '').toString().isNotEmpty) ...[
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'In-Charge: ${v['in_charge_staff_name']}',
-                                        style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const Spacer(),
-
-                              // Equipment Tags Preview
-                              if (amenities.isNotEmpty)
-                                SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: Row(
-                                    children: amenities.take(3).map((a) => Container(
-                                      margin: const EdgeInsets.only(right: 6),
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                                        borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(color: AdminColors.getBorder(isDark)),
-                                      ),
-                                      child: Text(a, style: TextStyle(fontSize: 10, color: AdminColors.getTextSecondary(isDark), fontWeight: FontWeight.w600)),
-                                    )).toList(),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        );
-                      },
                     ),
-        ),
-      ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              PopupMenuButton<String>(
+                tooltip: 'Change Status',
+                initialValue: vStatus,
+                onSelected: (newSt) => _updateVenueStatus(v, newSt),
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(value: 'AVAILABLE', child: Text('🟢 Available')),
+                  const PopupMenuItem(value: 'UNDER_MAINTENANCE', child: Text('🟠 Under Maintenance')),
+                  const PopupMenuItem(value: 'RESERVED', child: Text('🔵 Reserved')),
+                  const PopupMenuItem(value: 'OFFLINE', child: Text('⚪ Offline')),
+                ],
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(width: 6, height: 6, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
+                      const SizedBox(width: 4),
+                      Text(
+                        _formatStatusLabel(vStatus),
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: statusColor),
+                      ),
+                      const Icon(Icons.arrow_drop_down, size: 14),
+                    ],
+                  ),
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.calendar_month_rounded, size: 18),
+                tooltip: 'Live Timetable Schedule Matrix',
+                onPressed: () => _showVenueWeeklySchedule(v),
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit_rounded, size: 18),
+                tooltip: 'Edit Facility',
+                onPressed: () => _openVenueDialog(initialVenue: v),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.redAccent),
+                tooltip: 'Deactivate / Delete',
+                onPressed: () => _confirmDeleteVenue(v),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          Text(
+            v['venue_name'] ?? '',
+            style: GoogleFonts.inter(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: AdminColors.getTextPrimary(isDark),
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Text(
+                _formatTypeTitle(vType),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: typeColor),
+              ),
+              const SizedBox(width: 6),
+              Container(width: 3, height: 3, decoration: BoxDecoration(color: Colors.grey.shade400, shape: BoxShape.circle)),
+              const SizedBox(width: 6),
+              Text(
+                '${v['block_building'] ?? 'Main'} • ${v['floor_number'] ?? 'Ground'}',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+            ],
+          ),
+          const Spacer(),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AdminColors.getBorder(isDark)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.people_alt_rounded, size: 14, color: Colors.grey.shade500),
+                    const SizedBox(width: 6),
+                    Text('${v['capacity'] ?? 0} Seats', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AdminColors.getTextPrimary(isDark))),
+                  ],
+                ),
+                if (isLab) ...[
+                  Container(width: 1, height: 14, color: AdminColors.getBorder(isDark)),
+                  Row(
+                    children: [
+                      const Icon(Icons.computer_rounded, size: 14, color: Color(0xFF8B5CF6)),
+                      const SizedBox(width: 6),
+                      Text('${v['lab_workstations'] ?? 0} PCs', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8B5CF6))),
+                    ],
+                  ),
+                ],
+                Container(width: 1, height: 14, color: AdminColors.getBorder(isDark)),
+                Row(
+                  children: [
+                    Icon(Icons.apartment_rounded, size: 14, color: Colors.grey.shade500),
+                    const SizedBox(width: 6),
+                    Text(hostDept, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AdminColors.getTextPrimary(isDark))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          if (amenities.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: amenities.map((a) => Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AdminColors.getBorder(isDark)),
+                  ),
+                  child: Text(a, style: TextStyle(fontSize: 10, color: AdminColors.getTextSecondary(isDark), fontWeight: FontWeight.w600)),
+                )).toList(),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
   Widget _buildHeader(bool isDark) {
     final totalVenues = _venues.length;
-    final totalHalls = _venues.where((v) => v['venue_type'] == 'LECTURE_HALL' || v['venue_type'] == 'SMART_CLASSROOM').length;
-    final totalLabs = _venues.where((v) => v['venue_type'] == 'LABORATORY' || v['venue_type'] == 'WORKSHOP').length;
+    final totalHalls = _venues.where((v) => _matchesCategory(v['venue_type'] ?? '', 'LH')).length;
+    final totalLabs = _venues.where((v) => _matchesCategory(v['venue_type'] ?? '', 'LAB')).length;
     final totalCapacity = _venues.fold<int>(0, (sum, v) => sum + ((v['capacity'] as num?)?.toInt() ?? 0));
     final totalWorkstations = _venues.fold<int>(0, (sum, v) => sum + ((v['lab_workstations'] as num?)?.toInt() ?? 0));
     final distinctBlocksCount = _dynamicBlocks.where((b) => b != 'ALL').length;

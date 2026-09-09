@@ -282,10 +282,10 @@ class _StudentAcademicsSettingsTabState extends State<StudentAcademicsSettingsTa
                 children: [
                   // Top Navigation Strip & Section Switcher
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
                       color: AdminColors.getCard(isDark),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: AdminColors.getBorder(isDark)),
                     ),
                     child: Row(
@@ -299,32 +299,38 @@ class _StudentAcademicsSettingsTabState extends State<StudentAcademicsSettingsTa
                                 final t = tabs[index];
 
                                 return Padding(
-                                  padding: const EdgeInsets.only(right: 8),
+                                  padding: const EdgeInsets.only(right: 6),
                                   child: InkWell(
                                     onTap: () => setState(() => _activeTabIndex = index),
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(8),
                                     child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 200),
-                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                      duration: const Duration(milliseconds: 180),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                       decoration: BoxDecoration(
                                         color: isSelected
                                             ? AdminColors.primary
-                                            : AdminColors.getCardTinted(isDark),
-                                        borderRadius: BorderRadius.circular(10),
+                                            : (isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF1F5F9)),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: isSelected
+                                              ? AdminColors.primary
+                                              : AdminColors.getBorder(isDark).withValues(alpha: 0.5),
+                                        ),
                                       ),
                                       child: Row(
+                                        mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Icon(
                                             isSelected ? (t['selectedIcon'] as IconData) : (t['icon'] as IconData),
-                                            size: 16,
+                                            size: 13,
                                             color: isSelected ? Colors.white : AdminColors.getTextSecondary(isDark),
                                           ),
-                                          const SizedBox(width: 8),
+                                          const SizedBox(width: 5),
                                           Text(
                                             t['label'] as String,
                                             style: GoogleFonts.inter(
-                                              fontSize: 13,
-                                              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                              fontSize: 11.5,
+                                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                                               color: isSelected ? Colors.white : AdminColors.getTextPrimary(isDark),
                                             ),
                                           ),
@@ -337,9 +343,12 @@ class _StudentAcademicsSettingsTabState extends State<StudentAcademicsSettingsTa
                             ),
                           ),
                         ),
+                        const SizedBox(width: 4),
                         IconButton(
-                          icon: const Icon(Icons.refresh_rounded),
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
                           tooltip: 'Refresh Academics',
+                          padding: const EdgeInsets.all(6),
+                          constraints: const BoxConstraints(),
                           onPressed: _loadAllData,
                         ),
                       ],

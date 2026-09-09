@@ -31577,6 +31577,7 @@ def _build_student_calendar_rows(ranges, overrides):
 # -------------------------------------------------
 
 @app.get("/api/v1/admin/student-academics/settings")
+@app.get("/admin/student-academics/settings")
 def get_student_academics_settings(request: Request):
     """Retrieve full student academic year configuration, ranges, and policies."""
     verify_admin_token(request)
@@ -31585,6 +31586,7 @@ def get_student_academics_settings(request: Request):
 
 
 @app.post("/api/v1/admin/student-academics/settings")
+@app.post("/admin/student-academics/settings")
 async def save_student_academics_settings(request: Request):
     """Persist student academic year settings, ranges, and policies."""
     admin_user = verify_admin_token(request)
@@ -31732,6 +31734,8 @@ async def activate_student_academic_range(request: Request):
 
 
 @app.get("/api/v1/admin/student-academics/calendar")
+@app.get("/admin/student-academics/calendar")
+@app.get("/api/admin/student-academics/calendar")
 def get_student_academics_calendar(
     request: Request,
     month: Optional[int] = Query(None),
@@ -32198,8 +32202,10 @@ def get_hod_student_academics_overview(request: Request):
 
 
 @app.get("/api/v1/admin/student-academics/stats")
+@app.get("/admin/student-academics/stats")
+@app.get("/api/admin/student-academics/stats")
 def get_student_academics_stats(request: Request):
-    """Retrieve comprehensive analytics and overview stats for the student academic system."""
+    """Retrieve comprehensive analytics and real-time overview stats for the student academic system."""
     verify_admin_token(request)
     settings = _load_student_academic_settings_from_storage()
 
@@ -32221,11 +32227,43 @@ def get_student_academics_stats(request: Request):
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     total_working_days = sum(1 for r in all_rows if r["status"] == "working_day")
-    working_days_elapsed = sum(1 for r in all_rows if r["status"] == "working_day" and r["date"] <= today_str)
     total_holidays = sum(1 for r in all_rows if r["status"] == "holiday")
 
-    # Upcoming holidays (next 5)
-    upcoming_holidays = [r for r in all_rows if r["status"] == "holiday" and r["date"] >= today_str][:5]
+    # Locate the active range specifically for the term progress
+    active_range = None
+    for r in ranges:
+        if r.get("is_active"):
+            active_range = r
+            break
+    if not active_range:
+        for r in ranges:
+            s_str = r.get("start")
+            e_str = r.get("end")
+            if s_str and e_str and s_str <= today_str <= e_str:
+                active_range = r
+                break
+    if not active_range and ranges:
+        active_range = ranges[0]
+
+    # Calculate real-time active term metrics
+    active_rows = _build_student_calendar_rows([active_range], overrides) if active_range else []
+    active_term_working_days = sum(1 for r in active_rows if r["status"] == "working_day")
+    target_working_days = (active_range.get("target_working_days") if active_range else None) or active_term_working_days or 90
+
+    start_str = active_range.get("start") if active_range else None
+    if start_str and today_str < start_str:
+        completed_working_days = 0
+    else:
+        completed_working_days = sum(1 for r in active_rows if r["status"] == "working_day" and r["date"] <= today_str)
+
+    progress_pct = round((completed_working_days / target_working_days * 100.0), 1) if target_working_days > 0 else 0.0
+
+    # Prioritize declared/official non-Sunday holidays for prominent display
+    declared_holidays = [r for r in all_rows if r["status"] == "holiday" and not r.get("is_sunday") and r["date"] >= today_str]
+    if declared_holidays:
+        upcoming_holidays = declared_holidays[:5]
+    else:
+        upcoming_holidays = [r for r in all_rows if r["status"] == "holiday" and r["date"] >= today_str][:5]
 
     # Milestones sorted
     milestones = settings.get("milestones", [])
@@ -32233,12 +32271,17 @@ def get_student_academics_stats(request: Request):
     return {
         "success": True,
         "data": {
-            "active_academic_year": settings.get("active_academic_year", "2025-2026"),
+            "active_academic_year": settings.get("active_academic_year") or "2026-2027",
+            "active_range": active_range,
+            "active_range_name": active_range.get("name") if active_range else "Odd Semester (Active)",
             "total_students": total_students,
             "total_departments": total_departments,
             "total_batches": total_batches,
             "total_working_days": total_working_days,
-            "working_days_elapsed": working_days_elapsed,
+            "target_working_days": target_working_days,
+            "working_days_elapsed": completed_working_days,
+            "completed_working_days": completed_working_days,
+            "term_progress_percentage": progress_pct,
             "total_holidays": total_holidays,
             "attendance_min_percentage": settings.get("attendance_policy", {}).get("min_percentage", 75.0),
             "upcoming_holidays": upcoming_holidays,
@@ -34962,7 +35005,19 @@ def get_facility_categories(request: Request):
     cursor.execute("""
         SELECT c.id, c.category_code, c.category_name, c.icon_name, c.color_hex, 
                COALESCE(c.description, '') as description, c.is_system, c.is_active,
-               (SELECT COUNT(*) FROM campus_venues v WHERE UPPER(v.venue_type) = UPPER(c.category_code) AND v.is_active = TRUE) as venue_count
+               (SELECT COUNT(*) FROM campus_venues v 
+                WHERE (
+                    UPPER(v.venue_type) = UPPER(c.category_code) 
+                    OR UPPER(v.venue_type) = UPPER(c.category_name)
+                    OR (UPPER(c.category_code) IN ('LH', 'LECTURE_HALL', 'LECTURE HALL') AND UPPER(v.venue_type) IN ('LH', 'LECTURE_HALL', 'LECTURE HALL'))
+                    OR (UPPER(c.category_code) IN ('LAB', 'LABORATORY', 'WORKSHOP') AND UPPER(v.venue_type) IN ('LAB', 'LABORATORY', 'WORKSHOP'))
+                    OR (UPPER(c.category_code) IN ('SMART', 'SMART_CLASSROOM', 'SMART CLASSROOM') AND UPPER(v.venue_type) IN ('SMART', 'SMART_CLASSROOM', 'SMART CLASSROOM'))
+                    OR (UPPER(c.category_code) IN ('SEM', 'SEMINAR', 'SEMINAR_HALL') AND UPPER(v.venue_type) IN ('SEM', 'SEMINAR', 'SEMINAR_HALL'))
+                    OR (UPPER(c.category_code) IN ('AUD', 'AUDITORIUM') AND UPPER(v.venue_type) IN ('AUD', 'AUDITORIUM'))
+                    OR (UPPER(c.category_code) IN ('WS', 'WORKSHOP') AND UPPER(v.venue_type) IN ('WS', 'WORKSHOP'))
+                    OR (UPPER(c.category_code) IN ('TUT', 'TUTORIAL_ROOM', 'TUTORIAL') AND UPPER(v.venue_type) IN ('TUT', 'TUTORIAL_ROOM', 'TUTORIAL'))
+                    OR (UPPER(c.category_code) IN ('CONF', 'CONFERENCE_HALL', 'CONFERENCE') AND UPPER(v.venue_type) IN ('CONF', 'CONFERENCE_HALL', 'CONFERENCE'))
+                ) AND v.is_active = TRUE) as venue_count
         FROM campus_facility_categories c
         WHERE c.is_active = TRUE
         ORDER BY c.id ASC
@@ -35144,8 +35199,32 @@ def get_campus_venues(
     params = []
 
     if venue_type and venue_type.upper() != "ALL":
-        query += " AND UPPER(venue_type) = ?"
-        params.append(venue_type.strip().upper())
+        vt = venue_type.strip().upper()
+        alias_map = {
+            "LH": ["LH", "LECTURE_HALL", "LECTURE HALL"],
+            "LECTURE_HALL": ["LH", "LECTURE_HALL", "LECTURE HALL"],
+            "LECTURE HALL": ["LH", "LECTURE_HALL", "LECTURE HALL"],
+            "LAB": ["LAB", "LABORATORY", "WORKSHOP"],
+            "LABORATORY": ["LAB", "LABORATORY", "WORKSHOP"],
+            "WORKSHOP": ["WS", "WORKSHOP", "LAB", "LABORATORY"],
+            "WS": ["WS", "WORKSHOP", "LAB", "LABORATORY"],
+            "SMART": ["SMART", "SMART_CLASSROOM", "SMART CLASSROOM"],
+            "SMART_CLASSROOM": ["SMART", "SMART_CLASSROOM", "SMART CLASSROOM"],
+            "SMART CLASSROOM": ["SMART", "SMART_CLASSROOM", "SMART CLASSROOM"],
+            "SEM": ["SEM", "SEMINAR", "SEMINAR_HALL", "SEMINAR HALL"],
+            "SEMINAR_HALL": ["SEM", "SEMINAR", "SEMINAR_HALL", "SEMINAR HALL"],
+            "SEMINAR HALL": ["SEM", "SEMINAR", "SEMINAR_HALL", "SEMINAR HALL"],
+            "AUD": ["AUD", "AUDITORIUM"],
+            "AUDITORIUM": ["AUD", "AUDITORIUM"],
+            "TUT": ["TUT", "TUTORIAL", "TUTORIAL_ROOM", "TUTORIAL ROOM"],
+            "TUTORIAL_ROOM": ["TUT", "TUTORIAL", "TUTORIAL_ROOM", "TUTORIAL ROOM"],
+            "CONF": ["CONF", "CONFERENCE", "CONFERENCE_HALL", "CONFERENCE HALL"],
+            "CONFERENCE_HALL": ["CONF", "CONFERENCE", "CONFERENCE_HALL", "CONFERENCE HALL"],
+        }
+        targets = alias_map.get(vt, [vt])
+        placeholders = ", ".join(["?"] * len(targets))
+        query += f" AND (UPPER(venue_type) IN ({placeholders}) OR UPPER(venue_type) = ?)"
+        params.extend(targets + [vt])
 
     if dept and dept.upper() not in ["ALL", "GENERAL"]:
         query += " AND (UPPER(dept) = ? OR UPPER(dept) = 'GENERAL' OR UPPER(dept) = 'ALL_DEPTS')"

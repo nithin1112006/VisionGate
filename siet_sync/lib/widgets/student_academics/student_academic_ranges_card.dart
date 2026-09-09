@@ -353,33 +353,40 @@ class _StudentAcademicRangesCardState extends State<StudentAcademicRangesCard> {
       children: [
         // Active Academic Year Global Control
         AdminCard(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AdminColors.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.school_rounded, color: AdminColors.primary, size: 24),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Institutional Academic Year', style: AdminTextStyles.titleMd(isDark)),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Global academic session identifier applied across student records',
-                      style: AdminTextStyles.labelSm(isDark),
+          padding: const EdgeInsets.all(16),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 650;
+
+              final titleInfo = Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AdminColors.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: 180,
+                    child: const Icon(Icons.school_rounded, color: AdminColors.primary, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Institutional Academic Year', style: AdminTextStyles.titleMd(isDark)),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Global academic session identifier applied across student records',
+                          style: AdminTextStyles.labelSm(isDark),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+
+              final yearField = SizedBox(
+                width: isNarrow ? double.infinity : 180,
                 child: TextField(
                   controller: _yearCtrl,
                   onChanged: widget.onAcademicYearChanged,
@@ -390,38 +397,56 @@ class _StudentAcademicRangesCardState extends State<StudentAcademicRangesCard> {
                     prefixIcon: Icon(Icons.calendar_month_rounded, size: 18),
                   ),
                 ),
-              ),
-            ],
+              );
+
+              if (isNarrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleInfo,
+                    const SizedBox(height: 14),
+                    yearField,
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: titleInfo),
+                  const SizedBox(width: 14),
+                  yearField,
+                ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 20),
 
         // Academic Ranges Table & List
         AdminCard(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Semester Term Ranges', style: AdminTextStyles.titleMd(isDark)),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Define semester durations, target instructional working days, and applicable years of study',
-                          style: AdminTextStyles.labelSm(isDark),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Wrap(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNarrow = constraints.maxWidth < 650;
+
+                  final titleSection = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Semester Term Ranges', style: AdminTextStyles.titleMd(isDark)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Define semester durations, target instructional working days, and applicable years of study',
+                        style: AdminTextStyles.labelSm(isDark),
+                      ),
+                    ],
+                  );
+
+                  final buttonsWrap = Wrap(
                     spacing: 8,
-                    runSpacing: 6,
+                    runSpacing: 8,
                     children: [
                       OutlinedButton.icon(
                         onPressed: () => _openRangeDialog(),
@@ -431,6 +456,7 @@ class _StudentAcademicRangesCardState extends State<StudentAcademicRangesCard> {
                           foregroundColor: AdminColors.primary,
                           side: const BorderSide(color: AdminColors.primary),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         ),
                       ),
                       ElevatedButton.icon(
@@ -447,11 +473,32 @@ class _StudentAcademicRangesCardState extends State<StudentAcademicRangesCard> {
                           backgroundColor: AdminColors.primary,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         ),
                       ),
                     ],
-                  ),
-                ],
+                  );
+
+                  if (isNarrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        titleSection,
+                        const SizedBox(height: 12),
+                        buttonsWrap,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(child: titleSection),
+                      const SizedBox(width: 12),
+                      buttonsWrap,
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 16),
               if (widget.ranges.isEmpty)

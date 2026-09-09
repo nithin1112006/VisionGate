@@ -344,31 +344,34 @@ class _StaffHandledClassesViewState extends State<StaffHandledClassesView> {
         // 1. SECTION INTRO & DEPARTMENT FILTER PILLS
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Handled Classes & Subjects',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 18,
-                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Handled Classes & Subjects',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      color: isDark ? Colors.white : const Color(0xFF0F172A),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Select any handled class to view students and manage attendance',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 12,
-                    color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Select any handled class to view students and manage attendance',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 12,
+                      color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
@@ -502,93 +505,95 @@ class _StaffHandledClassesViewState extends State<StaffHandledClassesView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Selected Class Header Banner
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: primaryBlue.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  '${_selectedAllocation!['dept']} • Sem ${_selectedAllocation!['semester']} • Sec ${_selectedAllocation!['section']}',
-                                  style: const TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12,
-                                    color: primaryBlue,
-                                  ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isCompact = constraints.maxWidth < 750;
+
+                    final classInfo = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: primaryBlue.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '${_selectedAllocation!['dept']} • Sem ${_selectedAllocation!['semester']} • Sec ${_selectedAllocation!['section']}',
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                  color: primaryBlue,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: emeraldGreen.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  '${_classStudents.length} Students',
-                                  style: const TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12,
-                                    color: emeraldGreen,
-                                  ),
-                                ),
-                              ),
-                              if (_selectedAllocation!['is_advised_class'] == true) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: emeraldGreen.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: emeraldGreen.withValues(alpha: 0.3)),
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.assignment_ind_rounded, size: 12, color: emeraldGreen),
-                                      SizedBox(width: 4),
-                                      Text(
-                                        'Your Advisee Class',
-                                        style: TextStyle(
-                                          fontFamily: 'Inter',
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 11,
-                                          color: emeraldGreen,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${_selectedAllocation!['subject_name']} (${_selectedAllocation!['subject_code']})',
-                            style: TextStyle(
-                              fontFamily: 'Inter',
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
-                              color: isDark ? Colors.white : const Color(0xFF0F172A),
                             ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: emeraldGreen.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '${_classStudents.length} Students',
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                  color: emeraldGreen,
+                                ),
+                              ),
+                            ),
+                            if (_selectedAllocation!['is_advised_class'] == true)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: emeraldGreen.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: emeraldGreen.withValues(alpha: 0.3)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.assignment_ind_rounded, size: 12, color: emeraldGreen),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Your Advisee Class',
+                                      style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 11,
+                                        color: emeraldGreen,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${_selectedAllocation!['subject_name']} (${_selectedAllocation!['subject_code']})',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: isDark ? Colors.white : const Color(0xFF0F172A),
                           ),
-                        ],
-                      ),
-                    ),
-                    Wrap(
+                        ),
+                      ],
+                    );
+
+                    final actionButtons = Wrap(
                       spacing: 8,
-                      runSpacing: 6,
+                      runSpacing: 8,
+                      alignment: isCompact ? WrapAlignment.start : WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         if (_selectedAllocation!['is_advised_class'] == true && widget.onSwitchToAdvisedTab != null)
                           OutlinedButton.icon(
@@ -624,8 +629,29 @@ class _StaffHandledClassesViewState extends State<StaffHandledClassesView> {
                           label: const Text('Mark Class Attendance', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700, fontSize: 12)),
                         ),
                       ],
-                    ),
-                  ],
+                    );
+
+                    if (isCompact) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          classInfo,
+                          const SizedBox(height: 14),
+                          actionButtons,
+                        ],
+                      );
+                    } else {
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(child: classInfo),
+                          const SizedBox(width: 16),
+                          Flexible(child: actionButtons),
+                        ],
+                      );
+                    }
+                  },
                 ),
 
                 const SizedBox(height: 16),
@@ -806,54 +832,58 @@ class _StaffHandledClassesViewState extends State<StaffHandledClassesView> {
             children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: primaryBlue.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '$dept • Sem $sem • Sec $sec',
-                          style: const TextStyle(
-                            fontFamily: 'Inter',
-                            fontWeight: FontWeight.w700,
-                            fontSize: 11,
-                            color: primaryBlue,
-                          ),
-                        ),
-                      ),
-                      if (alloc['is_advised_class'] == true) ...[
-                        const SizedBox(width: 6),
+                  Flexible(
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: emeraldGreen.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(6),
+                            color: primaryBlue.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.assignment_ind_rounded, size: 10, color: emeraldGreen),
-                              SizedBox(width: 3),
-                              Text(
-                                'Advised',
-                                style: TextStyle(
-                                  fontFamily: 'Inter',
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 9,
-                                  color: emeraldGreen,
-                                ),
-                              ),
-                            ],
+                          child: Text(
+                            '$dept • Sem $sem • Sec $sec',
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                              color: primaryBlue,
+                            ),
                           ),
                         ),
+                        if (alloc['is_advised_class'] == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: emeraldGreen.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.assignment_ind_rounded, size: 10, color: emeraldGreen),
+                                SizedBox(width: 3),
+                                Text(
+                                  'Advised',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 9,
+                                    color: emeraldGreen,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
-                    ],
+                    ),
                   ),
+                  const SizedBox(width: 6),
                   if (isSelected)
                     const Icon(Icons.check_circle_rounded, color: primaryBlue, size: 18)
                   else

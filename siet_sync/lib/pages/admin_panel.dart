@@ -3736,7 +3736,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
+    final mediaSize = MediaQuery.of(context).size;
+    final width = mediaSize.width;
+    final height = mediaSize.height;
+
+    // Guard against collapsed/minimized window states (e.g. desktop minimize to taskbar)
+    if (width < 50 || height < 50) {
+      return const SizedBox.shrink();
+    }
+
     final useDrawerNavigation = width < 768; // Mobile & small tablets
     final shouldExtendRail = width >= AdminBreakpoints.xxl; // Desktop 1280dp+
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -3891,64 +3899,82 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     return Scaffold(
       backgroundColor: AdminColors.getSurface(isDark),
       appBar: AppBar(
+        centerTitle: false,
         title: Text(
           (_selectedIndex >= 0 && _selectedIndex < _titles.length)
               ? _titles[_selectedIndex]
               : 'Admin Dashboard',
-          style: AdminTextStyles.titleLg(isDark),
+          style: (width < 600
+                  ? AdminTextStyles.titleMd(isDark)
+                  : AdminTextStyles.titleLg(isDark))
+              .copyWith(fontWeight: FontWeight.w700),
           overflow: TextOverflow.ellipsis,
+          maxLines: 1,
         ),
         backgroundColor: AdminColors.getCard(isDark),
         elevation: 0,
         scrolledUnderElevation: 0.5,
         leading: useDrawerNavigation
             ? Builder(
-                builder: (context) => Container(
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AdminColors.getCardTinted(isDark),
-                    borderRadius: BorderRadius.circular(AdminRadii.md),
-                  ),
-                  child: IconButton(
-                    icon: Icon(
-                      Icons.menu_rounded,
-                      color: AdminColors.getTextPrimary(isDark),
-                      size: 20,
+                builder: (context) => FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AdminColors.getCardTinted(isDark),
+                      borderRadius: BorderRadius.circular(AdminRadii.md),
                     ),
-                    onPressed: () => Scaffold.of(context).openDrawer(),
-                    tooltip: 'Menu',
+                    child: IconButton(
+                      icon: Icon(
+                        Icons.menu_rounded,
+                        color: AdminColors.getTextPrimary(isDark),
+                        size: 20,
+                      ),
+                      onPressed: () => Scaffold.of(context).openDrawer(),
+                      tooltip: 'Menu',
+                    ),
                   ),
                 ),
               )
             : null,
         actions: [
-          // Refresh button for Analysis tab
-          if (_selectedIndex == 3)
-            IconButton(
-              icon: const Icon(Icons.refresh_rounded),
-              onPressed: () {
-                setState(() {
-                  _analysisTabKey = UniqueKey();
-                });
-              },
-              tooltip: 'Refresh Analysis',
-            ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Refresh button for Analysis tab
+                if (_selectedIndex == 3)
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded),
+                    onPressed: () {
+                      setState(() {
+                        _analysisTabKey = UniqueKey();
+                      });
+                    },
+                    tooltip: 'Refresh Analysis',
+                  ),
 
-          // Logout Action Button
-          Container(
-            margin: const EdgeInsets.only(right: 12, left: 4),
-            decoration: BoxDecoration(
-              color: AdminColors.dangerSoft,
-              borderRadius: BorderRadius.circular(AdminRadii.md),
-            ),
-            child: IconButton(
-              icon: const Icon(
-                Icons.logout_rounded,
-                color: AdminColors.danger,
-                size: 20,
-              ),
-              onPressed: _logout,
-              tooltip: 'Logout',
+                // Logout Action Button
+                Container(
+                  margin: const EdgeInsets.only(right: 12, left: 4),
+                  decoration: BoxDecoration(
+                    color: AdminColors.dangerSoft,
+                    borderRadius: BorderRadius.circular(AdminRadii.md),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.logout_rounded,
+                      color: AdminColors.danger,
+                      size: 20,
+                    ),
+                    onPressed: _logout,
+                    tooltip: 'Logout',
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -7187,9 +7213,6 @@ class _DashboardTabState extends State<DashboardTab> {
               const ThirukkuralBanner(),
               const SizedBox(height: 20),
 
-              // Institutional Operations & Services Hub
-              _buildAdminOperationsHub(context, isDark, screenWidth),
-              const SizedBox(height: 24),
 
 
               // Section Header
@@ -7384,177 +7407,6 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
-  Widget _buildAdminOperationsHub(BuildContext context, bool isDark, double screenWidth) {
-    final hubItems = [
-      {
-        'title': 'Attendance Regularisation',
-        'desc': 'Audit, dispute review & manual biometric regularisation',
-        'icon': Icons.edit_calendar_rounded,
-        'color': const Color(0xFF2563EB),
-        'page': AttendanceCorrectionsPage(
-          token: widget.token,
-          user: widget.user,
-          isAdminOrHod: true,
-        ),
-      },
-      {
-        'title': 'Institutional Reports & Exports',
-        'desc': 'Daily registers, heatmaps & leave reports in Excel/PDF',
-        'icon': Icons.analytics_rounded,
-        'color': const Color(0xFF0D9488),
-        'page': SystemReportsPage(
-          token: widget.token,
-          user: widget.user,
-        ),
-      },
-      {
-        'title': 'Substitute Faculty Allocator',
-        'desc': 'Reassign timetable periods & manage faculty replacements',
-        'icon': Icons.swap_horiz_rounded,
-        'color': const Color(0xFFD97706),
-        'page': SubstituteManagementPage(
-          token: widget.token,
-          user: widget.user,
-          isAdminOrHod: true,
-        ),
-      },
-      {
-        'title': 'Academic Holiday Calendar',
-        'desc': 'Publish institutional, national & optional holiday dates',
-        'icon': Icons.celebration_rounded,
-        'color': const Color(0xFF7C3AED),
-        'page': HolidayCalendarPage(
-          token: widget.token,
-          isAdmin: true,
-        ),
-      },
-      {
-        'title': 'Student Grievances & Support',
-        'desc': 'Manage academic & campus grievance tickets & resolutions',
-        'icon': Icons.feedback_rounded,
-        'color': const Color(0xFFEA580C),
-        'page': StudentGrievancePage(
-          token: widget.token,
-          user: widget.user,
-          isAdmin: true,
-        ),
-      },
-      {
-        'title': 'Security & 2FA Session Hub',
-        'desc': 'Active device sessions, login telemetry & MFA management',
-        'icon': Icons.security_rounded,
-        'color': const Color(0xFF4F46E5),
-        'page': SecurityHubPage(
-          token: widget.token,
-          user: widget.user,
-        ),
-      },
-    ];
-
-    final isNarrow = screenWidth < 700;
-    final isCompact = screenWidth < 480;
-    final crossAxisCount = isCompact ? 1 : (isNarrow ? 2 : 3);
-
-    return AdminCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const AdminSectionHeader(
-            title: 'Institutional Operations & Services',
-            subtitle: 'Direct management of disputes, reporting, timetable substitution, holidays, grievances & 2FA',
-            icon: Icons.apps_rounded,
-          ),
-          const SizedBox(height: 16),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: hubItems.length,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: crossAxisCount,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              mainAxisExtent: 106,
-            ),
-            itemBuilder: (context, index) {
-              final item = hubItems[index];
-              final color = item['color'] as Color;
-              final page = item['page'] as Widget;
-
-              return Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => page),
-                  ),
-                  borderRadius: BorderRadius.circular(AdminRadii.md),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: isDark ? 0.12 : 0.06),
-                      borderRadius: BorderRadius.circular(AdminRadii.md),
-                      border: Border.all(
-                        color: color.withValues(alpha: isDark ? 0.35 : 0.2),
-                        width: 1.2,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            item['icon'] as IconData,
-                            color: color,
-                            size: 22,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                item['title'] as String,
-                                style: AdminTextStyles.bodyMd(isDark).copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                item['desc'] as String,
-                                style: AdminTextStyles.labelSm(isDark).copyWith(
-                                  fontSize: 11,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(
-                          Icons.arrow_forward_ios_rounded,
-                          size: 12,
-                          color: color.withValues(alpha: 0.7),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 
@@ -7911,35 +7763,51 @@ class _StudentAcademicPulseCardState extends State<_StudentAcademicPulseCard> {
   }
 
   Future<void> _fetchAcademicStats() async {
-    try {
-      final res = await http.get(
-        Uri.parse('$API_URL/admin/student-academics/stats'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
-      if (res.statusCode == 200) {
-        final body = jsonDecode(res.body);
-        if (mounted) {
-          setState(() {
-            _stats = body['data'] ?? {};
-            _isLoading = false;
-          });
+    setState(() => _isLoading = true);
+    final headers = {'Authorization': 'Bearer ${widget.token}'};
+    final urlsToTry = [
+      '$API_URL/api/v1/admin/student-academics/stats',
+      '$API_URL/admin/student-academics/stats',
+      '$API_URL/api/admin/student-academics/stats',
+    ];
+
+    for (final url in urlsToTry) {
+      try {
+        final res = await http.get(Uri.parse(url), headers: headers);
+        if (res.statusCode == 200) {
+          final body = jsonDecode(res.body);
+          if (mounted) {
+            final data = body is Map<String, dynamic>
+                ? (body['data'] is Map ? Map<String, dynamic>.from(body['data']) : null)
+                : null;
+            if (data != null) {
+              setState(() {
+                _stats = data;
+                _isLoading = false;
+              });
+              return;
+            }
+          }
         }
-      } else {
-        if (mounted) setState(() => _isLoading = false);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+      } catch (_) {}
     }
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final activeYear = _stats?['active_academic_year'] ?? '2025-2026';
+    final activeYear = _stats?['active_academic_year']?.toString() ?? '2026-2027';
     final activeRange = _stats?['active_range'] as Map<String, dynamic>?;
-    final rangeName = activeRange?['name'] ?? 'Odd Semester (Active)';
-    final targetDays = (activeRange?['target_working_days'] as num?)?.toInt() ?? 90;
-    final completedDays = (_stats?['completed_working_days'] as num?)?.toInt() ?? 14;
+    final rangeName = _stats?['active_range_name']?.toString() ??
+        activeRange?['name']?.toString() ??
+        'Odd Semester (Active)';
+    final targetDays = (_stats?['target_working_days'] as num?)?.toInt() ??
+        (activeRange?['target_working_days'] as num?)?.toInt() ??
+        90;
+    final completedDays = (_stats?['completed_working_days'] as num?)?.toInt() ??
+        (_stats?['working_days_elapsed'] as num?)?.toInt() ??
+        0;
     final progressPct = (_stats?['term_progress_percentage'] as num?)?.toDouble() ??
         ((completedDays / (targetDays > 0 ? targetDays : 1)) * 100).clamp(0.0, 100.0);
     final holidays = _stats?['upcoming_holidays'] as List? ?? [];
@@ -15963,158 +15831,189 @@ class _OtherStaffAttendanceTabState extends State<OtherStaffAttendanceTab> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.deepPurple.withValues(alpha: 0.8),
-                                  Colors.purple.withValues(alpha: 0.6),
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.deepPurple.withValues(
-                                    alpha: 0.3,
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isNarrow = constraints.maxWidth < 650;
+
+                          final titleBlock = Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.deepPurple.withValues(alpha: 0.8),
+                                      Colors.purple.withValues(alpha: 0.6),
+                                    ],
                                   ),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.apartment,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Other User Departments',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Departments: $displayedDeptCount • Staff: $displayedStaffCount',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey[600],
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Refresh button
-                          IconButton(
-                            onPressed: fetchOtherStaffDepartments,
-                            tooltip: 'Refresh',
-                            icon: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.deepPurple.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.refresh,
-                                color: Colors.deepPurple,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                          // Add button
-                          IconButton(
-                            onPressed: () => _showStaffDialog(),
-                            tooltip: 'Add Staff',
-                            icon: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.add,
-                                color: Colors.green,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                          // Bulk Upload button
-                          PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'upload') {
-                                performBulkUpload(
-                                  context,
-                                  widget.token,
-                                  '${CollegeIPConfig.defaultURL}/admin/other_staff/bulk-upload',
-                                  fetchOtherStaffDepartments,
-                                );
-                              } else if (value == 'excel') {
-                                downloadTemplateHelper(context, widget.token, 'other_staff', 'excel');
-                              } else if (value == 'json') {
-                                downloadTemplateHelper(context, widget.token, 'other_staff', 'json');
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem(
-                                value: 'upload',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.upload_file, color: Colors.blue),
-                                    SizedBox(width: 8),
-                                    Text('Upload File'),
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.deepPurple.withValues(
+                                        alpha: 0.3,
+                                      ),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
                                   ],
                                 ),
-                              ),
-                              const PopupMenuItem(
-                                value: 'excel',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.download, color: Colors.green),
-                                    SizedBox(width: 8),
-                                    Text('Download Excel Template'),
-                                  ],
+                                child: const Icon(
+                                  Icons.apartment,
+                                  color: Colors.white,
+                                  size: 28,
                                 ),
                               ),
-                              const PopupMenuItem(
-                                value: 'json',
-                                child: Row(
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Icon(Icons.download, color: Colors.amber),
-                                    SizedBox(width: 8),
-                                    Text('Download JSON Template'),
+                                    const Text(
+                                      'Other User Departments',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Departments: $displayedDeptCount • Staff: $displayedStaffCount',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
                             ],
-                            child: Tooltip(
-                              message: 'Bulk Upload / Templates',
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(
-                                  Icons.upload_file,
-                                  color: Colors.blue,
-                                  size: 20,
+                          );
+
+                          final actionsBlock = Row(
+                            mainAxisSize: isNarrow ? MainAxisSize.max : MainAxisSize.min,
+                            mainAxisAlignment: isNarrow ? MainAxisAlignment.end : MainAxisAlignment.start,
+                            children: [
+                              // Refresh button
+                              IconButton(
+                                onPressed: fetchOtherStaffDepartments,
+                                tooltip: 'Refresh',
+                                icon: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.deepPurple.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.refresh,
+                                    color: Colors.deepPurple,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ],
+                              // Add button
+                              IconButton(
+                                onPressed: () => _showStaffDialog(),
+                                tooltip: 'Add Staff',
+                                icon: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.add,
+                                    color: Colors.green,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                              // Bulk Upload button
+                              PopupMenuButton<String>(
+                                onSelected: (value) {
+                                  if (value == 'upload') {
+                                    performBulkUpload(
+                                      context,
+                                      widget.token,
+                                      '${CollegeIPConfig.defaultURL}/admin/other_staff/bulk-upload',
+                                      fetchOtherStaffDepartments,
+                                    );
+                                  } else if (value == 'excel') {
+                                    downloadTemplateHelper(context, widget.token, 'other_staff', 'excel');
+                                  } else if (value == 'json') {
+                                    downloadTemplateHelper(context, widget.token, 'other_staff', 'json');
+                                  }
+                                },
+                                itemBuilder: (context) => [
+                                  const PopupMenuItem(
+                                    value: 'upload',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.upload_file, color: Colors.blue),
+                                        SizedBox(width: 8),
+                                        Text('Upload File'),
+                                      ],
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'excel',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.download, color: Colors.green),
+                                        SizedBox(width: 8),
+                                        Text('Download Excel Template'),
+                                      ],
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'json',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.download, color: Colors.amber),
+                                        SizedBox(width: 8),
+                                        Text('Download JSON Template'),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                                child: Tooltip(
+                                  message: 'Bulk Upload / Templates',
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Icon(
+                                      Icons.upload_file,
+                                      color: Colors.blue,
+                                      size: 20,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+
+                          if (isNarrow) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                titleBlock,
+                                const SizedBox(height: 10),
+                                actionsBlock,
+                              ],
+                            );
+                          }
+
+                          return Row(
+                            children: [
+                              Expanded(child: titleBlock),
+                              actionsBlock,
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 12),
                       TextField(
