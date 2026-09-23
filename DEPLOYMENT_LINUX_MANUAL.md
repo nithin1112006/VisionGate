@@ -14,7 +14,7 @@ This manual guides the complete bare-metal deployment of **VisionGate / Attenda*
 | **Storage** | 952 GB NVMe SSD (231 GB available) |
 | **Default User** | `techpark-2` (with sudo privileges) |
 | **Workspace Directory** | `/var/www/attenda/VisionGate` |
-| **Public Domain** | `https://app.srishakthi.in` |
+| **Public Domain** | `https://app.srishakthicgpa.in` |
 
 ---
 

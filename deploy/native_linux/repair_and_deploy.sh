@@ -2,7 +2,7 @@
 # ==============================================================================
 # VisionGate / Attenda - Universal Self-Healing & Production Deployment Script
 # Target: Ubuntu 24.04.4 LTS (Noble) | Intel Ultra 9 285K | NVIDIA RTX 5070
-# Domain: app.srishakthi.in (with attenda.srishakthicgpa.in fallback)
+# Domain: app.srishakthicgpa.in
 # Execution: sudo bash repair_and_deploy.sh
 # ==============================================================================
 
@@ -35,7 +35,7 @@ echo -e "${CYAN}Deployment Context:${NC}"
 echo -e "  Root Directory:    ${GREEN}${ROOT_DIR}${NC}"
 echo -e "  Backend Directory: ${GREEN}${BACKEND_DIR}${NC}"
 echo -e "  Executing User:    ${GREEN}${RUN_USER}${NC}"
-echo -e "  Target Host:       ${GREEN}app.srishakthi.in${NC}"
+echo -e "  Target Host:       ${GREEN}app.srishakthicgpa.in${NC}"
 
 # Ensure proper permissions on deployment directory (critical for /var/www)
 chown -R "${RUN_USER}:${RUN_USER}" "${ROOT_DIR}"
@@ -153,7 +153,7 @@ PG_HOST=127.0.0.1
 PG_PORT=${DB_PORT}
 PORT=8001
 HOST=127.0.0.1
-CLOUDFLARE_DOMAIN=app.srishakthi.in
+CLOUDFLARE_DOMAIN=app.srishakthicgpa.in
 EOF
     fi
 done
@@ -378,7 +378,7 @@ map $http_upgrade $connection_upgrade {
 server {
     listen 80;
     listen [::]:80;
-    server_name app.srishakthi.in app.srishakthicgpa.in attenda.srishakthicgpa.in localhost _;
+    server_name app.srishakthicgpa.in attenda.srishakthicgpa.in localhost _;
 
     # Cloudflare Real IP Restoration
     set_real_ip_from 173.245.48.0/20;
@@ -477,9 +477,9 @@ nginx -t
 systemctl reload nginx
 echo -e "${GREEN}[✓] Nginx configured with HTTPS scheme preservation and zero route hijacking.${NC}"
 
-# ── 6. Cloudflare Tunnel Ingress (app.srishakthi.in) ───────────────────────────
+# ── 6. Cloudflare Tunnel Ingress (app.srishakthicgpa.in) ───────────────────────
 echo -e "\n${BLUE}==============================================================================${NC}"
-echo -e "${CYAN}[6/6] Configuring Cloudflare Tunnel for app.srishakthi.in...${NC}"
+echo -e "${CYAN}[6/6] Configuring Cloudflare Tunnel for app.srishakthicgpa.in...${NC}"
 echo -e "${BLUE}==============================================================================${NC}"
 
 mkdir -p /etc/cloudflared
@@ -495,8 +495,6 @@ tunnel: 27b90fd6-f11b-4f35-b160-47bcc2e2ed9e
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
-  - hostname: app.srishakthi.in
-    service: http://127.0.0.1:80
   - hostname: app.srishakthicgpa.in
     service: http://127.0.0.1:80
   - hostname: attenda.srishakthicgpa.in
@@ -550,7 +548,7 @@ echo -e "Operational Status Summary:"
 echo -e "  - Backend Loopback:   http://127.0.0.1:8001/health ($(curl -sf http://127.0.0.1:8001/health || echo 'offline'))"
 echo -e "  - Nginx Ingress:      http://127.0.0.1/healthz ($(curl -sf http://127.0.0.1/healthz || echo 'offline'))"
 echo -e "  - Public Tunnel URL:  https://app.srishakthicgpa.in (Active & Verified)"
-echo -e "  - Alternate URL:      https://app.srishakthi.in"
+echo -e "  - Fallback URL:       https://attenda.srishakthicgpa.in"
 echo -e "  - Database Tables:    ${TABLE_COUNT} verified"
 echo -e "  - Systemd Service:    sudo systemctl status attenda-backend"
 echo -e "  - Ingress Service:    sudo systemctl status cloudflared"

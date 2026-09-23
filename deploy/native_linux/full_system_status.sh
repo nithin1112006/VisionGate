@@ -78,9 +78,6 @@ curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" http://127.
 echo -n "Public Gateway (https://app.srishakthicgpa.in/healthz): "
 curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" https://app.srishakthicgpa.in/healthz 2>/dev/null || echo "FAILED / UNREACHABLE"
 
-echo -n "Public Gateway (https://app.srishakthi.in/healthz):     "
-curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" https://app.srishakthi.in/healthz 2>/dev/null || echo "FAILED / UNREACHABLE"
-
 # 6. Database Schema & Accounts Audit
 echo -e "\n${BLUE}[6/7] PostgreSQL Database & Authentication Audit${NC}"
 echo "--------------------------------------------------"
