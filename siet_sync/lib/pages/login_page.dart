@@ -1097,151 +1097,281 @@ class _GeneralUserDashboardPageState extends State<GeneralUserDashboardPage> {
         .toUpperCase();
 
     return Drawer(
-      child: Container(
-        color: isDark ? const Color(0xFF000000) : Colors.white,
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            Container(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 20,
-                bottom: 24,
-                left: 20,
-                right: 20,
-              ),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isDark
-                      ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
-                      : [Colors.teal, const Color(0xFF26A69A)],
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(
-                      Icons.school,
-                      size: 36,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    displayRole,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.user['name'] ?? 'User',
-                    style: const TextStyle(color: Colors.white70, fontSize: 15),
-                  ),
-                ],
+      width: 304,
+      backgroundColor: isDark ? const Color(0xFF121212) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(16)),
+      ),
+      child: Column(
+        children: [
+          // Professional Header
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              MediaQuery.of(context).padding.top + 14,
+              12,
+              14,
+            ),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isDark
+                    ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
+                    : [Colors.teal, const Color(0xFF26A69A)],
               ),
             ),
-            const SizedBox(height: 12),
-            ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.teal.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.dashboard,
-                  color: Colors.teal,
-                  size: 22,
-                ),
-              ),
-              title: Text(
-                'Dashboard',
-                style: TextStyle(
-                  color: isDark ? Colors.white : Colors.grey.shade700,
-                ),
-              ),
-              selected: _selectedIndex == 0,
-              selectedTileColor: Colors.teal.withValues(alpha: 0.1),
-              onTap: () {
-                setState(() => _selectedIndex = 0);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: (_isRegistered ? Colors.green : Colors.orange)
-                      .withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  _isRegistered ? Icons.check_circle : Icons.face,
-                  color: _isRegistered ? Colors.green : Colors.orange,
-                  size: 22,
-                ),
-              ),
-              title: Text(
-                _isRegistered ? 'Face Registered' : 'Register Face',
-                style: TextStyle(
-                  color: isDark ? Colors.white : Colors.grey.shade700,
-                ),
-              ),
-              selected: _selectedIndex == 1,
-              selectedTileColor: Colors.teal.withValues(alpha: 0.1),
-              onTap: () {
-                setState(() => _selectedIndex = 1);
-                Navigator.pop(context);
-              },
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Divider(
-                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF3D1A1A)
-                        : Colors.red.shade50,
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.school_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        widget.user['name'] ?? 'User',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          displayRole,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: 'Close menu',
+                  splashRadius: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                ),
+              ],
+            ),
+          ),
+
+          // Navigation Items List
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(8, 12, 8, 24),
+              children: [
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                  child: Material(
+                    color: _selectedIndex == 0
+                        ? Colors.teal.withValues(alpha: isDark ? 0.20 : 0.08)
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.logout,
-                    color: Colors.red.shade400,
-                    size: 22,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () {
+                        setState(() => _selectedIndex = 0);
+                        Navigator.pop(context);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.dashboard_rounded,
+                              color: _selectedIndex == 0
+                                  ? Colors.teal
+                                  : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                              size: 21,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Dashboard',
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: _selectedIndex == 0 ? FontWeight.w600 : FontWeight.w500,
+                                  color: _selectedIndex == 0
+                                      ? Colors.teal
+                                      : (isDark ? const Color(0xFFF1F5F9) : const Color(0xFF334155)),
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                            ),
+                            if (_selectedIndex == 0)
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: Colors.teal,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                title: Text(
-                  'Logout',
-                  style: TextStyle(
-                    color: Colors.red.shade400,
-                    fontWeight: FontWeight.w600,
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                  child: Material(
+                    color: _selectedIndex == 1
+                        ? Colors.teal.withValues(alpha: isDark ? 0.20 : 0.08)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () {
+                        setState(() => _selectedIndex = 1);
+                        Navigator.pop(context);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _isRegistered ? Icons.check_circle_rounded : Icons.face_rounded,
+                              color: _selectedIndex == 1
+                                  ? Colors.teal
+                                  : (_isRegistered ? Colors.green : Colors.orange),
+                              size: 21,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _isRegistered ? 'Face Registered' : 'Register Face',
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: _selectedIndex == 1 ? FontWeight.w600 : FontWeight.w500,
+                                  color: _selectedIndex == 1
+                                      ? Colors.teal
+                                      : (isDark ? const Color(0xFFF1F5F9) : const Color(0xFF334155)),
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                            ),
+                            if (_selectedIndex == 1)
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: Colors.teal,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                onTap: _logout,
-                contentPadding: EdgeInsets.zero,
+              ],
+            ),
+          ),
+
+          // Pinned Footer with Logout
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              14,
+              12,
+              14,
+              MediaQuery.of(context).padding.bottom + 12,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF121212) : Colors.white,
+              border: Border(
+                top: BorderSide(
+                  color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+                  width: 0.8,
+                ),
               ),
             ),
-          ],
-        ),
+            child: Material(
+              color: isDark ? const Color(0xFF3D1A1A) : Colors.red.shade50,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () {
+                  Navigator.pop(context);
+                  _logout();
+                },
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.logout_rounded,
+                        color: Colors.red,
+                        size: 20,
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Logout',
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        'v1.0.0',
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

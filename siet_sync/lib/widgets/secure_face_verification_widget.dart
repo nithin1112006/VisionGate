@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'dart:math' as math;
 import '../services/face_verification_service.dart';
 import '../services/leave_balance_notifier.dart';
+import '../services/screen_illumination_service.dart';
 import '../utils/face_recognition_helper.dart';
+import 'attendance/screen_illumination_overlay.dart';
 
 /// Secure face verification widget with real-time feedback
 class SecureFaceVerificationWidget extends StatefulWidget {
@@ -56,11 +58,13 @@ class _SecureFaceVerificationWidgetState
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+    ScreenIlluminationService.instance.init();
     _initializeCamera();
   }
 
   @override
   void dispose() {
+    ScreenIlluminationService.instance.restore();
     _controller?.dispose();
     _animationController.dispose();
     super.dispose();
@@ -439,6 +443,14 @@ class _SecureFaceVerificationWidgetState
                       );
                     },
                   ),
+                ),
+
+              // Screen Flash manual toggle button
+              if (_isInitialized)
+                const Positioned(
+                  top: 16,
+                  right: 16,
+                  child: ScreenIlluminationToggleButton(),
                 ),
 
               // Processing overlay

@@ -843,71 +843,82 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
               ),
             ),
 
-            // Header & Recording Control Bar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title + Live Status Bar + Close
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: _isRecordingActive
-                              ? emeraldGreen.withValues(alpha: 0.15)
-                              : primaryBlue.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          _isRecordingActive ? Icons.fiber_smart_record_rounded : Icons.assignment_turned_in_rounded,
-                          color: _isRecordingActive ? emeraldGreen : primaryBlue,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  widget.subjectName,
-                                  style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w700,
-                                    color: textColor,
-                                  ),
+            // Scrollable Content Area: Header & recording controls scroll seamlessly with student roster!
+            Expanded(
+              child: CustomScrollView(
+                controller: scrollCtrl,
+                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title + Live Status Bar + Close
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(9),
+                                decoration: BoxDecoration(
+                                  color: _isRecordingActive
+                                      ? emeraldGreen.withValues(alpha: 0.15)
+                                      : primaryBlue.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                                const SizedBox(width: 8),
-                                _buildStatusBadge(),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              widget.classSummary,
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 12,
-                                color: subColor,
+                                child: Icon(
+                                  _isRecordingActive ? Icons.fiber_smart_record_rounded : Icons.assignment_turned_in_rounded,
+                                  color: _isRecordingActive ? emeraldGreen : primaryBlue,
+                                  size: 22,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(context),
-                        tooltip: 'Close Sheet',
-                      ),
-                    ],
-                  ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Wrap(
+                                      crossAxisAlignment: WrapCrossAlignment.center,
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      children: [
+                                        Text(
+                                          widget.subjectName,
+                                          style: TextStyle(
+                                            fontFamily: 'Inter',
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: textColor,
+                                          ),
+                                        ),
+                                        _buildStatusBadge(),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      widget.classSummary,
+                                      style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontSize: 12,
+                                        color: subColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                padding: EdgeInsets.zero,
+                                icon: const Icon(Icons.close_rounded),
+                                onPressed: () => Navigator.pop(context),
+                                tooltip: 'Close Sheet',
+                              ),
+                            ],
+                          ),
 
-                  const SizedBox(height: 12),
+                          const SizedBox(height: 12),
 
                   // Action Buttons: Start Recording / Open Check-Out / Stop & Finalize / Face Camera / Export CSV
                   Wrap(
@@ -1080,50 +1091,70 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
                 ],
               ),
             ),
+          ),
 
-            const Divider(height: 1),
+          const SliverToBoxAdapter(
+            child: Divider(height: 1),
+          ),
 
-            // Student Roster List
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: primaryBlue))
-                  : _error != null
-                      ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.error_outline_rounded, color: roseError, size: 36),
-                              const SizedBox(height: 8),
-                              Text(_error!, style: TextStyle(fontFamily: 'Inter', color: subColor)),
-                              const SizedBox(height: 12),
-                              FilledButton(onPressed: _loadRoll, child: const Text('Retry')),
-                            ],
-                          ),
-                        )
-                      : _filteredRoll.isEmpty
-                          ? Center(
-                              child: Text(
-                                'No students match the current filter',
-                                style: TextStyle(fontFamily: 'Inter', color: subColor, fontSize: 13),
-                              ),
-                            )
-                          : ListView.builder(
-                              controller: scrollCtrl,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                              itemCount: _filteredRoll.length,
-                              itemBuilder: (_, i) => _buildStudentRosterRow(_filteredRoll[i], isDark, textColor, subColor),
-                            ),
+          // Student Roster List: scrolls all the way to the top!
+          if (_isLoading)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator(color: primaryBlue)),
+            )
+          else if (_error != null)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.error_outline_rounded, color: roseError, size: 36),
+                    const SizedBox(height: 8),
+                    Text(_error!, style: TextStyle(fontFamily: 'Inter', color: subColor)),
+                    const SizedBox(height: 12),
+                    FilledButton(onPressed: _loadRoll, child: const Text('Retry')),
+                  ],
+                ),
+              ),
+            )
+          else if (_filteredRoll.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Text(
+                    'No students match the current filter',
+                    style: TextStyle(fontFamily: 'Inter', color: subColor, fontSize: 13),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => _buildStudentRosterRow(_filteredRoll[i], isDark, textColor, subColor),
+                  childCount: _filteredRoll.length,
+                ),
+              ),
             ),
-          ],
-        ),
+        ],
       ),
-    );
+    ),
+  ],
+),
+),
+);
   }
 
   Widget _buildStatusBadge() {
     if (_isRecordingActive) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
         decoration: BoxDecoration(
           color: emeraldGreen.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(8),
@@ -1137,7 +1168,7 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
               height: 6,
               decoration: const BoxDecoration(color: emeraldGreen, shape: BoxShape.circle),
             ),
-            const SizedBox(width: 5),
+            const SizedBox(width: 4),
             Text(
               'RECORDING • ${_formatElapsed(_sessionElapsedSeconds)}',
               style: const TextStyle(
@@ -1145,7 +1176,7 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
                 fontWeight: FontWeight.w700,
                 fontSize: 10,
                 color: emeraldGreen,
-                letterSpacing: 0.4,
+                letterSpacing: 0.2,
               ),
             ),
           ],
@@ -1154,7 +1185,7 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
       decoration: BoxDecoration(
         color: const Color(0xFF64748B).withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(8),
@@ -1166,7 +1197,7 @@ class _ClassSessionRollSheetState extends State<ClassSessionRollSheet>
           fontWeight: FontWeight.w700,
           fontSize: 10,
           color: Color(0xFF64748B),
-          letterSpacing: 0.4,
+          letterSpacing: 0.2,
         ),
       ),
     );

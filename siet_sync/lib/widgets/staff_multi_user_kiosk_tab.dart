@@ -8,6 +8,9 @@ import 'package:camera/camera.dart';
 
 import '../config/college_ip_config.dart';
 import '../services/client_face_prefilter.dart';
+import '../services/screen_illumination_service.dart';
+import '../utils/face_recognition_helper.dart';
+import 'attendance/screen_illumination_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StaffMultiUserKioskTab
@@ -106,6 +109,7 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ScreenIlluminationService.instance.init();
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -123,6 +127,7 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ScreenIlluminationService.instance.restore();
     _animationController.dispose();
     _overlayTimer?.cancel();
     _cameraController?.dispose();
@@ -299,7 +304,16 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
       _scanSuccess = false;
     });
     try {
-      final file = await _cameraController!.takePicture();
+      final file = await FaceRecognitionHelper.captureBestFrame(_cameraController!, maxFrames: 3);
+      if (file == null) {
+        if (mounted) {
+          setState(() {
+            _isScanning = false;
+            _scanMessage = '❌ Could not capture image. Hold camera steady.';
+          });
+        }
+        return;
+      }
 
       // On-device Google ML Kit pre-filter
       final prefilter = await ClientFacePreFilterService.evaluateImagePath(
@@ -498,7 +512,11 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
     });
 
     try {
-      final file = await _regCameraController!.takePicture();
+      final file = await FaceRecognitionHelper.captureBestFrame(_regCameraController!, maxFrames: 3);
+      if (file == null) {
+        if (mounted) setState(() => _isPoseSatisfying = false);
+        return;
+      }
 
       final FaceTargetPose targetPose = _regStep == _RegStep.capturingFront
           ? FaceTargetPose.front
@@ -1497,64 +1515,68 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
       );
     }
 
-    return GestureDetector(
-      onTap: _isScanning ? null : _scanFace,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. Uncropped Safe Camera Preview
-          _buildSafeCameraPreview(_cameraController, fit: BoxFit.contain),
+    return ScreenIlluminationOverlay(
+      isDark: isDark,
+      child: GestureDetector(
+        onTap: _isScanning ? null : _scanFace,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // 1. Uncropped Safe Camera Preview
+            _buildSafeCameraPreview(_cameraController, fit: BoxFit.contain),
 
-          // 2. HUD Mask Overlay (Dark vignette + center scanner oval + corner brackets + grid)
-          AnimatedBuilder(
-            animation: _animationController,
-            builder: (context, child) {
-              return CustomPaint(
-                painter: _KioskFaceScannerMaskPainter(
-                  scanProgress: _animationController.value,
-                  faceDetected: true,
-                  faceQuality: 0.90,
-                ),
-              );
-            },
-          ),
+            // 2. HUD Mask Overlay (Dark vignette + center scanner oval + corner brackets + grid)
+            AnimatedBuilder(
+              animation: _animationController,
+              builder: (context, child) {
+                return CustomPaint(
+                  painter: _KioskFaceScannerMaskPainter(
+                    scanProgress: _animationController.value,
+                    faceDetected: true,
+                    faceQuality: 0.90,
+                  ),
+                );
+              },
+            ),
 
-          // 4. Top Status Overlay Bar
-          Positioned(
-            top: 12,
-            left: 12,
-            right: 12,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 360;
-                return Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.65),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFF6366F1).withValues(alpha: 0.4)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.circle, color: Color(0xFF10B981), size: 8),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                isNarrow ? 'Live Camera Feed' : 'Live Camera Feed • Full Face View',
-                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+            // 4. Top Status Overlay Bar
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNarrow = constraints.maxWidth < 360;
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF6366F1).withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.circle, color: Color(0xFF10B981), size: 8),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  isNarrow ? 'Live Camera Feed' : 'Live Camera Feed • Full Face View',
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
+                      const SizedBox(width: 8),
+                      const ScreenIlluminationToggleButton(),
+                      const SizedBox(width: 8),
                     InkWell(
                       onTap: _stopScanCamera,
                       borderRadius: BorderRadius.circular(20),
@@ -1625,8 +1647,9 @@ class _StaffMultiUserKioskTabState extends State<StaffMultiUserKioskTab>
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
 
 

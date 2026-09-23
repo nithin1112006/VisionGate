@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import '../services/screen_illumination_service.dart';
 
 /// Enhanced face recognition helper with improved image preprocessing
 /// Web-compatible: uses XFile and Uint8List instead of dart:io File
@@ -14,13 +15,34 @@ class FaceRecognitionHelper {
 
   static const List<num> _laplacianKernel = [0, -1, 0, -1, 4, -1, 0, -1, 0];
 
-  /// Capture the frame directly to avoid slow client-side CPU processing (web-compatible)
+  /// Capture the frame with automatic low-light detection & screen illumination
   static Future<XFile?> captureBestFrame(
     CameraController controller, {
     int maxFrames = 3,
+    bool autoScreenIllumination = true,
   }) async {
     try {
-      return await controller.takePicture();
+      final initialFrame = await controller.takePicture();
+
+      // If auto-illumination is enabled and not already illuminated, check if low light
+      if (autoScreenIllumination && !ScreenIlluminationService.instance.isIlluminating) {
+        final bytes = await initialFrame.readAsBytes();
+        final isLowLight = ScreenIlluminationService.evaluateImageLuminanceIsLow(bytes);
+
+        if (isLowLight) {
+          // Trigger high brightness screen illumination
+          await ScreenIlluminationService.instance.activate(isAutoTriggered: true);
+
+          // Allow 450ms for front camera hardware auto-exposure (AE) to adapt to the illuminated face
+          await Future.delayed(const Duration(milliseconds: 450));
+
+          // Retake frame with proper illumination
+          final illuminatedFrame = await controller.takePicture();
+          return illuminatedFrame;
+        }
+      }
+
+      return initialFrame;
     } catch (e) {
       return null;
     }

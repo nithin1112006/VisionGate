@@ -73,8 +73,6 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
   bool _myClassOnly = false;
   String _searchQuery = '';
 
-  String get _currentStaffRegNo => (widget.staffRegNo ?? widget.user['reg_no'] ?? widget.user['regNo'] ?? '').toString();
-
   @override
   void initState() {
     super.initState();
@@ -150,18 +148,23 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
         }
         if (activeAdv['batch'] != null && activeAdv['batch'].toString().isNotEmpty) {
           _selectedBatch = activeAdv['batch'].toString();
-          queryParams['batch'] = _selectedBatch;
         }
         if (activeAdv['section'] != null && activeAdv['section'].toString().isNotEmpty) {
           _selectedSection = activeAdv['section'].toString();
           queryParams['section'] = _selectedSection;
         }
+        // Change 5: Pass exact canonical semester from class_advisors record
+        final advisorSemester = activeAdv['semester'];
+        if (advisorSemester != null) {
+          final semInt = advisorSemester is int ? advisorSemester : int.tryParse(advisorSemester.toString());
+          if (semInt != null) {
+            _selectedSemester = semInt;
+            queryParams['semester'] = semInt.toString();
+          }
+        }
       }
       queryParams['scope_mode'] = 'advised';
       queryParams['my_class_only'] = 'true';
-      if (_currentStaffRegNo.isNotEmpty) {
-        queryParams['mentor'] = _currentStaffRegNo;
-      }
     } else {
       if (_selectedDept != 'ALL') {
         queryParams['dept'] = _selectedDept;
@@ -714,72 +717,131 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
               ),
               const SizedBox(height: 14),
 
-              // Filter Bar
-              StudentFilterBar(
-                isAdmin: widget.isAdmin,
-                isHod: widget.isHod,
-                isStaff: widget.isStaff,
-                selectedDept: _selectedDept,
-                selectedBatch: _selectedBatch,
-                selectedSemester: _selectedSemester,
-                selectedSemesterType: _selectedSemesterType,
-                selectedSection: _selectedSection,
-                selectedFaceStatus: _selectedFaceStatus,
-                selectedAccountStatus: _selectedAccountStatus,
-                myClassOnly: _myClassOnly,
-                searchQuery: _searchQuery,
-                availableBatches: _availableBatches,
-                onDeptChanged: (v) {
-                  setState(() => _selectedDept = v);
-                  _fetchStudents();
-                },
-                onBatchChanged: (v) {
-                  setState(() => _selectedBatch = v);
-                  _fetchStudents();
-                },
-                onSemesterChanged: (v) {
-                  setState(() => _selectedSemester = v);
-                  _fetchStudents();
-                },
-                onSemesterTypeChanged: (v) {
-                  setState(() => _selectedSemesterType = v);
-                  _fetchStudents();
-                },
-                onSectionChanged: (v) {
-                  setState(() => _selectedSection = v);
-                  _fetchStudents();
-                },
-                onFaceStatusChanged: (v) {
-                  setState(() => _selectedFaceStatus = v);
-                  _fetchStudents();
-                },
-                onAccountStatusChanged: (v) {
-                  setState(() => _selectedAccountStatus = v);
-                  _fetchStudents();
-                },
-                onMyClassOnlyChanged: (v) {
-                  setState(() => _myClassOnly = v);
-                  _fetchStudents();
-                },
-                onSearchChanged: (v) {
-                  setState(() => _searchQuery = v);
-                  _fetchStudents();
-                },
-                onClearFilters: () {
-                  setState(() {
-                    _selectedDept = widget.isAdmin ? 'ALL' : (widget.defaultDept ?? 'CSE');
-                    _selectedBatch = 'ALL';
-                    _selectedSemester = null;
-                    _selectedSemesterType = 'ALL';
-                    _selectedSection = 'ALL';
-                    _selectedFaceStatus = 'ALL';
-                    _selectedAccountStatus = 'ALL';
-                    _searchQuery = '';
-                    if (widget.isStaff) _myClassOnly = true;
-                  });
-                  _fetchStudents();
-                },
-              ),
+              // Change 6: Filter bar is shown only for Admin/HOD or Staff in Handled-Classes tab (section 1).
+              // For Staff in Advised Class tab (section 0), the scope is locked to their assigned class.
+              if (widget.isStaff && _staffActiveSection == 0) ...[
+                // Read-only class scope label + search only
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.lock_outlined, size: 16, color: isDark ? Colors.white38 : const Color(0xFF94A3B8)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _selectedSemester != null && _selectedSection != 'ALL'
+                              ? 'Showing students of: $_selectedDept — Sem $_selectedSemester, Sec $_selectedSection'
+                              : 'Showing your advised class students',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  onChanged: (v) {
+                    setState(() => _searchQuery = v);
+                    _fetchStudents();
+                  },
+                  decoration: InputDecoration(
+                    hintText: 'Search student by name or register number…',
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                    filled: true,
+                    fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: primaryBlue),
+                    ),
+                  ),
+                ),
+              ] else ...[
+                StudentFilterBar(
+                  isAdmin: widget.isAdmin,
+                  isHod: widget.isHod,
+                  isStaff: widget.isStaff,
+                  selectedDept: _selectedDept,
+                  selectedBatch: _selectedBatch,
+                  selectedSemester: _selectedSemester,
+                  selectedSemesterType: _selectedSemesterType,
+                  selectedSection: _selectedSection,
+                  selectedFaceStatus: _selectedFaceStatus,
+                  selectedAccountStatus: _selectedAccountStatus,
+                  myClassOnly: _myClassOnly,
+                  searchQuery: _searchQuery,
+                  availableBatches: _availableBatches,
+                  onDeptChanged: (v) {
+                    setState(() => _selectedDept = v);
+                    _fetchStudents();
+                  },
+                  onBatchChanged: (v) {
+                    setState(() => _selectedBatch = v);
+                    _fetchStudents();
+                  },
+                  onSemesterChanged: (v) {
+                    setState(() => _selectedSemester = v);
+                    _fetchStudents();
+                  },
+                  onSemesterTypeChanged: (v) {
+                    setState(() => _selectedSemesterType = v);
+                    _fetchStudents();
+                  },
+                  onSectionChanged: (v) {
+                    setState(() => _selectedSection = v);
+                    _fetchStudents();
+                  },
+                  onFaceStatusChanged: (v) {
+                    setState(() => _selectedFaceStatus = v);
+                    _fetchStudents();
+                  },
+                  onAccountStatusChanged: (v) {
+                    setState(() => _selectedAccountStatus = v);
+                    _fetchStudents();
+                  },
+                  onMyClassOnlyChanged: (v) {
+                    setState(() => _myClassOnly = v);
+                    _fetchStudents();
+                  },
+                  onSearchChanged: (v) {
+                    setState(() => _searchQuery = v);
+                    _fetchStudents();
+                  },
+                  onClearFilters: () {
+                    setState(() {
+                      _selectedDept = widget.isAdmin ? 'ALL' : (widget.defaultDept ?? 'CSE');
+                      _selectedBatch = 'ALL';
+                      _selectedSemester = null;
+                      _selectedSemesterType = 'ALL';
+                      _selectedSection = 'ALL';
+                      _selectedFaceStatus = 'ALL';
+                      _selectedAccountStatus = 'ALL';
+                      _searchQuery = '';
+                      if (widget.isStaff) _myClassOnly = true;
+                    });
+                    _fetchStudents();
+                  },
+                ),
+              ],
+
               const SizedBox(height: 16),
 
               // Student Grid Content
@@ -948,8 +1010,8 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: EdgeInsets.symmetric(
-            horizontal: isMobile ? 8 : 14,
-            vertical: isMobile ? 8 : 10,
+            horizontal: isMobile ? 8 : 12,
+            vertical: isMobile ? 7 : 10,
           ),
           decoration: BoxDecoration(
             color: isSelected
@@ -969,7 +1031,7 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
           child: Row(
             children: [
               Container(
-                padding: EdgeInsets.all(isMobile ? 6 : 8),
+                padding: EdgeInsets.all(isMobile ? 5 : 7),
                 decoration: BoxDecoration(
                   color: (isSelected ? primaryBlue : (isDark ? Colors.white12 : Colors.grey.shade300))
                       .withValues(alpha: 0.15),
@@ -977,34 +1039,66 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                 ),
                 child: Icon(
                   icon,
-                  size: isMobile ? 16 : 20,
+                  size: isMobile ? 15 : 19,
                   color: isSelected ? primaryBlue : (isDark ? Colors.white60 : Colors.grey.shade700),
                 ),
               ),
-              SizedBox(width: isMobile ? 6 : 10),
+              SizedBox(width: isMobile ? 6 : 9),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontFamily: 'Inter',
-                        fontWeight: FontWeight.w700,
-                        fontSize: isMobile ? 12 : 13,
-                        color: isSelected
-                            ? (isDark ? Colors.white : const Color(0xFF0F172A))
-                            : (isDark ? Colors.white60 : const Color(0xFF64748B)),
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              title,
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                fontWeight: FontWeight.w700,
+                                fontSize: isMobile ? 12 : 13,
+                                letterSpacing: -0.2,
+                                color: isSelected
+                                    ? (isDark ? Colors.white : const Color(0xFF0F172A))
+                                    : (isDark ? Colors.white60 : const Color(0xFF64748B)),
+                              ),
+                              maxLines: 1,
+                            ),
+                          ),
+                        ),
+                        if (countBadge > 0) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: (isSelected ? primaryBlue : (isDark ? Colors.white12 : Colors.grey.shade400))
+                                  .withValues(alpha: isSelected ? 0.16 : 0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '$countBadge',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                fontWeight: FontWeight.w700,
+                                fontSize: isMobile ? 9.5 : 11,
+                                color: isSelected ? primaryBlue : (isDark ? Colors.white70 : Colors.grey.shade700),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                    const SizedBox(height: 1),
                     Text(
                       subtitle,
                       style: TextStyle(
                         fontFamily: 'Inter',
-                        fontSize: isMobile ? 10 : 11,
+                        fontSize: isMobile ? 9.5 : 11,
                         color: isSelected ? primaryBlue : (isDark ? Colors.white38 : Colors.grey.shade500),
                       ),
                       maxLines: 1,
@@ -1013,23 +1107,6 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                   ],
                 ),
               ),
-              if (countBadge > 0)
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: isMobile ? 6 : 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: (isSelected ? primaryBlue : Colors.grey).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '$countBadge',
-                    style: TextStyle(
-                      fontFamily: 'Inter',
-                      fontWeight: FontWeight.w700,
-                      fontSize: isMobile ? 10 : 11,
-                      color: isSelected ? primaryBlue : Colors.grey.shade600,
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
@@ -1042,19 +1119,9 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
     final dept = (activeAdv['dept'] ?? _selectedDept).toString();
     final batch = (activeAdv['batch'] ?? _selectedBatch).toString();
     final sec = (activeAdv['section'] ?? _selectedSection).toString();
-    final advisorType = (activeAdv['advisor_type'] ?? 'primary').toString().replaceAll('_', ' ').toUpperCase();
 
-    // Dynamically resolve active semester from loaded advisees or allocation metadata
-    dynamic resolvedSem = activeAdv['semester'];
-    if (_students.isNotEmpty) {
-      for (final s in _students) {
-        if (s['semester'] != null) {
-          resolvedSem = s['semester'];
-          break;
-        }
-      }
-    }
-    final sem = resolvedSem ?? _selectedSemester ?? 1;
+    // Canonical semester strictly from the active advisor allocation
+    final sem = activeAdv['semester'] ?? (_students.isNotEmpty ? _students.first['semester'] : null) ?? _selectedSemester ?? 1;
     final studentCount = _students.length;
 
     return Container(
@@ -1067,74 +1134,134 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
           color: isDark ? const Color(0xFF334155) : const Color(0xFFBFDBFE),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            padding: EdgeInsets.all(isMobile ? 8 : 12),
-            decoration: BoxDecoration(
-              color: primaryBlue.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(isMobile ? 10 : 14),
-            ),
-            child: Icon(Icons.school_rounded, color: primaryBlue, size: isMobile ? 22 : 28),
-          ),
-          SizedBox(width: isMobile ? 10 : 14),
-          Expanded(
-            child: Column(
+      child: isMobile
+          ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: emeraldGreen.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
+                        color: primaryBlue.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Text(
-                        advisorType.contains('CO') ? 'CO-ADVISOR' : 'PRIMARY ADVISOR',
-                        style: const TextStyle(
-                          fontFamily: 'Inter',
-                          fontWeight: FontWeight.w700,
-                          fontSize: 9,
-                          color: emeraldGreen,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
+                      child: const Icon(Icons.school_rounded, color: primaryBlue, size: 22),
                     ),
-                    Text(
-                      '• Batch $batch',
-                      style: TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: isMobile ? 11 : 12,
-                        color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: emeraldGreen.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  'CLASS ADVISOR',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 9,
+                                    color: emeraldGreen,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  '• Batch $batch',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 11,
+                                    color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '$dept • Sem $sem-$sec • $studentCount Advisees',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: isDark ? Colors.white : const Color(0xFF0F172A),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  isMobile
-                      ? '$dept • Sem $sem-$sec • $studentCount Advisees'
-                      : 'Department of $dept • Semester $sem-$sec • $studentCount Advisees',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontWeight: FontWeight.w700,
-                    fontSize: isMobile ? 14 : 16,
-                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                if (advisedClasses.length > 1) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isDark ? Colors.white24 : const Color(0xFFBFDBFE),
+                      ),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        value: _selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1),
+                        isDense: true,
+                        isExpanded: true,
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                        icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: primaryBlue),
+                        items: List.generate(advisedClasses.length, (idx) {
+                          final c = advisedClasses[idx] as Map<String, dynamic>;
+                          final batchStr = c['batch'] != null && c['batch'].toString().isNotEmpty ? ' (${c['batch']})' : '';
+                          return DropdownMenuItem<int>(
+                            value: idx,
+                            child: Text(
+                              'Class: ${c['dept']} - Sec ${c['section']}$batchStr',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() {
+                              _selectedAdvisedClassIndex = val;
+                              final sel = advisedClasses[val];
+                              _selectedDept = (sel['dept'] ?? _selectedDept).toString();
+                              _selectedBatch = (sel['batch'] ?? _selectedBatch).toString();
+                              _selectedSemester = sel['semester'] is int ? sel['semester'] : int.tryParse(sel['semester'].toString());
+                              _selectedSection = (sel['section'] ?? _selectedSection).toString();
+                            });
+                            _fetchStudents();
+                          }
+                        },
+                      ),
+                    ),
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                ],
                 if (activeAdv['is_teaching_in_this_class'] == true &&
                     (activeAdv['taught_subjects'] as List?)?.isNotEmpty == true) ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Wrap(
                     spacing: 6,
-                    runSpacing: 4,
+                    runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Container(
@@ -1149,18 +1276,18 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                           children: [
                             const Icon(Icons.menu_book_rounded, size: 12, color: primaryBlue),
                             const SizedBox(width: 4),
-                            Text(
-                              isMobile
-                                  ? 'Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => s['subject_code']).join(', ')}'
-                                  : 'Also Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => '${s['subject_code']} - ${s['subject_name']}').join(' • ')}',
-                              style: const TextStyle(
-                                fontFamily: 'Inter',
-                                fontWeight: FontWeight.w600,
-                                fontSize: 11,
-                                color: primaryBlue,
+                            Flexible(
+                              child: Text(
+                                'Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => s['subject_code']).join(', ')}',
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 11,
+                                  color: primaryBlue,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
                               ),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
                             ),
                           ],
                         ),
@@ -1203,63 +1330,198 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
                   ),
                 ],
               ],
-            ),
-          ),
-          if (advisedClasses.length > 1) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? Colors.white24 : const Color(0xFFBFDBFE),
-                ),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<int>(
-                  value: _selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1),
-                  isDense: true,
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontWeight: FontWeight.w600,
-                    fontSize: isMobile ? 11 : 12,
-                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: primaryBlue.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: primaryBlue),
-                  items: List.generate(advisedClasses.length, (idx) {
-                    final c = advisedClasses[idx] as Map<String, dynamic>;
-                    final batchStr = c['batch'] != null && c['batch'].toString().isNotEmpty ? ' (${c['batch']})' : '';
-                    return DropdownMenuItem<int>(
-                      value: idx,
-                      child: Text('${c['dept']} - Sec ${c['section']}$batchStr'),
-                    );
-                  }),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() {
-                        _selectedAdvisedClassIndex = val;
-                        final sel = advisedClasses[val];
-                        _selectedDept = (sel['dept'] ?? _selectedDept).toString();
-                        _selectedBatch = (sel['batch'] ?? _selectedBatch).toString();
-                        _selectedSemester = sel['semester'] is int ? sel['semester'] : int.tryParse(sel['semester'].toString());
-                        _selectedSection = (sel['section'] ?? _selectedSection).toString();
-                      });
-                      _fetchStudents();
-                    }
-                  },
+                  child: const Icon(Icons.school_rounded, color: primaryBlue, size: 28),
                 ),
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: emeraldGreen.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'CLASS ADVISOR',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                fontWeight: FontWeight.w700,
+                                fontSize: 9,
+                                color: emeraldGreen,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '• Batch $batch',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12,
+                              color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Department of $dept • Semester $sem-$sec • $studentCount Advisees',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (activeAdv['is_teaching_in_this_class'] == true &&
+                          (activeAdv['taught_subjects'] as List?)?.isNotEmpty == true) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: primaryBlue.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: primaryBlue.withValues(alpha: 0.3)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.menu_book_rounded, size: 12, color: primaryBlue),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      'Also Teaching: ${(activeAdv['taught_subjects'] as List).map((s) => '${s['subject_code']} - ${s['subject_name']}').join(' • ')}',
+                                      style: const TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 11,
+                                        color: primaryBlue,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _staffActiveSection = 1;
+                                });
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: isDark ? Colors.white10 : Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: isDark ? Colors.white24 : const Color(0xFFBFDBFE),
+                                  ),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'Subject View',
+                                      style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 11,
+                                        color: primaryBlue,
+                                      ),
+                                    ),
+                                    SizedBox(width: 3),
+                                    Icon(Icons.arrow_forward_rounded, size: 12, color: primaryBlue),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (advisedClasses.length > 1) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isDark ? Colors.white24 : const Color(0xFFBFDBFE),
+                      ),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        value: _selectedAdvisedClassIndex.clamp(0, advisedClasses.length - 1),
+                        isDense: true,
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          color: isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                        icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: primaryBlue),
+                        items: List.generate(advisedClasses.length, (idx) {
+                          final c = advisedClasses[idx] as Map<String, dynamic>;
+                          final batchStr = c['batch'] != null && c['batch'].toString().isNotEmpty ? ' (${c['batch']})' : '';
+                          return DropdownMenuItem<int>(
+                            value: idx,
+                            child: Text('${c['dept']} - Sec ${c['section']}$batchStr'),
+                          );
+                        }),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() {
+                              _selectedAdvisedClassIndex = val;
+                              final sel = advisedClasses[val];
+                              _selectedDept = (sel['dept'] ?? _selectedDept).toString();
+                              _selectedBatch = (sel['batch'] ?? _selectedBatch).toString();
+                              _selectedSemester = sel['semester'] is int ? sel['semester'] : int.tryParse(sel['semester'].toString());
+                              _selectedSection = (sel['section'] ?? _selectedSection).toString();
+                            });
+                            _fetchStudents();
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
-        ],
-      ),
     );
   }
 
   Widget _buildMetricTile(String label, String value, IconData icon, Color color, bool isDark, {bool isMobile = false}) {
     if (isMobile) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF1E293B) : Colors.white,
           borderRadius: BorderRadius.circular(14),
@@ -1273,25 +1535,32 @@ class _StudentManagementTabState extends State<StudentManagementTab> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(5),
+                  padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Icon(icon, color: color, size: 16),
+                  child: Icon(icon, color: color, size: 15),
                 ),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      value,
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: isDark ? Colors.white : const Color(0xFF0F172A),
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 5),
             Text(
               label,
               style: TextStyle(

@@ -4188,137 +4188,213 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final String adminName = widget.user['name'] ?? 'System Admin';
 
     return Drawer(
+      width: 304,
       backgroundColor: AdminColors.getCard(isDark),
-      child: ListView(
-        padding: EdgeInsets.zero,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(16)),
+      ),
+      child: Column(
         children: [
-          // Drawer Gradient Header
+          // Professional Header
           Container(
-            padding: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top + 20,
-              bottom: 24,
-              left: 20,
-              right: 20,
+            padding: EdgeInsets.fromLTRB(
+              16,
+              MediaQuery.of(context).padding.top + 14,
+              12,
+              14,
             ),
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                colors: [Color(0xFF4338CA), Color(0xFF6366F1)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: AdminShadows.sm,
+                // Prominent Avatar
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: AdminShadows.sm,
+                  ),
+                  child: Center(
+                    child: Text(
+                      adminName.isNotEmpty ? adminName[0].toUpperCase() : 'A',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AdminColors.primary,
                       ),
-                      child: Center(
-                        child: Text(
-                          adminName.isNotEmpty ? adminName[0].toUpperCase() : 'A',
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AdminColors.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Admin Identity
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        adminName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'System Administrator',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            adminName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          const AdminBadge(
-                            label: 'System Administrator',
-                            color: Colors.white,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
+                ),
+                // Quick Close Button
+                IconButton(
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: 'Close menu',
+                  splashRadius: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 12),
 
-          // Drawer Nav Options with Categorized Section Sub-Headings
-          for (final item in _adminNavEntries) ...[
-            if (item.sectionHeader != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-                child: Text(
-                  item.sectionHeader!.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                    color: AdminColors.getTextMuted(isDark),
+          // Scrollable Navigation Items
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
+              children: [
+                for (int i = 0; i < _adminNavEntries.length; i++) ...[
+                  if (_adminNavEntries[i].sectionHeader != null) ...[
+                    if (i > 0)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 6,
+                        ),
+                        child: Divider(
+                          height: 1,
+                          thickness: 0.6,
+                          color: AdminColors.getBorder(isDark).withValues(alpha: 0.5),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+                      child: Text(
+                        _adminNavEntries[i].sectionHeader!.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                          color: AdminColors.getTextMuted(isDark),
+                        ),
+                      ),
+                    ),
+                  ],
+                  _buildDrawerItem(
+                    _adminNavEntries[i].index,
+                    _adminNavEntries[i].selectedIcon,
+                    _adminNavEntries[i].label,
+                    _adminNavEntries[i].icon,
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Pinned Footer with Sign Out
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              14,
+              12,
+              14,
+              MediaQuery.of(context).padding.bottom + 12,
+            ),
+            decoration: BoxDecoration(
+              color: AdminColors.getCard(isDark),
+              border: Border(
+                top: BorderSide(
+                  color: AdminColors.getBorder(isDark),
+                  width: 0.8,
+                ),
+              ),
+            ),
+            child: Material(
+              color: isDark
+                  ? AdminColors.danger.withValues(alpha: 0.12)
+                  : AdminColors.dangerSoft,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () {
+                  Navigator.pop(context);
+                  _logout();
+                },
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.logout_rounded,
+                        color: AdminColors.danger,
+                        size: 20,
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Sign Out',
+                          style: TextStyle(
+                            color: AdminColors.danger,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        'v1.0.0',
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            _buildDrawerItem(
-              item.index,
-              item.selectedIcon,
-              item.label,
-              item.icon,
             ),
-          ],
-
-
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Divider(color: AdminColors.getBorder(isDark)),
           ),
-
-          // Logout Action
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AdminColors.dangerSoft,
-                borderRadius: BorderRadius.circular(AdminRadii.md),
-              ),
-              child: const Icon(
-                Icons.logout_rounded,
-                color: AdminColors.danger,
-                size: 20,
-              ),
-            ),
-            title: const Text(
-              'Sign Out',
-              style: TextStyle(
-                color: AdminColors.danger,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _logout();
-            },
-          ),
-          const SizedBox(height: 20),
         ],
       ),
     );
@@ -4335,61 +4411,56 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     const accent = AdminColors.primary;
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      decoration: BoxDecoration(
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+      child: Material(
         color: isSelected
-            ? accent.withValues(alpha: isDark ? 0.2 : 0.1)
+            ? accent.withValues(alpha: isDark ? 0.20 : 0.08)
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          setState(() => _selectedIndex = index);
-          Navigator.pop(context);
-        },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? accent
-                      : (isDark
-                            ? const Color(0xFF1C1C1E)
-                            : Colors.grey.shade100),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            setState(() => _selectedIndex = index);
+            Navigator.pop(context);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(
+              children: [
+                Icon(
                   isSelected ? selectedIcon : unselectedIcon,
                   color: isSelected
-                      ? Colors.white
-                      : (isDark ? Colors.white60 : Colors.grey.shade600),
-                  size: 22,
+                      ? accent
+                      : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                  size: 21,
                 ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: isSelected
-                        ? FontWeight.bold
-                        : FontWeight.w500,
-                    color: isSelected
-                        ? accent
-                        : (isDark ? Colors.white : Colors.grey.shade700),
-                    fontSize: 15,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      color: isSelected
+                          ? accent
+                          : (isDark ? const Color(0xFFF1F5F9) : const Color(0xFF334155)),
+                      letterSpacing: -0.2,
+                    ),
                   ),
                 ),
-              ),
-              if (isSelected)
-                const Icon(Icons.chevron_right, color: accent, size: 22),
-            ],
+                if (isSelected)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      color: accent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -8140,7 +8211,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
 
     try {
       final response = await http.put(
-        Uri.parse('$API_URL/admin/departments/$oldName'),
+        Uri.parse('$API_URL/admin/departments/${Uri.encodeComponent(oldName)}'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.token}',
@@ -8149,22 +8220,28 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Department "$oldName" updated to "$result"')),
-        );
-        fetchDepartmentData();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Department "$oldName" updated to "$result"')),
+          );
+        }
+        await fetchDepartmentData();
       } else {
         final error =
             jsonDecode(response.body)['detail'] ??
             'Failed to update department';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error)));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(error)));
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      }
     }
   }
 
@@ -8174,7 +8251,7 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
       builder: (context) => AlertDialog(
         title: const Text('Delete Department'),
         content: Text(
-          'Are you sure you want to delete "$deptName"? This action cannot be undone.',
+          'Are you sure you want to delete "$deptName"? This will permanently remove all associated staff, students, timetable, attendance, and historical records.',
         ),
         actions: [
           TextButton(
@@ -8194,29 +8271,39 @@ class _DepartmentsTabState extends State<DepartmentsTab> {
 
     try {
       final response = await http.delete(
-        Uri.parse('$API_URL/admin/departments/$deptName'),
+        Uri.parse('$API_URL/admin/departments/${Uri.encodeComponent(deptName)}'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Department "$deptName" deleted successfully'),
-          ),
-        );
-        fetchDepartmentData();
+        if (mounted) {
+          setState(() {
+            departments.remove(deptName);
+            deptData.remove(deptName);
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Department "$deptName" deleted successfully'),
+            ),
+          );
+        }
+        await fetchDepartmentData();
       } else {
         final error =
             jsonDecode(response.body)['detail'] ??
             'Failed to delete department';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error)));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(error)));
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${cleanAdminErrorMessage(e)}')));
+      }
     }
   }
 

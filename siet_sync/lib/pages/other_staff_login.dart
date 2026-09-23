@@ -814,180 +814,245 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> with 
     final accent = roleAccentColor;
 
     return Drawer(
-      child: Container(
-        color: isDark ? const Color(0xFF000000) : Colors.white,
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            Container(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 20,
-                bottom: 24,
-                left: 20,
-                right: 20,
+      width: 304,
+      backgroundColor: isDark ? const Color(0xFF121212) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(16)),
+      ),
+      child: Column(
+        children: [
+          // Professional Header
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              MediaQuery.of(context).padding.top + 14,
+              12,
+              14,
+            ),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isDark
+                    ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
+                    : [accent, accent.withValues(alpha: 0.8)],
               ),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isDark
-                      ? [const Color(0xFF1C1C1E), const Color(0xFF2C2C2E)]
-                      : [accent, accent.withValues(alpha: 0.7)],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.person_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(
-                      Icons.person,
-                      size: 36,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Other Staff Portal',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.user['name'] ?? 'Staff',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70, fontSize: 15),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 180),
-                      child: Text(
-                        roleDisplayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        widget.user['name'] ?? 'Staff',
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          roleDisplayName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildDrawerSectionHeader('Main', isDark),
-            _buildDrawerItem(
-              0,
-              Icons.dashboard_rounded,
-              'Dashboard',
-              Icons.dashboard_outlined,
-            ),
-            _buildDrawerSectionHeader('Attendance & Face', isDark),
-            _buildDrawerItem(
-              1,
-              Icons.assignment_turned_in_rounded,
-              'Mark Attendance',
-              Icons.assignment_turned_in_outlined,
-            ),
-            _buildDrawerItem(
-              2,
-              Icons.face_rounded,
-              'My Face',
-              Icons.face_outlined,
-            ),
-            _buildDrawerSectionHeader('Leave & Records', isDark),
-            _buildDrawerItem(
-              3,
-              Icons.event_note_rounded,
-              'Leave Requests',
-              Icons.event_note_outlined,
-            ),
-            _buildDrawerItem(
-              4,
-              Icons.history_edu_rounded,
-              'Attendance Log',
-              Icons.history_edu_outlined,
-            ),
-            _buildDrawerSectionHeader('System', isDark),
-            _buildDrawerItem(
-              5,
-              Icons.settings_rounded,
-              'Settings',
-              Icons.settings_outlined,
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Divider(
-                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF3D1A1A)
-                        : Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.logout,
-                    color: Colors.red.shade400,
-                    size: 22,
+                    ],
                   ),
                 ),
-                title: Text(
-                  'Logout',
-                  style: TextStyle(
-                    color: Colors.red.shade400,
-                    fontWeight: FontWeight.w600,
+                IconButton(
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white70,
+                    size: 20,
                   ),
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: 'Close menu',
+                  splashRadius: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 ),
-                onTap: _logout,
-                contentPadding: EdgeInsets.zero,
+              ],
+            ),
+          ),
+
+          // Scrollable Nav Items
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
+              children: [
+                _buildDrawerSectionHeader('Main', isDark, isFirst: true),
+                _buildDrawerItem(
+                  0,
+                  Icons.dashboard_rounded,
+                  'Dashboard',
+                  Icons.dashboard_outlined,
+                ),
+                _buildDrawerSectionHeader('Attendance & Face', isDark),
+                _buildDrawerItem(
+                  1,
+                  Icons.assignment_turned_in_rounded,
+                  'Mark Attendance',
+                  Icons.assignment_turned_in_outlined,
+                ),
+                _buildDrawerItem(
+                  2,
+                  Icons.face_rounded,
+                  'My Face',
+                  Icons.face_outlined,
+                ),
+                _buildDrawerSectionHeader('Leave & Records', isDark),
+                _buildDrawerItem(
+                  3,
+                  Icons.event_note_rounded,
+                  'Leave Requests',
+                  Icons.event_note_outlined,
+                ),
+                _buildDrawerItem(
+                  4,
+                  Icons.history_edu_rounded,
+                  'Attendance Log',
+                  Icons.history_edu_outlined,
+                ),
+                _buildDrawerSectionHeader('System', isDark),
+                _buildDrawerItem(
+                  5,
+                  Icons.settings_rounded,
+                  'Settings',
+                  Icons.settings_outlined,
+                ),
+              ],
+            ),
+          ),
+
+          // Pinned Footer with Logout
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              14,
+              12,
+              14,
+              MediaQuery.of(context).padding.bottom + 12,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF121212) : Colors.white,
+              border: Border(
+                top: BorderSide(
+                  color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+                  width: 0.8,
+                ),
               ),
             ),
-          ],
-        ),
+            child: Material(
+              color: isDark ? const Color(0xFF3D1A1A) : Colors.red.shade50,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () {
+                  Navigator.pop(context);
+                  _logout();
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.logout_rounded,
+                        color: Colors.red.shade400,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Logout',
+                          style: TextStyle(
+                            color: Colors.red.shade400,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        'v1.0.0',
+                        style: TextStyle(
+                          color: isDark ? Colors.white30 : Colors.grey.shade400,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildDrawerSectionHeader(String title, bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
-          color: isDark ? Colors.white38 : Colors.grey.shade500,
+  Widget _buildDrawerSectionHeader(String title, bool isDark, {bool isFirst = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!isFirst)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            child: Divider(
+              height: 1,
+              thickness: 0.6,
+              color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+          child: Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: isDark ? Colors.white38 : Colors.grey.shade500,
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1001,58 +1066,53 @@ class _OtherStaffDashboardPageState extends State<OtherStaffDashboardPage> with 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = roleAccentColor;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
       child: Material(
-        color: isSelected ? accent.withValues(alpha: 0.12) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
+        color: isSelected ? accent.withValues(alpha: isDark ? 0.20 : 0.08) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           onTap: () {
             setState(() => _selectedIndex = index);
             Navigator.pop(context);
           },
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? accent
-                        : (isDark
-                              ? const Color(0xFF1C1C1E)
-                              : Colors.grey.shade100),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    isSelected ? selectedIcon : unselectedIcon,
-                    color: isSelected
-                        ? Colors.white
-                        : (isDark ? Colors.white60 : Colors.grey.shade600),
-                    size: 22,
-                  ),
+                Icon(
+                  isSelected ? selectedIcon : unselectedIcon,
+                  color: isSelected
+                      ? accent
+                      : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                  size: 21,
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.w500,
+                      fontSize: 14.5,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                       color: isSelected
                           ? accent
-                          : (isDark ? Colors.white : Colors.grey.shade700),
-                      fontSize: 15,
+                          : (isDark ? const Color(0xFFF1F5F9) : const Color(0xFF334155)),
+                      letterSpacing: -0.2,
                     ),
                   ),
                 ),
                 if (isSelected)
-                  Icon(Icons.chevron_right, color: accent, size: 22),
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: accent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1227,9 +1287,9 @@ class _OtherStaffDashboardTabState extends State<OtherStaffDashboardTab> {
             }
           }
 
-          final now = DateTime.now();
-          newPresent = uniqueDates.length.toDouble();
-          newAbsent = (now.day - newPresent).clamp(0, 30).toDouble();
+          final stats = data?['stats'] as Map<String, dynamic>?;
+          newPresent = (stats?['hist_full_day_count'] as num?)?.toDouble() ?? uniqueDates.length.toDouble();
+          newAbsent = (stats?['hist_absent_count'] as num?)?.toDouble() ?? 0.0;
         }
 
         if (mounted) {
@@ -2668,73 +2728,165 @@ class _OtherStaffMarkAttendanceTabState
                           const Divider(height: 20),
                           if (_fnInTime != null || _fnOutTime != null || _anInTime != null || _anOutTime != null) ...[
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text("FN Session", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      "${_fnInTime ?? '--'} / ${_fnOutTime ?? '--'}",
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200),
                                     ),
-                                  ],
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("FN Session", style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            "${_fnInTime ?? '--'} / ${_fnOutTime ?? '--'}",
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Text("AN Session", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      "${_anInTime ?? '--'} / ${_anOutTime ?? '--'}",
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200),
                                     ),
-                                  ],
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("AN Session", style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            "${_anInTime ?? '--'} / ${_anOutTime ?? '--'}",
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
-                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: _isCheckedIn ? Colors.green.shade50 : Colors.orange.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: _isCheckedIn ? Colors.green.shade200 : Colors.orange.shade200),
                                     ),
-                                  ],
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Status", style: TextStyle(fontSize: 10, color: Colors.grey.shade700, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: _isCheckedIn ? Colors.green.shade800 : Colors.orange.shade800),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
                           ] else ...[
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text("Check-In", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(_checkInTime ?? (_isCheckedIn ? "Present" : "--"), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                  ],
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text("Check-Out", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(_checkOutTime ?? (_isCheckedOut ? "Completed" : "--"), style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedOut ? Colors.green.shade700 : null)),
-                                  ],
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text("Status", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
-                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _isCheckedIn ? Colors.green.shade700 : Colors.orange.shade700),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200),
                                     ),
-                                  ],
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Check-In", style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            _checkInTime ?? (_isCheckedIn ? "Present" : "--"),
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.grey.shade200),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Check-Out", style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            _checkOutTime ?? (_isCheckedOut ? "Completed" : "--"),
+                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: _isCheckedOut ? Colors.green.shade800 : null),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: _isCheckedIn ? Colors.green.shade50 : Colors.orange.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: _isCheckedIn ? Colors.green.shade200 : Colors.orange.shade200),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Status", style: TextStyle(fontSize: 10, color: Colors.grey.shade700, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 3),
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            _todayAttendanceStatus.isNotEmpty ? _todayAttendanceStatus : (_isCheckedIn ? "Present" : "Pending"),
+                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: _isCheckedIn ? Colors.green.shade800 : Colors.orange.shade800),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),

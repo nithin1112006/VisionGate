@@ -50,7 +50,7 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
   late String _selectedDept;
   int _selectedYearIndex = 2; // Default 3rd Year
   String _selectedBatch = '2022-2026';
-  int _selectedSemester = 6;
+  int _selectedSemester = 5;
   String _selectedSection = 'A';
 
   bool _isLoading = true;
@@ -97,8 +97,8 @@ class _AcademicScheduleTabState extends State<AcademicScheduleTab> with SingleTi
     setState(() {
       _selectedYearIndex = index;
       _selectedBatch = cfg.batch;
-      // Default to the even semester (e.g. Sem 6 for 3rd Year) or the first
-      _selectedSemester = cfg.semesters.last;
+      // Default to the first (odd) semester of the selected year
+      _selectedSemester = cfg.semesters.first;
     });
     _loadAllData();
   }

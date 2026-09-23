@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
@@ -88,6 +91,7 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
 
   // Selected file state
   PlatformFile? _pickedFile;
+  Uint8List? _pickedFileBytes;
   bool _isDownloadingTemplate = false;
   String? _downloadingFormat;
   bool _isValidating = false;
@@ -200,8 +204,28 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
 
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
+        Uint8List? bytes = file.bytes;
+
+        // On desktop (Windows, Linux, macOS) or native platforms, file.bytes may be null
+        if (bytes == null && file.path != null && !kIsWeb) {
+          try {
+            final f = File(file.path!);
+            if (await f.exists()) {
+              bytes = await f.readAsBytes();
+            }
+          } catch (e) {
+            debugPrint('Error reading file from path: $e');
+          }
+        }
+
+        if (bytes == null || bytes.isEmpty) {
+          setState(() => _validationError = 'Selected file contains no readable data.');
+          return;
+        }
+
         setState(() {
           _pickedFile = file;
+          _pickedFileBytes = bytes;
           _validationError = null;
         });
         await _validateSpreadsheet();
@@ -212,7 +236,7 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
   }
 
   Future<void> _validateSpreadsheet() async {
-    if (_pickedFile == null || _pickedFile!.bytes == null) {
+    if (_pickedFile == null || _pickedFileBytes == null) {
       setState(() => _validationError = 'Selected file contains no data.');
       return;
     }
@@ -230,7 +254,7 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
       req.files.add(
         http.MultipartFile.fromBytes(
           'file',
-          _pickedFile!.bytes!,
+          _pickedFileBytes!,
           filename: _pickedFile!.name,
         ),
       );
@@ -326,6 +350,7 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
     setState(() {
       _currentStep = 0;
       _pickedFile = null;
+      _pickedFileBytes = null;
       _validatedRows.clear();
       _totalRecords = 0;
       _validCount = 0;
@@ -878,6 +903,26 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
     final imported = _importResult?['imported_count'] ?? 0;
     final updated = _importResult?['updated_count'] ?? 0;
     final failed = _importResult?['failed_count'] ?? 0;
+    final failedRows = (_importResult?['failed_rows'] as List?) ?? [];
+    final bool allFailed = (imported == 0 && updated == 0 && failed > 0);
+    final bool hasFailures = failed > 0;
+
+    final Color statusColor = allFailed
+        ? roseError
+        : (hasFailures ? amberWarning : emeraldGreen);
+    final IconData statusIcon = allFailed
+        ? Icons.error_outline_rounded
+        : (hasFailures ? Icons.warning_amber_rounded : Icons.check_circle_rounded);
+    final String statusTitle = allFailed
+        ? 'Bulk Onboarding Failed'
+        : (hasFailures
+            ? 'Bulk Onboarding Completed with Warnings'
+            : 'Bulk Onboarding Completed Successfully');
+    final String statusSubtitle = allFailed
+        ? 'No student records could be saved. Please inspect the issue log below.'
+        : (hasFailures
+            ? 'Some student records were saved, but one or more records failed to import.'
+            : 'Student records have been saved into the university database with default access profiles.');
 
     return Center(
       child: SingleChildScrollView(
@@ -888,14 +933,14 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: emeraldGreen.withValues(alpha: 0.15),
+                color: statusColor.withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_circle_rounded, color: emeraldGreen, size: 56),
+              child: Icon(statusIcon, color: statusColor, size: 56),
             ),
             const SizedBox(height: 20),
             Text(
-              'Bulk Onboarding Completed Successfully',
+              statusTitle,
               style: TextStyle(
                 fontFamily: 'Inter',
                 fontWeight: FontWeight.w700,
@@ -905,7 +950,7 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Student records have been saved into the university database with default access profiles.',
+              statusSubtitle,
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontFamily: 'Inter',
@@ -935,20 +980,123 @@ class _StudentBulkImportDialogState extends State<StudentBulkImportDialog> {
               ),
             ),
 
+            if (failedRows.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                width: 480,
+                constraints: const BoxConstraints(maxHeight: 180),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: roseError.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: roseError.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.error_outline_rounded, color: roseError, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Issue Details (${failedRows.length} ${failedRows.length == 1 ? "Record" : "Records"})',
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: roseError,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: failedRows.length,
+                        separatorBuilder: (_, __) => const Divider(height: 12),
+                        itemBuilder: (context, idx) {
+                          final f = failedRows[idx];
+                          final rowNum = f['row'] ?? (idx + 1);
+                          final regNo = f['reg_no'] ?? '—';
+                          final err = f['error'] ?? 'Unknown error';
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Row $rowNum: ',
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              if (regNo != '—')
+                                Text(
+                                  '($regNo) ',
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12,
+                                    color: isDark ? Colors.white70 : Colors.black87,
+                                  ),
+                                ),
+                              Expanded(
+                                child: Text(
+                                  err.toString(),
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12,
+                                    color: isDark ? Colors.white60 : const Color(0xFF64748B),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
             const SizedBox(height: 28),
-            ElevatedButton.icon(
-              onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              icon: const Icon(Icons.check_rounded, size: 20),
-              label: const Text(
-                'Done & Refresh Directory',
-                style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700, fontSize: 14),
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (failed > 0) ...[
+                  OutlinedButton.icon(
+                    onPressed: _resetFlow,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isDark ? Colors.white70 : const Color(0xFF475569),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                      side: BorderSide(color: isDark ? Colors.white24 : Colors.grey.shade300),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: const Text(
+                      'Import Another File',
+                      style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  icon: const Icon(Icons.check_rounded, size: 20),
+                  label: const Text(
+                    'Done & Refresh Directory',
+                    style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700, fontSize: 14),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

@@ -1387,8 +1387,11 @@ class _StudentLeaveODManagementTabState
                 // ─────────────────────────────────────────────────────────
                 // ACTION BUTTONS (Role-Aware & Sub-Section Aware)
                 // ─────────────────────────────────────────────────────────
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     // View Full Audit Trail Button
                     OutlinedButton.icon(
@@ -1396,15 +1399,17 @@ class _StudentLeaveODManagementTabState
                         foregroundColor: primaryBlue,
                         side: BorderSide(color: primaryBlue.withValues(alpha: 0.4)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       ),
                       icon: const Icon(Icons.timeline_rounded, size: 15),
                       label: const Text('Audit Trail', style: TextStyle(fontSize: 12)),
                       onPressed: () => _showTimelineDialog(reqId, name, reqType),
                     ),
 
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         if (_currentSubTab == 0) ...[
                           if (widget.isStaff && mentorStatus == 'PENDING') ...[
@@ -1413,9 +1418,10 @@ class _StudentLeaveODManagementTabState
                                 foregroundColor: roseDanger,
                                 side: const BorderSide(color: roseDanger),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               ),
-                              icon: const Icon(Icons.cancel_outlined, size: 16),
-                              label: const Text('Reject'),
+                              icon: const Icon(Icons.cancel_outlined, size: 15),
+                              label: const Text('Reject', style: TextStyle(fontSize: 12)),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
                                 studentName: name,
@@ -1426,15 +1432,15 @@ class _StudentLeaveODManagementTabState
                                 isAdminReview: false,
                               ),
                             ),
-                            const SizedBox(width: 8),
                             ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: emeraldGreen,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               ),
-                              icon: const Icon(Icons.check_circle_outline, size: 16),
-                              label: const Text('Recommend to HOD'),
+                              icon: const Icon(Icons.check_circle_outline, size: 15),
+                              label: const Text('Recommend to HOD', style: TextStyle(fontSize: 12)),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
                                 studentName: name,
@@ -1451,6 +1457,7 @@ class _StudentLeaveODManagementTabState
                                 foregroundColor: amberWarning,
                                 side: const BorderSide(color: amberWarning),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                               ),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
@@ -1461,14 +1468,14 @@ class _StudentLeaveODManagementTabState
                                 isHodReview: true,
                                 isAdminReview: false,
                               ),
-                              child: const Text('Refer Back'),
+                              child: const Text('Refer Back', style: TextStyle(fontSize: 12)),
                             ),
-                            const SizedBox(width: 8),
                             OutlinedButton(
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: roseDanger,
                                 side: const BorderSide(color: roseDanger),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                               ),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
@@ -1479,17 +1486,17 @@ class _StudentLeaveODManagementTabState
                                 isHodReview: true,
                                 isAdminReview: false,
                               ),
-                              child: const Text('Reject'),
+                              child: const Text('Reject', style: TextStyle(fontSize: 12)),
                             ),
-                            const SizedBox(width: 8),
                             ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: emeraldGreen,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               ),
-                              icon: const Icon(Icons.verified_rounded, size: 16),
-                              label: const Text('Approve & Credit'),
+                              icon: const Icon(Icons.verified_rounded, size: 15),
+                              label: const Text('Approve & Credit', style: TextStyle(fontSize: 12)),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
                                 studentName: name,
@@ -1506,9 +1513,10 @@ class _StudentLeaveODManagementTabState
                                 backgroundColor: primaryBlue,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               ),
-                              icon: const Icon(Icons.admin_panel_settings_rounded, size: 16),
-                              label: const Text('Admin Decision'),
+                              icon: const Icon(Icons.admin_panel_settings_rounded, size: 15),
+                              label: const Text('Admin Decision', style: TextStyle(fontSize: 12)),
                               onPressed: () => _showActionDialog(
                                 requestId: reqId,
                                 studentName: name,
@@ -1548,7 +1556,7 @@ class _StudentLeaveODManagementTabState
                                               ? '🚫 Cancelled'
                                               : 'Status: $hodStatus'))),
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 color: hodStatus == 'APPROVED' || adminStatus == 'APPROVED'
                                     ? emeraldGreen
@@ -1586,6 +1594,10 @@ class _StudentLeaveODManagementTabState
     required bool isCredited,
     required bool isDark,
   }) {
+    final isHodApproved = hodStatus == 'APPROVED' || adminStatus == 'APPROVED';
+    final isHodRejected = hodStatus == 'REJECTED' || adminStatus == 'REJECTED';
+    final isHodReferred = hodStatus == 'REFERRED_BACK';
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1623,7 +1635,11 @@ class _StudentLeaveODManagementTabState
                 stepNo: '2',
                 title: 'Advisor',
                 subtitle: mentorName,
-                status: mentorStatus,
+                status: mentorStatus == 'RECOMMENDED'
+                    ? 'Recommended'
+                    : (mentorStatus == 'REJECTED'
+                        ? 'Rejected'
+                        : (mentorStatus == 'CANCELLED' ? 'Cancelled' : 'Pending')),
                 remarks: mentorRemarks,
                 statusColor: mentorStatus == 'RECOMMENDED'
                     ? emeraldGreen
@@ -1632,29 +1648,23 @@ class _StudentLeaveODManagementTabState
               ),
               _buildStepConnector(isCompleted: mentorStatus == 'RECOMMENDED'),
 
-              // Step 3: Head of Department
+              // Step 3: Head of Department (Final Approval & Credit)
               _buildStepItem(
                 stepNo: '3',
                 title: 'HOD',
                 subtitle: hodName,
-                status: hodStatus,
+                status: isHodApproved
+                    ? 'Approved'
+                    : (isHodRejected
+                        ? 'Rejected'
+                        : (isHodReferred ? 'Referred Back' : 'Pending')),
                 remarks: hodRemarks,
-                statusColor: hodStatus == 'APPROVED'
+                statusColor: isHodApproved
                     ? emeraldGreen
-                    : (hodStatus == 'REJECTED'
+                    : (isHodRejected
                         ? roseDanger
-                        : (hodStatus == 'REFERRED_BACK' ? amberWarning : Colors.grey)),
-                isCompleted: hodStatus == 'APPROVED',
-              ),
-              _buildStepConnector(isCompleted: isCredited),
-
-              // Step 4: Attendance Credited
-              _buildStepItem(
-                stepNo: '4',
-                title: 'Attendance',
-                status: isCredited ? 'Credited' : 'Pending',
-                statusColor: isCredited ? emeraldGreen : Colors.grey,
-                isCompleted: isCredited,
+                        : (isHodReferred ? amberWarning : Colors.grey)),
+                isCompleted: isHodApproved,
               ),
             ],
           ),
@@ -1862,10 +1872,11 @@ class _LeaveODTimelineDialogState extends State<_LeaveODTimelineDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: Container(
         width: 600,
         constraints: const BoxConstraints(maxHeight: 650),
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(18),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2040,29 +2051,41 @@ class _LeaveODTimelineDialogState extends State<_LeaveODTimelineDialog> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: stepColor.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          action.replaceAll('_', ' '),
-                          style: TextStyle(
-                            color: stepColor,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                          decoration: BoxDecoration(
+                            color: stepColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            action.replaceAll('_', ' '),
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              color: stepColor,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                              letterSpacing: 0.3,
+                            ),
                           ),
                         ),
-                      ),
-                      Text(
-                        timestamp.length > 19 ? timestamp.substring(0, 19) : timestamp,
-                        style: GoogleFonts.inter(fontSize: 11, color: Colors.grey.shade500),
-                      ),
-                    ],
+                        Text(
+                          timestamp.length > 19 ? timestamp.substring(0, 19) : timestamp,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: isDark ? Colors.white60 : Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Row(

@@ -19,6 +19,8 @@ import '../widgets/location_permission_enforcer.dart';
 import '../widgets/service_health_card.dart';
 import '../utils/face_recognition_helper.dart';
 import '../utils/api_response_utils.dart';
+import '../services/screen_illumination_service.dart';
+import '../widgets/attendance/screen_illumination_overlay.dart';
 import '../widgets/thirukkural_banner.dart';
 import '../main.dart' show cameras;
 import 'student_grievance_page.dart';
@@ -2064,6 +2066,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ScreenIlluminationService.instance.init();
     if (widget.isActive) {
       final isOff = widget.todaySchedule['is_off_day'] == true ||
           widget.todaySchedule['is_holiday'] == true ||
@@ -2077,6 +2080,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      ScreenIlluminationService.instance.restore();
       _disposeCamera();
     } else if (state == AppLifecycleState.resumed) {
       if (widget.isActive) {
@@ -2102,6 +2106,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
           _initCamera();
         }
       } else {
+        ScreenIlluminationService.instance.restore();
         _disposeCamera();
       }
     }
@@ -2110,6 +2115,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ScreenIlluminationService.instance.restore();
     _disposeCameraSync();
     super.dispose();
   }
@@ -2624,208 +2630,218 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
   }
 
   Widget _buildCameraViewfinderCard({required bool isDark, required double height}) {
-    return Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0F172A) : Colors.black87,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: _isProcessing
-              ? Colors.amber
-              : (_lastMarkedReceipt != null
-                  ? const Color(0xFF10B981)
-                  : (_errorMessage.isNotEmpty
-                      ? const Color(0xFFEF4444)
-                      : const Color(0xFF2563EB))),
-          width: 2.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: (_lastMarkedReceipt != null
+    return ScreenIlluminationOverlay(
+      isDark: isDark,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF0F172A) : Colors.black87,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: _isProcessing
+                ? Colors.amber
+                : (_lastMarkedReceipt != null
                     ? const Color(0xFF10B981)
-                    : (_isProcessing ? Colors.amber : const Color(0xFF2563EB)))
-                .withValues(alpha: 0.15),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
+                    : (_errorMessage.isNotEmpty
+                        ? const Color(0xFFEF4444)
+                        : const Color(0xFF2563EB))),
+            width: 2.5,
           ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: Stack(
-          fit: StackFit.expand,
-          alignment: Alignment.center,
-          children: [
-            if (_isCameraReady && _cameraController != null && _cameraController!.value.isInitialized) ...[
-              _buildSafeCameraPreview(_cameraController!),
-              CustomPaint(
-                painter: _BiometricViewfinderPainter(
-                  isProcessing: _isProcessing,
-                  isSuccess: _lastMarkedReceipt != null,
+          boxShadow: [
+            BoxShadow(
+              color: (_lastMarkedReceipt != null
+                      ? const Color(0xFF10B981)
+                      : (_isProcessing ? Colors.amber : const Color(0xFF2563EB)))
+                  .withValues(alpha: 0.15),
+              blurRadius: 18,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.center,
+            children: [
+              if (_isCameraReady && _cameraController != null && _cameraController!.value.isInitialized) ...[
+                _buildSafeCameraPreview(_cameraController!),
+                CustomPaint(
+                  painter: _BiometricViewfinderPainter(
+                    isProcessing: _isProcessing,
+                    isSuccess: _lastMarkedReceipt != null,
+                  ),
                 ),
-              ),
-            ] else if (_isPermissionDenied)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.videocam_off_rounded, color: Colors.redAccent, size: 40),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        "Camera Access Required",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        "Camera permission is needed to verify your face for attendance.",
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: () => _initCamera(),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2563EB),
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                            icon: const Icon(Icons.refresh_rounded, size: 16),
-                            label: const Text("Grant Permission"),
+              ] else if (_isPermissionDenied)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.15),
+                            shape: BoxShape.circle,
                           ),
-                          if (!kIsWeb) ...[
-                            const SizedBox(width: 10),
-                            OutlinedButton.icon(
-                              onPressed: () => openAppSettings(),
-                              style: OutlinedButton.styleFrom(
+                          child: const Icon(Icons.videocam_off_rounded, color: Colors.redAccent, size: 40),
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          "Camera Access Required",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          "Camera permission is needed to verify your face for attendance.",
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: () => _initCamera(),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
                                 foregroundColor: Colors.white,
-                                side: const BorderSide(color: Colors.white38),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
-                              icon: const Icon(Icons.settings_rounded, size: 16),
-                              label: const Text("Settings"),
+                              icon: const Icon(Icons.refresh_rounded, size: 16),
+                              label: const Text("Grant Permission"),
                             ),
+                            if (!kIsWeb) ...[
+                              const SizedBox(width: 10),
+                              OutlinedButton.icon(
+                                onPressed: () => openAppSettings(),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  side: const BorderSide(color: Colors.white38),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                icon: const Icon(Icons.settings_rounded, size: 16),
+                                label: const Text("Settings"),
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              )
-            else if (_errorMessage.isNotEmpty)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
+                )
+              else if (_errorMessage.isNotEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withValues(alpha: 0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 40),
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          "Camera Unavailable",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _errorMessage,
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+                          textAlign: TextAlign.center,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: () => _initCamera(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          icon: const Icon(Icons.refresh_rounded, size: 16),
+                          label: const Text("Retry Camera"),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 40),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        "Camera Unavailable",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _errorMessage,
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
-                        textAlign: TextAlign.center,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      const CircularProgressIndicator(color: Color(0xFF2563EB)),
                       const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: () => _initCamera(),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2563EB),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        icon: const Icon(Icons.refresh_rounded, size: 16),
-                        label: const Text("Retry Camera"),
+                      Text(
+                        "Starting camera...",
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
                       ),
                     ],
                   ),
                 ),
-              )
-            else
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(color: Color(0xFF2563EB)),
-                    const SizedBox(height: 16),
-                    Text(
-                      "Starting camera...",
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
+
+              // Top-right controls: Screen Flash Toggle + Reconnect camera
+              if (_isCameraReady)
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const ScreenIlluminationToggleButton(),
+                      const SizedBox(width: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+                          tooltip: "Reconnect Camera",
+                          onPressed: () => _initCamera(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // Processing Loading Indicator in center
+              if (_isProcessing)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  child: const Center(
+                    child: CircularProgressIndicator(strokeWidth: 3, color: Colors.amber),
+                  ),
+                ),
+
+              // Success Confirmation Overlay
+              if (_lastMarkedReceipt != null)
+                Container(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF10B981),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 36),
                     ),
-                  ],
-                ),
-              ),
-
-            // Top-right controls: Reconnect camera
-            if (_isCameraReady)
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
-                    tooltip: "Reconnect Camera",
-                    onPressed: () => _initCamera(),
                   ),
                 ),
-              ),
-
-            // Processing Loading Indicator in center
-            if (_isProcessing)
-              Container(
-                color: Colors.black.withValues(alpha: 0.35),
-                child: const Center(
-                  child: CircularProgressIndicator(strokeWidth: 3, color: Colors.amber),
-                ),
-              ),
-
-            // Success Confirmation Overlay
-            if (_lastMarkedReceipt != null)
-              Container(
-                color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF10B981),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.check_rounded, color: Colors.white, size: 36),
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -6169,7 +6185,7 @@ class _StudentLeaveODTabState extends State<_StudentLeaveODTab> {
             ],
             const SizedBox(height: 12),
 
-            // 4-Stage Hierarchy Pipeline
+            // 3-Stage Hierarchy Pipeline (Advisor Endorsement -> HOD Final Approval)
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -6179,11 +6195,17 @@ class _StudentLeaveODTabState extends State<_StudentLeaveODTab> {
               ),
               child: Row(
                 children: [
-                  _buildMiniStep('1', 'Applied\n✓ Done', emeraldGreen, true),
+                  _buildMiniStep(
+                    '1',
+                    'Applied\n✓ Done',
+                    emeraldGreen,
+                    true,
+                    remarks: reason.isNotEmpty ? 'Reason: "$reason"' : null,
+                  ),
                   _buildMiniDivider(mentorStatus == 'RECOMMENDED'),
                   _buildMiniStep(
                     '2',
-                    'Advisor\n${mentorStatus.replaceAll('_', ' ')}',
+                    'Advisor\n${mentorStatus == 'RECOMMENDED' ? 'Endorsed' : (mentorStatus == 'REJECTED' ? 'Rejected' : (mentorStatus == 'CANCELLED' ? 'Cancelled' : 'Pending'))}',
                     mentorStatus == 'RECOMMENDED'
                         ? emeraldGreen
                         : (mentorStatus == 'REJECTED' ? roseDanger : (mentorStatus == 'CANCELLED' ? Colors.grey : amberWarning)),
@@ -6192,28 +6214,21 @@ class _StudentLeaveODTabState extends State<_StudentLeaveODTab> {
                         ? '$mentorName remarks: "$mentorRemarks"'
                         : '$mentorName: $mentorStatus',
                   ),
-                  _buildMiniDivider(hodStatus == 'APPROVED'),
+                  _buildMiniDivider(hodStatus == 'APPROVED' || isCredited),
                   _buildMiniStep(
                     '3',
-                    'HOD\n${hodStatus.replaceAll('_', ' ')}',
-                    hodStatus == 'APPROVED'
+                    'HOD\n${(hodStatus == 'APPROVED' || isCredited) ? 'Approved' : (hodStatus == 'REJECTED' ? 'Rejected' : (hodStatus == 'REFERRED_BACK' ? 'Referred Back' : (hodStatus == 'CANCELLED' ? 'Cancelled' : 'Pending')))}',
+                    (hodStatus == 'APPROVED' || isCredited)
                         ? emeraldGreen
                         : (hodStatus == 'REJECTED'
                             ? roseDanger
                             : (hodStatus == 'REFERRED_BACK'
                                 ? amberWarning
                                 : (hodStatus == 'CANCELLED' ? Colors.grey : Colors.grey))),
-                    hodStatus == 'APPROVED',
+                    hodStatus == 'APPROVED' || isCredited,
                     remarks: hodRemarks.isNotEmpty
                         ? '$hodName remarks: "$hodRemarks"'
                         : '$hodName: $hodStatus',
-                  ),
-                  _buildMiniDivider(isCredited),
-                  _buildMiniStep(
-                    '4',
-                    isCredited ? 'Credited\n✓ Logged' : 'Crediting\nPending',
-                    isCredited ? emeraldGreen : Colors.grey,
-                    isCredited,
                   ),
                 ],
               ),
@@ -6430,10 +6445,11 @@ class _StudentLeaveODTimelineDialogState extends State<_StudentLeaveODTimelineDi
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: Container(
         width: 520,
         constraints: const BoxConstraints(maxHeight: 600),
-        padding: const EdgeInsets.all(22),
+        padding: const EdgeInsets.all(18),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -6603,18 +6619,41 @@ class _StudentLeaveODTimelineDialogState extends State<_StudentLeaveODTimelineDi
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        action.replaceAll('_', ' '),
-                        style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11.5),
-                      ),
-                      Text(
-                        timestamp.length > 16 ? timestamp.substring(0, 16) : timestamp,
-                        style: GoogleFonts.inter(fontSize: 10, color: Colors.grey.shade500),
-                      ),
-                    ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            action.replaceAll('_', ' '),
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              color: color,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          timestamp.length > 16 ? timestamp.substring(0, 16) : timestamp,
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: isDark ? Colors.white60 : Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 3),
                   Text(

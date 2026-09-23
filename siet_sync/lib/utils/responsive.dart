@@ -110,11 +110,16 @@ class AdaptiveScaffold extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          title,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            color: isDark ? Colors.white : Colors.black,
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            title,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 18,
+              color: isDark ? Colors.white : Colors.black,
+            ),
           ),
         ),
         backgroundColor: isDark
@@ -204,7 +209,7 @@ class _DesktopRail extends StatelessWidget {
     final borderColor = isDark ? Colors.white10 : Colors.grey.shade200;
 
     return Container(
-      width: extended ? 240.0 : 72.0,
+      width: extended ? 260.0 : 72.0,
       decoration: BoxDecoration(
         color: bgColor,
         border: Border(
@@ -221,8 +226,8 @@ class _DesktopRail extends StatelessWidget {
                 child: Row(
                   children: [
                     Container(
-                      width: 34,
-                      height: 34,
+                      width: 38,
+                      height: 38,
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [accentColor, accentColor.withValues(alpha: 0.8)],
@@ -234,10 +239,10 @@ class _DesktopRail extends StatelessWidget {
                       child: const Icon(
                         Icons.school_rounded,
                         color: Colors.white,
-                        size: 18,
+                        size: 20,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -245,7 +250,7 @@ class _DesktopRail extends StatelessWidget {
                           Text(
                             'VisionGate',
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 17,
                               fontWeight: FontWeight.bold,
                               color: isDark ? Colors.white : Colors.black87,
                             ),
@@ -253,7 +258,7 @@ class _DesktopRail extends StatelessWidget {
                           Text(
                             'Institutional Portal',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 12,
                               fontWeight: FontWeight.w500,
                               color: isDark ? Colors.white54 : Colors.grey.shade500,
                             ),
@@ -298,15 +303,15 @@ class _DesktopRail extends StatelessWidget {
                     if (extended) {
                       headerWidget = Padding(
                         padding: const EdgeInsets.only(
-                          left: 10,
-                          right: 10,
-                          top: 14,
+                          left: 12,
+                          right: 12,
+                          top: 16,
                           bottom: 6,
                         ),
                         child: Text(
                           item.sectionHeader!.toUpperCase(),
                           style: TextStyle(
-                            fontSize: 10,
+                            fontSize: 11.5,
                             fontWeight: FontWeight.w700,
                             letterSpacing: 0.8,
                             color: isDark ? Colors.white38 : Colors.grey.shade500,
@@ -330,7 +335,7 @@ class _DesktopRail extends StatelessWidget {
 
                   final itemTile = extended
                       ? Container(
-                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 2.5),
                           child: Material(
                             color: isSelected
                                 ? accentColor.withValues(alpha: isDark ? 0.2 : 0.1)
@@ -341,8 +346,8 @@ class _DesktopRail extends StatelessWidget {
                               borderRadius: BorderRadius.circular(10),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 9,
+                                  horizontal: 14,
+                                  vertical: 11,
                                 ),
                                 child: Row(
                                   children: [
@@ -351,18 +356,19 @@ class _DesktopRail extends StatelessWidget {
                                       color: isSelected
                                           ? accentColor
                                           : (isDark ? Colors.white60 : Colors.grey.shade600),
-                                      size: 19,
+                                      size: 21,
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: Text(
                                         item.label,
                                         style: TextStyle(
-                                          fontSize: 12.5,
-                                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                          fontSize: 14.5,
+                                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                                           color: isSelected
                                               ? accentColor
                                               : (isDark ? Colors.white70 : Colors.grey.shade800),
+                                          letterSpacing: -0.2,
                                         ),
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -429,23 +435,23 @@ class _DesktopRail extends StatelessWidget {
                         child: InkWell(
                           onTap: onLogout,
                           borderRadius: BorderRadius.circular(10),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 11,
                             ),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.logout_rounded,
                                   color: Color(0xFFEF4444),
-                                  size: 18,
+                                  size: 20,
                                 ),
-                                const SizedBox(width: 12),
-                                const Text(
+                                SizedBox(width: 12),
+                                Text(
                                   'Sign Out',
                                   style: TextStyle(
-                                    fontSize: 12.5,
+                                    fontSize: 14.0,
                                     fontWeight: FontWeight.w600,
                                     color: Color(0xFFEF4444),
                                   ),

@@ -21,6 +21,7 @@ class ApiResponseUtils {
         lower.contains('connection refused') || 
         lower.contains('failed host lookup') || 
         lower.contains('clientexception') ||
+        lower.contains('failed to fetch') ||
         lower.contains('xmlhttprequest error') ||
         lower.contains('connection failed') ||
         lower.contains('network_error') ||

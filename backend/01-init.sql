@@ -921,6 +921,8 @@ ALTER TABLE class_advisors ADD COLUMN IF NOT EXISTS assigned_role VARCHAR(50) DE
 
 CREATE INDEX IF NOT EXISTS idx_class_adv_staff    ON class_advisors (staff_reg_no);
 CREATE INDEX IF NOT EXISTS idx_class_adv_dept_sem ON class_advisors (dept, batch, semester, section);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_class_advisor ON class_advisors (LOWER(dept), TRIM(batch), LOWER(section)) WHERE is_active IS TRUE;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_staff_advisor ON class_advisors (LOWER(TRIM(staff_reg_no))) WHERE is_active IS TRUE;
 
 -- ==============================================================================
 -- 17. DEPARTMENT SUBJECTS

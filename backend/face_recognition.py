@@ -16,16 +16,22 @@ try:
     import torch
     torch_available = True
     # Try to add torch/lib DLLs to path for ONNX Runtime GPU support on Windows
-    if hasattr(os, "add_dll_directory"):
-        torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
-        if os.path.exists(torch_lib):
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    if os.path.exists(torch_lib):
+        if hasattr(os, "add_dll_directory"):
             try:
                 os.add_dll_directory(torch_lib)
-                print(f"Added Torch DLL directory to path: {torch_lib}")
             except Exception as e:
-                print(f"Note: Could not add Torch DLL directory to path: {e}")
+                print(f"Note: Could not add Torch DLL directory to path via add_dll_directory: {e}")
+        os.environ["PATH"] = torch_lib + os.pathsep + os.environ.get("PATH", "")
+        print(f"Added Torch DLL directory to path: {torch_lib}")
 except ImportError:
     torch_available = False
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="insightface.*")
+warnings.filterwarnings("ignore", message=".*`rcond` parameter will change.*")
+warnings.filterwarnings("ignore", message=".*`estimate` is deprecated.*")
 
 try:
     from insightface.app import FaceAnalysis
@@ -73,12 +79,16 @@ def initialize_face_recognition():
                     if "CUDAExecutionProvider" in available_providers:
                         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                         ctx_id = 0
-                        print("GPU available, using GPU for face analysis")
+                        print("GPU available, using CUDAExecutionProvider for face analysis")
+                    elif "DmlExecutionProvider" in available_providers:
+                        providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
+                        ctx_id = 0
+                        print("GPU available, using DmlExecutionProvider for face analysis")
                     else:
                         gpu_available = False
                         providers = ["CPUExecutionProvider"]
                         ctx_id = -1
-                        print("ONNX Runtime: CUDAExecutionProvider not available in package. Using CPU.")
+                        print("ONNX Runtime: GPU ExecutionProvider not available in package. Using CPU.")
                 except Exception as e:
                     gpu_available = False
                     providers = ["CPUExecutionProvider"]
@@ -94,8 +104,13 @@ def initialize_face_recognition():
             ctx_id = -1
             print("PyTorch not available, using CPU for face analysis")
 
-        face_app = FaceAnalysis(name="buffalo_s", providers=providers)
-        face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+        try:
+            face_app = FaceAnalysis(name="buffalo_s", providers=providers)
+            face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+        except Exception as e:
+            print(f"Failed to initialize FaceAnalysis with providers={providers} (ctx_id={ctx_id}): {e}. Falling back to CPU...")
+            face_app = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
+            face_app.prepare(ctx_id=-1, det_size=(640, 640))
 
         # Warm up the model
         try:

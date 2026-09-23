@@ -1488,15 +1488,43 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              "Schedule Timeline for $dateStr",
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    "Schedule Timeline",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Icon(Icons.calendar_today_rounded, size: 12, color: Colors.grey.shade500),
+                      const SizedBox(width: 4),
+                      Text(
+                        dateStr,
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            TextButton.icon(
-              icon: const Icon(Icons.calendar_today_rounded, size: 16),
-              label: const Text("Change Date"),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                side: BorderSide(color: Colors.blue.shade200),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: Icon(Icons.edit_calendar_rounded, size: 14, color: Colors.blue.shade700),
+              label: Text(
+                "Change",
+                style: TextStyle(fontSize: 12, color: Colors.blue.shade700, fontWeight: FontWeight.w600),
+              ),
               onPressed: () async {
                 final picked = await showDatePicker(
                   context: context,
@@ -1566,60 +1594,89 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 2.2,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: MediaQuery.of(context).size.width > 600 ? 3 : 2,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: MediaQuery.of(context).size.width > 600 ? 1.6 : 1.15,
             ),
             itemCount: _assignedSubjects.length,
             itemBuilder: (ctx, i) {
               final sub = _assignedSubjects[i];
               return Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: const Color(0xFFE2E8F0)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.02),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          sub['subject_code'] ?? '',
-                          style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1E3A8A), fontSize: 14),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: sub['is_lab'] == true ? Colors.purple.shade50 : Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            sub['subject_type'] ?? (sub['is_lab'] == true ? 'Lab' : 'Theory'),
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: sub['is_lab'] == true ? Colors.purple.shade700 : Colors.blue.shade700,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                sub['subject_code'] ?? '',
+                                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1E3A8A), fontSize: 13),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: sub['is_lab'] == true ? Colors.purple.shade50 : Colors.blue.shade50,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                sub['subject_type'] ?? (sub['is_lab'] == true ? 'Lab' : 'Theory'),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: sub['is_lab'] == true ? Colors.purple.shade700 : Colors.blue.shade700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          sub['subject_name'] ?? '',
+                          maxLines: 2,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5, color: Color(0xFF0F172A), height: 1.25),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      sub['subject_name'] ?? '',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF0F172A)),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      "Class: ${sub['dept']} • Sem ${sub['semester']} • Sec ${sub['section']} • ${sub['weekly_hours'] ?? 4} hrs/wk",
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Divider(height: 10, color: Color(0xFFF1F5F9)),
+                        Text(
+                          "Class: ${sub['dept']} • Sem ${sub['semester']} • Sec ${sub['section']}",
+                          style: const TextStyle(fontSize: 10.5, color: Color(0xFF64748B)),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "${sub['weekly_hours'] ?? 4} hrs/wk",
+                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Color(0xFF2563EB)),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1641,7 +1698,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
       children: [
         // ── Controls Header Bar ──────────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -1650,64 +1707,90 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
           child: Row(
             children: [
               IconButton(
-                icon: const Icon(Icons.chevron_left_rounded),
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.chevron_left_rounded, size: 22),
                 tooltip: "Previous Day",
                 onPressed: () {
                   setState(() => _selectedDate = _selectedDate.subtract(const Duration(days: 1)));
                   _fetchTodayPeriods();
                 },
               ),
+              const SizedBox(width: 4),
               Expanded(
-                child: Center(
-                  child: GestureDetector(
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _selectedDate,
-                        firstDate: DateTime(DateTime.now().year, 1, 1),
-                        lastDate: DateTime(DateTime.now().year + 1, 12, 31),
-                      );
-                      if (picked != null) {
-                        setState(() => _selectedDate = picked);
-                        _fetchTodayPeriods();
-                      }
-                    },
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _selectedDate,
+                      firstDate: DateTime(DateTime.now().year, 1, 1),
+                      lastDate: DateTime(DateTime.now().year + 1, 12, 31),
+                    );
+                    if (picked != null) {
+                      setState(() => _selectedDate = picked);
+                      _fetchTodayPeriods();
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                     child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.calendar_today_rounded, size: 16, color: Color(0xFF1E3A8A)),
-                        const SizedBox(width: 8),
-                        Text(
-                          isToday ? "Today, $dateStr" : dateStr,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF0F172A),
+                        const Icon(Icons.calendar_today_rounded, size: 15, color: Color(0xFF1E3A8A)),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            isToday ? "Today, $dateStr" : dateStr,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF0F172A),
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.arrow_drop_down_rounded, color: Color(0xFF64748B)),
+                        const Icon(Icons.arrow_drop_down_rounded, size: 20, color: Color(0xFF64748B)),
                       ],
                     ),
                   ),
                 ),
               ),
+              const SizedBox(width: 4),
               IconButton(
-                icon: const Icon(Icons.chevron_right_rounded),
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.chevron_right_rounded, size: 22),
                 tooltip: "Next Day",
                 onPressed: () {
                   setState(() => _selectedDate = _selectedDate.add(const Duration(days: 1)));
                   _fetchTodayPeriods();
                 },
               ),
-              const SizedBox(width: 4),
+              Container(
+                height: 20,
+                width: 1,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                color: const Color(0xFFCBD5E1),
+              ),
               IconButton(
-                icon: const Icon(Icons.tune_rounded, color: Color(0xFF1E3A8A)),
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.tune_rounded, size: 19, color: Color(0xFF1E3A8A)),
                 tooltip: "Attendance Preferences",
                 onPressed: _openPreferencesDialog,
               ),
+              const SizedBox(width: 2),
               IconButton(
-                icon: const Icon(Icons.refresh_rounded),
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.refresh_rounded, size: 19),
                 tooltip: "Refresh",
                 onPressed: () => _fetchTodayPeriods(),
               ),

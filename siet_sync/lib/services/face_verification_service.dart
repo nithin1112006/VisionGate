@@ -107,6 +107,7 @@ class FaceVerificationService {
   static Future<Map<String, dynamic>> verifyAndMarkAttendance({
     required String regNo,
     required XFile imageFile,
+    String? token,
     VoidCallback? onVerificationComplete,
     VoidCallback? onVerificationFailed,
     Function(String)? onError,
@@ -187,6 +188,9 @@ class FaceVerificationService {
       // both rely on this to distinguish web vs app requests
       request.fields['client_platform'] = clientPlatform;
       request.headers['X-Client-Platform'] = clientPlatform;
+      if (token != null && token.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
 
       // Send location coordinates when geofence was enforced and position was fetched.
       // Use the position cached by PreVerificationService, falling back to the
@@ -337,10 +341,15 @@ class FaceVerificationService {
   static String _friendlyAttendanceError({
     required int statusCode,
     required String rawError,
+  }) => friendlyAttendanceError(statusCode: statusCode, rawError: rawError);
+
+  static String friendlyAttendanceError({
+    required int statusCode,
+    required String rawError,
   }) {
     final msg = rawError.toLowerCase();
 
-    // 1. Presentation Attack Detection (Photo, Video, Screen Replay, Bezel)
+    // 1. Presentation Attack Detection (Photo, Video, Screen Replay, Bezel, Moire)
     if (msg.contains('liveness') ||
         msg.contains('spoof') ||
         msg.contains('photo') ||
@@ -348,8 +357,46 @@ class FaceVerificationService {
         msg.contains('replay') ||
         msg.contains('border') ||
         msg.contains('bezel') ||
-        msg.contains('printout')) {
-      return 'Liveness check failed: Photo, printout, or video replay rejected. Please use a live camera view.';
+        msg.contains('printout') ||
+        msg.contains('moire')) {
+      // Parse specific backend diagnostic reason if provided
+      if (rawError.contains('Liveness check failed:')) {
+        final segments = rawError.split('Liveness check failed:');
+        if (segments.length > 1) {
+          final firstSentence = segments[1].split('.')[0].trim();
+          if (firstSentence.isNotEmpty) {
+            return 'Liveness check failed: $firstSentence. Please look directly into the camera in good lighting.';
+          }
+        }
+      }
+
+      if (msg.contains('moiré') || msg.contains('moire') || msg.contains('display')) {
+        return 'Screen replay detected: Digital screen or monitor pattern identified. Please use a live camera view.';
+      }
+      if (msg.contains('bezel') || msg.contains('border')) {
+        return 'Device frame detected: Smartphone or picture border identified. Hold only your face in front of the lens.';
+      }
+      if (msg.contains('printout') || msg.contains('print')) {
+        return 'Printed photo detected: Flat paper or card photo rejected. Please present your real face.';
+      }
+      if (msg.contains('blink')) {
+        return 'No natural blink detected: Static photo detected. Please keep eyes open and blink naturally.';
+      }
+      if (msg.contains('too small') || msg.contains('tiny_roi')) {
+        return 'Face is too far or resolution too low: Move closer to the camera so your face fills the frame.';
+      }
+      if (msg.contains('glare') || msg.contains('specular')) {
+        return 'Screen reflection detected: Avoid bright screen glare or direct light reflections on glass.';
+      }
+      if (msg.contains('flow') || msg.contains('motion')) {
+        return 'Unnatural motion detected: Please hold your face steady in front of the camera.';
+      }
+
+      if (rawError.trim().isNotEmpty && !rawError.contains('{')) {
+        return rawError.trim();
+      }
+
+      return 'Liveness check failed: Photo or screen replay rejected. Please use a live camera view.';
     }
 
     // 2. Face Alignment & Detection

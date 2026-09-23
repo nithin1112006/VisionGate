@@ -37,6 +37,7 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
   bool _isLoading = true;
   List<Map<String, dynamic>> _advisors = [];
   List<Map<String, dynamic>> _facultyPool = [];
+  Map<String, Map<String, dynamic>> _activeAdvisorIndex = {};
 
   @override
   void initState() {
@@ -81,11 +82,28 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
           _facultyPool = List<Map<String, dynamic>>.from(data['faculty'] ?? []);
         }
       }
+
+      // Fetch active primary advisor index to annotate faculty picker
+      try {
+        final uriIdx = Uri.parse('${CollegeIPConfig.defaultURL}/api/v1/academics/active-advisor-index');
+        final resIdx = await http.get(uriIdx, headers: {'Authorization': 'Bearer ${widget.token}'});
+        if (resIdx.statusCode == 200) {
+          final data = jsonDecode(resIdx.body);
+          final rawIndex = data['advisor_index'] as Map<String, dynamic>? ?? {};
+          _activeAdvisorIndex = rawIndex.map(
+            (k, v) => MapEntry(k.toString().trim().toLowerCase(), Map<String, dynamic>.from(v as Map)),
+          );
+        }
+      } catch (_) {}
     } catch (_) {}
     if (mounted) setState(() => _isLoading = false);
   }
 
-  void _openFacultyPickerModal(BuildContext context, ValueChanged<Map<String, dynamic>> onSelect) {
+  void _openFacultyPickerModal(
+    BuildContext context,
+    ValueChanged<Map<String, dynamic>> onSelect, {
+    String? advisorType,
+  }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     String selectedDeptFilter = 'ALL';
     String searchQuery = '';
@@ -148,34 +166,34 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                       TextField(
                         decoration: InputDecoration(
                           hintText: 'Search by name, staff ID, or department...',
-                          prefixIcon: const Icon(Icons.search_rounded, size: 18),
-                          isDense: true,
+                          prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                           filled: true,
-                          fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                          fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: AdminColors.getBorder(isDark))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: AdminColors.getBorder(isDark))),
                         ),
                         onChanged: (v) => setModalState(() => searchQuery = v),
                       ),
                       const SizedBox(height: 10),
-                      SizedBox(
-                        height: 36,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: deptsList.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 6),
-                          itemBuilder: (ctx, i) {
-                            final d = deptsList[i];
-                            final isSel = selectedDeptFilter.toLowerCase() == d.toLowerCase();
-                            return ChoiceChip(
-                              label: Text(d == 'ALL' ? 'All Departments' : d, style: GoogleFonts.inter(fontSize: 11, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500)),
-                              selected: isSel,
-                              selectedColor: AdminColors.primarySoft,
-                              backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                              labelStyle: TextStyle(color: isSel ? AdminColors.primary : AdminColors.getTextSecondary(isDark)),
-                              side: BorderSide(color: isSel ? AdminColors.primary : AdminColors.getBorder(isDark)),
-                              onSelected: (_) => setModalState(() => selectedDeptFilter = d),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: deptsList.map((d) {
+                            final isSel = selectedDeptFilter == d;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: ChoiceChip(
+                                label: Text(d == 'ALL' ? 'All Departments' : d, style: GoogleFonts.inter(fontSize: 11, fontWeight: isSel ? FontWeight.w700 : FontWeight.w500)),
+                                selected: isSel,
+                                selectedColor: AdminColors.primarySoft,
+                                backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                                labelStyle: TextStyle(color: isSel ? AdminColors.primary : AdminColors.getTextSecondary(isDark)),
+                                side: BorderSide(color: isSel ? AdminColors.primary : AdminColors.getBorder(isDark)),
+                                onSelected: (_) => setModalState(() => selectedDeptFilter = d),
+                              ),
                             );
-                          },
+                          }).toList(),
                         ),
                       ),
                     ],
@@ -195,32 +213,128 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                             final name = f['name']?.toString() ?? '';
                             final dept = f['dept']?.toString() ?? '';
 
+                            final activeAdv = _activeAdvisorIndex[reg.toLowerCase().trim()];
+                            final isAdvisingCurrentClass = activeAdv != null &&
+                                activeAdv['dept']?.toString().toLowerCase().trim() == widget.dept.toLowerCase().trim() &&
+                                activeAdv['batch']?.toString().trim() == widget.batch.trim() &&
+                                activeAdv['section']?.toString().toLowerCase().trim() == widget.section.toLowerCase().trim();
+                            final isAdvisingOtherClass = activeAdv != null && !isAdvisingCurrentClass;
+
                             return Container(
                               margin: const EdgeInsets.only(bottom: 6),
                               decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                color: isDark
+                                    ? (isAdvisingOtherClass ? const Color(0xFF161E2E) : const Color(0xFF1E293B))
+                                    : (isAdvisingOtherClass ? const Color(0xFFF8FAFC) : Colors.white),
                                 borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: AdminColors.getBorder(isDark)),
+                                border: Border.all(
+                                  color: isAdvisingOtherClass
+                                      ? (isDark ? Colors.red.withValues(alpha: 0.25) : Colors.red.withValues(alpha: 0.2))
+                                      : (isAdvisingCurrentClass
+                                          ? (isDark ? Colors.teal.withValues(alpha: 0.3) : Colors.teal.withValues(alpha: 0.3))
+                                          : AdminColors.getBorder(isDark)),
+                                ),
                               ),
                               child: ListTile(
                                 dense: true,
                                 leading: CircleAvatar(
                                   radius: 16,
-                                  backgroundColor: isHod ? Colors.amber[100] : AdminColors.primarySoft,
-                                  child: isHod
-                                      ? Icon(Icons.stars_rounded, color: Colors.amber[800], size: 18)
-                                      : Text(name.isNotEmpty ? name[0].toUpperCase() : 'F', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AdminColors.primary)),
+                                  backgroundColor: isAdvisingOtherClass
+                                      ? (isDark ? const Color(0xFF2D3748) : const Color(0xFFE2E8F0))
+                                      : (isHod ? Colors.amber[100] : AdminColors.primarySoft),
+                                  child: isAdvisingOtherClass
+                                      ? Icon(Icons.lock_outline_rounded, size: 16, color: AdminColors.getTextSecondary(isDark))
+                                      : (isHod
+                                          ? Icon(Icons.stars_rounded, color: Colors.amber[800], size: 18)
+                                          : Text(name.isNotEmpty ? name[0].toUpperCase() : 'F', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AdminColors.primary))),
                                 ),
-                                title: Text(name, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: AdminColors.getTextPrimary(isDark))),
-                                subtitle: Text('$dept • $reg', style: GoogleFonts.inter(fontSize: 11, color: AdminColors.getTextSecondary(isDark))),
-                                trailing: isHod
-                                    ? Container(
+                                title: Text(
+                                  name,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: isAdvisingOtherClass
+                                        ? AdminColors.getTextSecondary(isDark)
+                                        : AdminColors.getTextPrimary(isDark),
+                                  ),
+                                ),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text('$dept • $reg', style: GoogleFonts.inter(fontSize: 11, color: AdminColors.getTextSecondary(isDark))),
+                                    if (isAdvisingOtherClass)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 2),
+                                        child: Text(
+                                          'Already advising: ${activeAdv['label']} (Unavailable)',
+                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.red[700]),
+                                        ),
+                                      )
+                                    else if (isAdvisingCurrentClass)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 2),
+                                        child: Text(
+                                          'Current Class Advisor for this section',
+                                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.teal[700]),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (isAdvisingOtherClass)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                        margin: const EdgeInsets.only(right: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                                        ),
+                                        child: Text(
+                                          'Unavailable',
+                                          style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.red[700]),
+                                        ),
+                                      )
+                                    else if (isAdvisingCurrentClass)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                        margin: const EdgeInsets.only(right: 6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.teal.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.teal.withValues(alpha: 0.4)),
+                                        ),
+                                        child: Text(
+                                          'Current Advisor',
+                                          style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.teal[800]),
+                                        ),
+                                      ),
+                                    if (isHod)
+                                      Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(color: Colors.amber[100], borderRadius: BorderRadius.circular(4)),
                                         child: Text('HOD', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amber[900])),
-                                      )
-                                    : null,
+                                      ),
+                                  ],
+                                ),
                                 onTap: () {
+                                  if (isAdvisingOtherClass) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          '$name ($reg) is already the Class Advisor for ${activeAdv['label']}. One staff can hold only one advisor post. Remove their current assignment first to reassign.',
+                                          style: GoogleFonts.inter(fontSize: 12),
+                                        ),
+                                        backgroundColor: const Color(0xFFB91C1C),
+                                        behavior: SnackBarBehavior.floating,
+                                        duration: const Duration(seconds: 4),
+                                      ),
+                                    );
+                                    return;
+                                  }
                                   onSelect(f);
                                   Navigator.pop(ctx);
                                 },
@@ -244,8 +358,8 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
     bool isHod = false;
 
     Map<String, dynamic>? currentAdv = _advisors.cast<Map<String, dynamic>?>().firstWhere(
-      (a) => a?['advisor_type'] == advisorType,
-      orElse: () => null,
+      (a) => a?['is_active'] != false,
+      orElse: () => _advisors.isNotEmpty ? _advisors.first : null,
     );
     if (currentAdv != null) {
       selectedRegNo = currentAdv['staff_reg_no']?.toString();
@@ -274,7 +388,7 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  'Assign ${advisorType == 'primary' ? 'Primary Class Advisor' : 'Assistant Advisor'}',
+                  'Assign Class Advisor',
                   style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700, color: AdminColors.getTextPrimary(isDark)),
                 ),
               ],
@@ -296,14 +410,18 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                   ),
                   const SizedBox(height: 8),
                   InkWell(
-                    onTap: () => _openFacultyPickerModal(context, (f) {
-                      setDlgState(() {
-                        selectedRegNo = f['reg_no']?.toString();
-                        selectedName = f['name']?.toString();
-                        selectedDept = f['dept']?.toString();
-                        isHod = f['is_hod'] == true;
-                      });
-                    }),
+                    onTap: () => _openFacultyPickerModal(
+                      context,
+                      (f) {
+                        setDlgState(() {
+                          selectedRegNo = f['reg_no']?.toString();
+                          selectedName = f['name']?.toString();
+                          selectedDept = f['dept']?.toString();
+                          isHod = f['is_hod'] == true;
+                        });
+                      },
+                      advisorType: advisorType,
+                    ),
                     borderRadius: BorderRadius.circular(10),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -355,8 +473,8 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Note: Setting a Primary Class Advisor automatically links student mentor records for this section.',
-                    style: GoogleFonts.inter(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic),
+                    'Note: Each class has strictly one Class Advisor, and each faculty member can hold only one active advisor post at a time across the institution.',
+                    style: GoogleFonts.inter(fontSize: 11, color: AdminColors.getTextSecondary(isDark)),
                   ),
                 ],
               ),
@@ -410,8 +528,55 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
         _loadData();
         widget.onAdvisorUpdated();
       } else {
-        final err = jsonDecode(res.body)['detail'] ?? 'Failed to assign';
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err), backgroundColor: AdminColors.danger));
+        final decoded = jsonDecode(res.body);
+        final err = decoded['error'] ?? decoded['detail'] ?? 'Failed to assign';
+        if (mounted) {
+          if (res.statusCode == 409) {
+            // Change 10: Surface 409 conflict as an alert dialog with exact details
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            showDialog(
+              context: context,
+              builder: (dCtx) => AlertDialog(
+                backgroundColor: AdminColors.getCard(isDark),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                title: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Advisor Conflict',
+                      style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700, color: AdminColors.getTextPrimary(isDark)),
+                    ),
+                  ],
+                ),
+                content: Text(
+                  err.toString(),
+                  style: GoogleFonts.inter(fontSize: 13, height: 1.5, color: AdminColors.getTextSecondary(isDark)),
+                ),
+                actions: [
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(dCtx),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AdminColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    child: const Text('Understood'),
+                  ),
+                ],
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err), backgroundColor: AdminColors.danger));
+          }
+        }
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Network error: $e'), backgroundColor: AdminColors.danger));
@@ -455,8 +620,10 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryAdv = _advisors.cast<Map<String, dynamic>?>().firstWhere((a) => a?['advisor_type'] == 'primary', orElse: () => null);
-    final asstAdv = _advisors.cast<Map<String, dynamic>?>().firstWhere((a) => a?['advisor_type'] == 'assistant', orElse: () => null);
+    final activeAdv = _advisors.cast<Map<String, dynamic>?>().firstWhere(
+      (a) => a?['is_active'] != false,
+      orElse: () => _advisors.isNotEmpty ? _advisors.first : null,
+    );
 
     if (_isLoading) {
       return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
@@ -479,7 +646,7 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Class Advisors & Mentorship Hierarchy', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700, color: AdminColors.getTextPrimary(isDark))),
+                    Text('Class Advisor & Mentorship', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700, color: AdminColors.getTextPrimary(isDark))),
                     Text('${widget.dept} | Batch ${widget.batch} | Semester ${widget.semester} - Section ${widget.section}', style: GoogleFonts.inter(fontSize: 13, color: AdminColors.getTextSecondary(isDark))),
                   ],
                 ),
@@ -487,29 +654,14 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
             ],
           ),
           const SizedBox(height: 24),
-          Wrap(
-            spacing: 20,
-            runSpacing: 20,
-            children: [
-              _buildAdvisorCard(
-                isDark,
-                title: 'Primary Class Advisor',
-                subtitle: 'Chief Class In-Charge & Student Mentor',
-                advisor: primaryAdv,
-                advisorType: 'primary',
-                icon: Icons.workspace_premium_rounded,
-                accentColor: AdminColors.primary,
-              ),
-              _buildAdvisorCard(
-                isDark,
-                title: 'Assistant Class Advisor',
-                subtitle: 'Co-Mentor & Attendance Secondary In-Charge',
-                advisor: asstAdv,
-                advisorType: 'assistant',
-                icon: Icons.person_outline_rounded,
-                accentColor: AdminColors.success,
-              ),
-            ],
+          _buildAdvisorCard(
+            isDark,
+            title: 'Class Advisor',
+            subtitle: 'Official Class In-Charge & Student Mentor',
+            advisor: activeAdv,
+            advisorType: 'primary',
+            icon: Icons.workspace_premium_rounded,
+            accentColor: AdminColors.primary,
           ),
         ],
       ),
@@ -529,7 +681,8 @@ class _ClassAdvisorViewState extends State<ClassAdvisorView> {
     final isHod = advisor?['is_hod'] == true;
 
     return Container(
-      width: 380,
+      constraints: const BoxConstraints(maxWidth: 440),
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: AdminColors.getCard(isDark),

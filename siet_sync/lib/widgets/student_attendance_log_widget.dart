@@ -1587,9 +1587,9 @@ class _StudentAttendanceLogWidgetState
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  "Period Attendance Performance (${_availablePeriods.isNotEmpty ? 'P${_availablePeriods.first}–P${_availablePeriods.last}' : 'Periods'})",
+                  "Period Performance (${_availablePeriods.isNotEmpty ? 'P${_availablePeriods.first}–P${_availablePeriods.last}' : 'Periods'})",
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
                     color: primaryNavy,
                   ),
@@ -2098,49 +2098,134 @@ class _StudentAttendanceLogWidgetState
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Section Title & 3-Way View Switcher
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                _viewMode == "matrix"
-                    ? "Day & Period Matrix (${_matrix.length} Student-Days)"
-                    : (_viewMode == "table"
-                        ? "Data Table View (${_logs.length} Records)"
-                        : "Card View (${_logs.length} Records)"),
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.bold,
-                  color: primaryNavy,
-                ),
-              ),
-              // View Switcher (Matrix / Table / Cards)
-              Container(
-                decoration: BoxDecoration(
-                  color: slateBg,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: cardBorder),
-                ),
-                child: Row(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 460;
+              final titleText = _viewMode == "matrix"
+                  ? "Day & Period Matrix"
+                  : (_viewMode == "table"
+                      ? "Data Table View"
+                      : "Card View");
+              final countText = _viewMode == "matrix"
+                  ? "${_matrix.length} Student-Days"
+                  : "${_logs.length} Records";
+
+              if (isNarrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildViewModeButton(
-                      mode: "matrix",
-                      icon: Icons.grid_on,
-                      label: "Period Matrix",
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            titleText,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: primaryNavy,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.blue.shade200),
+                          ),
+                          child: Text(
+                            countText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue.shade800,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    _buildViewModeButton(
-                      mode: "table",
-                      icon: Icons.table_chart_outlined,
-                      label: "Table",
-                    ),
-                    _buildViewModeButton(
-                      mode: "cards",
-                      icon: Icons.view_agenda_outlined,
-                      label: "Cards",
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: slateBg,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: cardBorder),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildViewModeButton(
+                            mode: "matrix",
+                            icon: Icons.grid_on_rounded,
+                            label: "Period Matrix",
+                            isExpanded: true,
+                          ),
+                          _buildViewModeButton(
+                            mode: "table",
+                            icon: Icons.table_chart_outlined,
+                            label: "Table",
+                            isExpanded: true,
+                          ),
+                          _buildViewModeButton(
+                            mode: "cards",
+                            icon: Icons.view_agenda_outlined,
+                            label: "Cards",
+                            isExpanded: true,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
-                ),
-              ),
-            ],
+                );
+              }
+
+              // Tablet / Desktop Wide layout
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      "$titleText ($countText)",
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: primaryNavy,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: slateBg,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: cardBorder),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildViewModeButton(
+                          mode: "matrix",
+                          icon: Icons.grid_on_rounded,
+                          label: "Period Matrix",
+                        ),
+                        _buildViewModeButton(
+                          mode: "table",
+                          icon: Icons.table_chart_outlined,
+                          label: "Table",
+                        ),
+                        _buildViewModeButton(
+                          mode: "cards",
+                          icon: Icons.view_agenda_outlined,
+                          label: "Cards",
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 10),
 
@@ -2160,9 +2245,10 @@ class _StudentAttendanceLogWidgetState
     required String mode,
     required IconData icon,
     required String label,
+    bool isExpanded = false,
   }) {
     final isSelected = _viewMode == mode;
-    return InkWell(
+    Widget button = InkWell(
       onTap: () {
         setState(() {
           _viewMode = mode;
@@ -2170,31 +2256,39 @@ class _StudentAttendanceLogWidgetState
       },
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
           color: isSelected ? brandBlue : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: isExpanded ? MainAxisSize.max : MainAxisSize.min,
           children: [
             Icon(
               icon,
-              size: 13,
+              size: 14,
               color: isSelected ? Colors.white : primaryNavy,
             ),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected ? Colors.white : primaryNavy,
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                  color: isSelected ? Colors.white : primaryNavy,
+                ),
               ),
             ),
           ],
         ),
       ),
     );
+
+    return isExpanded ? Expanded(child: button) : button;
   }
 
   // -------------------------------------------------------------

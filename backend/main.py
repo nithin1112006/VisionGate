@@ -55,17 +55,24 @@ try:
     torch_available = True
     print("PyTorch is available")
     # Try to add torch/lib DLLs to path for ONNX Runtime GPU support on Windows
-    if hasattr(os, "add_dll_directory"):
-        torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
-        if os.path.exists(torch_lib):
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    if os.path.exists(torch_lib):
+        if hasattr(os, "add_dll_directory"):
             try:
                 os.add_dll_directory(torch_lib)
-                print(f"Added Torch DLL directory to path: {torch_lib}")
             except Exception as e:
-                print(f"Note: Could not add Torch DLL directory to path: {e}")
+                print(f"Note: Could not add Torch DLL directory to path via add_dll_directory: {e}")
+        os.environ["PATH"] = torch_lib + os.pathsep + os.environ.get("PATH", "")
+        print(f"Added Torch DLL directory to path: {torch_lib}")
 except ImportError:
     torch_available = False
     print("PyTorch is not available - running in CPU-only mode")
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="insightface.*")
+warnings.filterwarnings("ignore", message=".*`rcond` parameter will change.*")
+warnings.filterwarnings("ignore", message=".*`estimate` is deprecated.*")
+
 from insightface.app import FaceAnalysis  # type: ignore
 from datetime import datetime, timedelta
 import hashlib
@@ -80,6 +87,19 @@ import functools
 import db_async
 from concurrency import acquire_user_lock
 from rate_limiter import attendance_rate_limiter, face_register_rate_limiter
+
+# ── Neural Anti-Spoofing Shield (MiniFASNetV2 + V1SE Ensemble, 5 layers) ─────
+try:
+    from anti_spoof.integration import run_full_liveness_check as _neural_liveness_check
+    _NEURAL_ANTISPOOF_AVAILABLE = True
+    print("=" * 60)
+    print("✅ Neural Anti-Spoofing: MiniFASNetV2 + V1SE Ensemble LOADED")
+    print("   5-Layer defense: Neural|Moire|Blink|Flow|CamTrust")
+    print("=" * 60)
+except Exception as _asp_err:
+    _NEURAL_ANTISPOOF_AVAILABLE = False
+    _neural_liveness_check = None
+    print(f"⚠️  Neural anti-spoof unavailable ({_asp_err}) — falling back to classical checks")
 
 # Thread pool for offloading CPU-bound operations (face recognition, etc.)
 _cpu_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="cpu_worker")
@@ -921,7 +941,7 @@ async def vpn_detection_middleware(request: Request, call_next):
         "/staff/multi-user",
     ]
 
-    if any(request.url.path.startswith(path) for path in skip_paths):
+    if request.method == "OPTIONS" or any(request.url.path.startswith(path) for path in skip_paths):
         return await call_next(request)
 
     # Only check if VPN blocking is enabled
@@ -3927,12 +3947,16 @@ def _authenticate_student_creds(identifier: str, password: str) -> Optional[dict
 
 
 def delete_user_data_by_reg_no(reg_no: str):
-    """Delete all attendance, leaves, location records, face samples, and profiles for a user across all DB tables"""
+    """Delete all attendance, leaves, location records, face samples, and profiles for a user/student across all DB tables"""
+    if not reg_no:
+        return
+    reg_no = str(reg_no).strip()
+
     try:
         cursor.execute("""
             DELETE FROM leave_request_audit_log 
             WHERE leave_request_id IN (
-                SELECT id FROM leave_requests WHERE user_reg_no = ?
+                SELECT id FROM leave_requests WHERE LOWER(TRIM(user_reg_no)) = LOWER(?)
             )
         """, (reg_no,))
     except Exception:
@@ -3941,7 +3965,7 @@ def delete_user_data_by_reg_no(reg_no: str):
         cursor.execute("""
             DELETE FROM admin_notifications 
             WHERE notification_type = 'leave_request' AND related_id IN (
-                SELECT id FROM leave_requests WHERE user_reg_no = ?
+                SELECT id FROM leave_requests WHERE LOWER(TRIM(user_reg_no)) = LOWER(?)
             )
         """, (reg_no,))
     except Exception:
@@ -3949,25 +3973,58 @@ def delete_user_data_by_reg_no(reg_no: str):
 
     # Delete records from ALL database tables referring to this user/student reg_no
     tables_to_purge = [
+        # Face and biometric profiles
+        ("student_face_embeddings", "student_reg_no"),
+        ("student_face_prototypes", "student_reg_no"),
+        ("student_face_profiles", "reg_no"),
+        ("student_face_requests", "student_reg_no"),
+        ("student_face_requests", "reg_no"),
+        ("face_profiles", "reg_no"),
+        ("face_embedding_samples", "reg_no"),
+        ("face_reregister_requests", "staff_reg_no"),
+        ("face_reregister_requests", "reg_no"),
+        # Attendance records
         ("attendance", "reg_no"),
         ("daily_attendance_status", "reg_no"),
         ("morning_attendance", "reg_no"),
         ("evening_attendance", "reg_no"),
+        ("fn_attendance", "reg_no"),
+        ("an_attendance", "reg_no"),
         ("kiosk_attendance_logs", "student_reg_no"),
-        ("student_face_profiles", "reg_no"),
-        ("face_embedding_samples", "reg_no"),
+        ("attendance_logs", "reg_no"),
+        ("attendance_corrections", "reg_no"),
+        ("attendance_session_logs", "reg_no"),
+        ("attendance_locations", "reg_no"),
+        ("multi_user_attendance_records", "reg_no"),
+        ("student_period_attendance", "reg_no"),
+        ("other_staff_attendance", "reg_no"),
+        # Leaves, OD, and permissions
         ("casual_leave", "reg_no"),
         ("earned_leave", "reg_no"),
         ("ccl_earned_history", "reg_no"),
         ("expired_leaves", "reg_no"),
+        ("leave_requests", "user_reg_no"),
+        ("leave_requests", "reg_no"),
+        ("staff_leave_requests", "staff_reg_no"),
+        ("staff_leave_requests", "applicant_reg_no"),
+        ("staff_leave_timetable_assignments", "staff_reg_no"),
+        ("staff_leave_timetable_assignments", "substitute_staff_reg_no"),
+        ("permission_requests", "reg_no"),
+        ("permission_requests", "user_reg_no"),
+        ("student_leave_od_requests", "student_reg_no"),
+        ("student_movement_passes", "student_reg_no"),
+        # Locations & geofence monitoring
         ("user_latest_locations", "reg_no"),
         ("user_locations", "reg_no"),
         ("user_location_logs", "reg_no"),
-        ("other_staff_attendance", "reg_no"),
-        ("leave_requests", "user_reg_no"),
-        ("face_reregister_requests", "staff_reg_no"),
-        ("attendance_locations", "reg_no"),
         ("geofence_breach_monitoring", "reg_no"),
+        ("campus_movement_alerts", "reg_no"),
+        # Student specific tables
+        ("student_feedback_grievances", "student_reg_no"),
+        ("student_feedback_grievances", "reg_no"),
+        ("student_promotion_logs", "student_reg_no"),
+        ("student_academic_day_status", "student_reg_no"),
+        # Core user / student entities
         ("students", "reg_no"),
         ("users", "reg_no"),
         ("other_staff", "reg_no"),
@@ -3975,15 +4032,31 @@ def delete_user_data_by_reg_no(reg_no: str):
 
     for tbl, col in tables_to_purge:
         try:
-            cursor.execute(f"DELETE FROM {tbl} WHERE {col} = ?", (reg_no,))
+            cursor.execute(f"DELETE FROM {tbl} WHERE LOWER(TRIM({col})) = LOWER(?)", (reg_no,))
         except Exception:
             pass
 
     try:
         cursor.execute("""
             DELETE FROM staff_student_permissions 
-            WHERE student_reg_no = ? OR grantor_staff_reg_no = ? OR grantee_staff_reg_no = ?
+            WHERE LOWER(TRIM(student_reg_no)) = LOWER(?) OR LOWER(TRIM(grantor_staff_reg_no)) = LOWER(?) OR LOWER(TRIM(grantee_staff_reg_no)) = LOWER(?)
         """, (reg_no, reg_no, reg_no))
+    except Exception:
+        pass
+
+    # Evict from in-memory caches
+    try:
+        _face_profile_cache.remove(reg_no)
+    except Exception:
+        pass
+    try:
+        if "_student_face_profile_cache" in globals() and reg_no in _student_face_profile_cache:
+            del _student_face_profile_cache[reg_no]
+    except Exception:
+        pass
+    try:
+        _failed_attempts.remove(reg_no)
+        _lockout_storage.remove(reg_no)
     except Exception:
         pass
 
@@ -4145,15 +4218,26 @@ async def login(request: Request):
                 stu_email = stu.get("email") if isinstance(stu, dict) else stu[5]
                 stu_susp = stu.get("suspended") if isinstance(stu, dict) else stu[6]
                 stu_ftl = stu.get("first_time_login") if isinstance(stu, dict) else stu[7]
-                stu_dob = str(stu.get("dob") if isinstance(stu, dict) else stu[8])
+                stu_dob = str(stu.get("dob") if isinstance(stu, dict) else stu[8]).strip()
                 stu_batch = stu.get("batch") if isinstance(stu, dict) else stu[9]
                 stu_sem = stu.get("semester") if isinstance(stu, dict) else stu[10]
                 stu_sec = stu.get("section") if isinstance(stu, dict) else stu[11]
 
+                dob_variants = {stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"}
+                dob_parts = stu_dob.split("-")
+                if len(dob_parts) == 3:
+                    dob_variants.add(f"{dob_parts[2]}-{dob_parts[1]}-{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[2]}/{dob_parts[1]}/{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[2]}{dob_parts[1]}{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[0]}{dob_parts[1]}{dob_parts[2]}")
+
+                pw_input = password.strip()
+                pw_input_clean = pw_input.replace("-", "").replace("/", "")
+
                 pw_valid = False
                 if stu_pw and verify_password(password, stu_pw):
                     pw_valid = True
-                elif password in [stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"]:
+                elif pw_input in dob_variants or pw_input_clean in dob_variants:
                     pw_valid = True
 
                 if pw_valid:
@@ -6984,6 +7068,8 @@ def _run_ddl():
     for idx in [
         "CREATE INDEX IF NOT EXISTS idx_class_adv_dept_sem ON class_advisors (dept, batch, semester, section)",
         "CREATE INDEX IF NOT EXISTS idx_class_adv_staff ON class_advisors (staff_reg_no)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_class_advisor ON class_advisors (LOWER(dept), TRIM(batch), LOWER(section)) WHERE is_active IS TRUE",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_staff_advisor ON class_advisors (LOWER(TRIM(staff_reg_no))) WHERE is_active IS TRUE",
     ]:
         try:
             cursor.execute(idx)
@@ -9055,15 +9141,19 @@ def compute_skin_lbp_entropy(skin_patch):
             bins = 16
             hist_range = (0, 256)
 
-        hist, _ = np.histogram(lbp.ravel(), bins=bins, range=hist_range, density=True)
-        entropy = -float(np.sum([p * np.log2(p) for p in hist if p > 0]))
+        hist, _ = np.histogram(lbp.ravel(), bins=bins, range=hist_range)
+        total_counts = float(np.sum(hist))
+        if total_counts == 0:
+            return 0.0
+        p_vals = hist / total_counts
+        entropy = -float(np.sum([p * np.log2(p) for p in p_vals if p > 0]))
         return entropy
     except Exception as e:
         print(f"Error computing LBP entropy: {e}")
         return 0.0
 
 
-def evaluate_face_liveness(img, face) -> dict:
+def evaluate_face_liveness(img, face, reg_no: str = "unknown") -> dict:
     """
     Multi-layer presentation attack detection (PAD) strictly rejecting photos,
     screen videos, electronic replays, and printed cards while reliably admitting
@@ -9133,10 +9223,15 @@ def evaluate_face_liveness(img, face) -> dict:
 
     max_fft_ratio = max(fft_ratio_256, fft_ratio_nat)
 
-    if max_fft_ratio > 40.0:
+    rh, rw = face_roi.shape[:2]
+    is_low_res = (rh < 110 or rw < 110)
+
+    fft_crit_thresh = 55.0 if is_low_res else 40.0
+    fft_susp_thresh = 42.0 if is_low_res else 30.0
+    if max_fft_ratio > fft_crit_thresh:
         flags.append("SCREEN_MOIRE_CRITICAL")
         penalties += 0.85
-    elif max_fft_ratio > 30.0:
+    elif max_fft_ratio > fft_susp_thresh:
         flags.append("SCREEN_MOIRE_SUSPECT")
         penalties += 0.40
 
@@ -9158,10 +9253,12 @@ def evaluate_face_liveness(img, face) -> dict:
     flat_cb = np.mean(mag_cb < 1.0)
     chroma_flatness = float((flat_cr + flat_cb) / 2.0)
 
-    if chroma_flatness > 0.28 and mean_y >= 30:
+    crit_chroma = 0.36 if is_low_res else 0.28
+    susp_chroma = 0.28 if is_low_res else 0.22
+    if chroma_flatness > crit_chroma and mean_y >= 30:
         flags.append("VIDEO_CHROMA_QUANTIZATION")
         penalties += 0.80
-    elif chroma_flatness > 0.22 and mean_y >= 50:
+    elif chroma_flatness > susp_chroma and mean_y >= 50:
         flags.append("SUSPECT_CHROMA_STEPPING")
         penalties += 0.35
 
@@ -9169,11 +9266,11 @@ def evaluate_face_liveness(img, face) -> dict:
     # Layer 3: Physiological Skin Chrominance & Blue Backlight
     # -------------------------------------------------------------
     if mean_y < 70:
-        skin_mask = (cr >= 120) & (cr <= 185) & (cb >= 70) & (cb <= 142)
-        chrom_thresh = 20.0
+        skin_mask = (cr >= 115) & (cr <= 190) & (cb >= 65) & (cb <= 145)
+        chrom_thresh = 15.0 if is_low_res else 20.0
     else:
-        skin_mask = (cr >= 130) & (cr <= 175) & (cb >= 75) & (cb <= 130)
-        chrom_thresh = 35.0
+        skin_mask = (cr >= 125) & (cr <= 180) & (cb >= 70) & (cb <= 135)
+        chrom_thresh = 22.0 if is_low_res else 35.0
 
     skin_locus_pct = float(np.mean(skin_mask) * 100.0)
 
@@ -9210,15 +9307,16 @@ def evaluate_face_liveness(img, face) -> dict:
         py2 = min(h, cheek_cy + patch_r)
         skin_patch = target_img[py1:py2, px1:px2]
     else:
-        rh, rw = face_roi.shape[:2]
         skin_patch = face_roi[int(rh*0.35):int(rh*0.65), int(rw*0.35):int(rw*0.65)]
 
     lbp_entropy = compute_skin_lbp_entropy(skin_patch)
     if lbp_entropy > 0:
-        if lbp_entropy < 1.90 and mean_y >= 45:
+        crit_lbp = 1.60 if is_low_res else 2.00
+        susp_lbp = 1.90 if is_low_res else 2.30
+        if lbp_entropy < crit_lbp and mean_y >= 45:
             flags.append("LOW_SKIN_TEXTURE_ENTROPY")
             penalties += 0.50
-        elif lbp_entropy < 2.10 and mean_y >= 70:
+        elif lbp_entropy < susp_lbp and mean_y >= 70:
             flags.append("SUBDUED_TEXTURE")
             penalties += 0.20
 
@@ -9293,7 +9391,7 @@ def evaluate_face_liveness(img, face) -> dict:
 
     reason_str = "; ".join(reasons) if reasons else ("Real human face verified" if is_live else "Liveness criteria not met")
 
-    return {
+    base_res = {
         "is_live": is_live,
         "score": round(liveness_score, 3),
         "reason": reason_str,
@@ -9312,8 +9410,30 @@ def evaluate_face_liveness(img, face) -> dict:
         }
     }
 
+    # -------------------------------------------------------------
+    # Deep Neural Ensemble & Temporal Defense (MiniFASNetV2 + V1SE)
+    # -------------------------------------------------------------
+    if _NEURAL_ANTISPOOF_AVAILABLE and _neural_liveness_check is not None:
+        try:
+            neural_res = _neural_liveness_check(
+                img=target_img,
+                face=face,
+                reg_no=reg_no,
+                camera_id="cam_0",
+                existing_liveness_result=base_res,
+            )
+            # Merge metrics dictionaries
+            if "metrics" in neural_res and isinstance(neural_res["metrics"], dict):
+                neural_res["metrics"].update(base_res["metrics"])
+            return neural_res
+        except Exception as _n_err:
+            print(f"[NEURAL ANTISPOOF WARNING] {_n_err} — using base heuristic result")
+            return base_res
 
-def detect_single_image_liveness(img, face=None) -> tuple[bool, str]:
+    return base_res
+
+
+def detect_single_image_liveness(img, face=None, reg_no: Optional[str] = None) -> tuple[bool, str]:
     """
     Presentation attack detection on a single image.
     If face is provided, evaluates directly. Otherwise extracts face first.
@@ -9329,7 +9449,7 @@ def detect_single_image_liveness(img, face=None) -> tuple[bool, str]:
     if face is None:
         return False, "Face is unable to detect"
 
-    result = evaluate_face_liveness(img, face)
+    result = evaluate_face_liveness(img, face, reg_no=reg_no)
     return result.get("is_live", False), result.get("reason", "Liveness check failed")
 
 
@@ -9986,11 +10106,15 @@ try:
                     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                     ctx_id = 0
                     print("GPU available, using CUDAExecutionProvider for face analysis")
+                elif "DmlExecutionProvider" in available_providers:
+                    providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
+                    ctx_id = 0
+                    print("GPU available, using DmlExecutionProvider for face analysis")
                 else:
                     gpu_available = False
                     providers = ["CPUExecutionProvider"]
                     ctx_id = -1
-                    print("ONNX Runtime: CUDAExecutionProvider not available in package. Using CPU.")
+                    print("ONNX Runtime: GPU ExecutionProvider not available in package. Using CPU.")
             except Exception as e:
                 gpu_available = False
                 providers = ["CPUExecutionProvider"]
@@ -10005,8 +10129,13 @@ try:
         providers = ["CPUExecutionProvider"]
         ctx_id = -1
         print("PyTorch not available, using CPU for face analysis")
-    face_app = FaceAnalysis(name="buffalo_s", providers=providers)
-    face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    try:
+        face_app = FaceAnalysis(name="buffalo_s", providers=providers)
+        face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    except Exception as e:
+        print(f"Failed to initialize FaceAnalysis with providers={providers} (ctx_id={ctx_id}): {e}. Falling back to CPU...")
+        face_app = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
+        face_app.prepare(ctx_id=-1, det_size=(640, 640))
 
     # Warm up the model with a dummy inference to reduce first-request latency
     try:
@@ -10472,6 +10601,57 @@ def save_debug_image(img, prefix="debug"):
     filename = f"{DEBUG_DIR}/{prefix}_{timestamp}.jpg"
     cv2.imwrite(filename, img)
     print(f"Saved debug image: {filename}")
+
+
+def _process_and_validate_registration_face(img_bytes: bytes):
+    """
+    Validates image quality, extracts face, runs neural anti-spoofing verification,
+    and returns unit-vector normalized embedding.
+    Returns: (img, face, normalized_embedding)
+    Raises: HTTPException(400) with clear, actionable diagnostics on failure.
+    """
+    img = preprocess_image_data(img_bytes)
+
+    # Pre-extraction quality assessment (blur and illumination)
+    quality = check_image_quality(img)
+    blur_score = float(quality.get("blur_score", 100.0) or 0.0)
+    brightness = float(quality.get("brightness", 100.0) or 0.0)
+    if blur_score < 15.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is too blurry. Please hold camera steady and ensure adequate lighting.",
+        )
+    if brightness < 20.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is too dark. Please position yourself in a well-lit area.",
+        )
+
+    face = extract_face(img)
+    if face is None:
+        save_debug_image(img, "register_fail")
+        raise HTTPException(
+            status_code=400,
+            detail="Face not detected clearly. Ensure your face is centered and fully visible in the frame.",
+        )
+
+    if ANTISPOOFING_ENABLED:
+        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+        if not is_live:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Registration rejected: {liveness_reason}. Face must be registered using a live camera feed, not a photo or screen.",
+            )
+
+    embedding = _normalize_embedding(face.embedding)
+    if embedding is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to generate face biometric embedding. Please ensure clear lighting and try again.",
+        )
+
+    return img, face, embedding
+
 
 
 # -------------------------------------------------
@@ -11420,7 +11600,19 @@ def _secure_verify_and_mark(
     liveness_score = 1.0
 
     if ANTISPOOFING_ENABLED:
-        liveness_res = evaluate_face_liveness(img, face)
+        liveness_res = evaluate_face_liveness(img, face, reg_no=reg_no)
+        m_vals = liveness_res.get("metrics", {})
+        print(
+            f"[NEURAL ANTISPOOF] RegNo: {reg_no} | Live: {liveness_res.get('is_live')} | "
+            f"V2={m_vals.get('l1_score_v2', 0):.3f} "
+            f"SE={m_vals.get('l1_score_se', 0):.3f} "
+            f"Ensemble={m_vals.get('l1_ensemble', 0):.3f} | "
+            f"Moire={m_vals.get('l2_moire', 0):.3f} | "
+            f"Blink={m_vals.get('l3_blink', False)} | "
+            f"Flow={m_vals.get('l4_flow_sigma', 0):.3f} | "
+            f"Decision={m_vals.get('decision', 'N/A')}"
+        )
+
         is_live = liveness_res.get("is_live", True)
         liveness_reason = liveness_res.get("reason", "Liveness check failed")
         liveness_score = liveness_res.get("score", 1.0)
@@ -11429,11 +11621,11 @@ def _secure_verify_and_mark(
         if not is_live:
             if ANTISPOOF_STRICT_MODE:
                 save_debug_image(img, f"liveness_fail_{reg_no}")
-                print(f"[ATTENDANCE BLOCKED - SPOOF DETECTED] RegNo: {reg_no} | Reason: Liveness check failed ({liveness_reason}) | Flags: {liveness_flags} | Score: {liveness_score:.3f} | Quality Score: {analysis['quality_score']:.2f}")
+                print(f"[ATTENDANCE BLOCKED - SPOOF DETECTED] RegNo: {reg_no} | Reason: {liveness_reason} | Flags: {liveness_flags} | Score: {liveness_score:.3f}")
                 log_audit_event("LIVENESS_FAILED", reg_no, False, f"{liveness_reason} (Flags: {','.join(liveness_flags)})")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Liveness check failed: {liveness_reason}. Please ensure you are using a live camera feed, not a photo, printout, or screen replay.",
+                    detail=f"Liveness check failed: {liveness_reason}. Please use a live camera — photos, screen replays, and masks are blocked.",
                 )
             else:
                 log_audit_event("LIVENESS_WARNING", reg_no, False, liveness_reason)
@@ -13041,11 +13233,19 @@ async def admin_dashboard(request: Request):
             GROUP BY status
         """)
         admin_das_breakdown = {r[0]: r[1] for r in (cursor.fetchall() or [])}
-        admin_pie_full_day  = admin_das_breakdown.get("Present", 0)
-        admin_pie_half_day  = admin_das_breakdown.get("Half Day", 0)
-        admin_pie_absent    = admin_das_breakdown.get("Absent", 0)
-        admin_pie_leave     = admin_das_breakdown.get("Leave", 0)
-        admin_pie_holiday   = admin_das_breakdown.get("Holiday", 0)
+        admin_pie_full_day = sum(cnt for st, cnt in admin_das_breakdown.items() if st and ("full" in str(st).lower() or str(st).strip().lower() == "present"))
+        admin_pie_half_day = sum(cnt for st, cnt in admin_das_breakdown.items() if st and ("half" in str(st).lower() or "0.5" in str(st).lower()))
+        admin_pie_absent   = sum(cnt for st, cnt in admin_das_breakdown.items() if st and "absent" in str(st).lower())
+        admin_pie_leave    = sum(cnt for st, cnt in admin_das_breakdown.items() if st and any(k in str(st).lower() for k in ["leave", "od", "duty", "earned", "casual"]))
+        admin_pie_holiday  = sum(cnt for st, cnt in admin_das_breakdown.items() if st and "holiday" in str(st).lower())
+
+        # Fallback to live attendance punches if daily_attendance_status hasn't closed yet today
+        if (admin_pie_full_day + admin_pie_half_day + admin_pie_absent + admin_pie_leave) == 0:
+            cursor.execute("SELECT COUNT(DISTINCT reg_no) FROM attendance WHERE timestamp::date = CURRENT_DATE")
+            row_live_att = cursor.fetchone()
+            live_present = (row_live_att[0] if row_live_att else 0) + od_count
+            admin_pie_half_day = live_present
+            admin_pie_absent = max(0, total_staff - live_present)
 
         response_data = {
             "stats": {
@@ -15079,22 +15279,15 @@ async def admin_register_other_staff_face(
         raise HTTPException(status_code=404, detail="Other staff not found")
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
-    embedding = face.embedding.astype(np.float32)
     cursor.execute(
         "UPDATE other_staff SET embedding = ? WHERE reg_no = ?",
         (embedding.tobytes(), reg_no),
     )
     conn.commit()
     _cache_update_primary(reg_no, embedding)
+    _save_face_embedding_sample(reg_no, "other_staff", embedding, "registration_admin_other_staff", 1.0)
 
     return {
         "message": "Face registered successfully",
@@ -16166,44 +16359,210 @@ async def admin_bulk_upload_departments(request: Request, file: UploadFile = Fil
 
 @app.delete("/admin/departments/{dept_name}")
 async def admin_delete_department(request: Request, dept_name: str):
-    """Delete a department (admin only)"""
+    """Delete a department and purge all associated staff, students, schedules, attendance, biometric, and history data across all tables and databases (admin only)"""
     verify_admin_token(request)
 
+    # URL decode and sanitize department name
+    dept_name = urllib.parse.unquote(dept_name).strip()
+    if not dept_name:
+        raise HTTPException(status_code=400, detail="Department name is required")
+
+    # Guard core system departments
+    if dept_name.upper() in ["ADMIN", "GLOBAL", "ADMINISTRATION"]:
+        raise HTTPException(status_code=400, detail=f"Cannot delete core system department '{dept_name}'")
+
     try:
-        # Get users belonging to this department
-        cursor.execute("SELECT reg_no FROM users WHERE dept = ?", (dept_name,))
-        users = cursor.fetchall()
-        for u in users:
-            delete_user_data_by_reg_no(u[0])
+        cur = pg_adapter.cursor
+        all_reg_nos = set()
 
-        cursor.execute("DELETE FROM users WHERE dept = ?", (dept_name,))
+        # 1. Collect all users / staff belonging to this department
+        try:
+            cur.execute("SELECT reg_no FROM users WHERE LOWER(TRIM(dept)) = LOWER(?)", (dept_name,))
+            for r in cur.fetchall():
+                val = r[0] if isinstance(r, (list, tuple)) else r.get("reg_no")
+                if val:
+                    all_reg_nos.add(str(val).strip())
+        except Exception as e_u:
+            print(f"[Department Delete] Error querying users for dept '{dept_name}': {e_u}")
 
-        # Get other staff belonging to this department
-        cursor.execute("SELECT reg_no FROM other_staff WHERE dept = ?", (dept_name,))
-        other_staff_members = cursor.fetchall()
-        for os_member in other_staff_members:
-            delete_user_data_by_reg_no(os_member[0])
+        # Other staff
+        try:
+            cur.execute("SELECT reg_no FROM other_staff WHERE LOWER(TRIM(dept)) = LOWER(?)", (dept_name,))
+            for r in cur.fetchall():
+                val = r[0] if isinstance(r, (list, tuple)) else r.get("reg_no")
+                if val:
+                    all_reg_nos.add(str(val).strip())
+        except Exception as e_os:
+            print(f"[Department Delete] Error querying other_staff for dept '{dept_name}': {e_os}")
 
-        cursor.execute("DELETE FROM other_staff WHERE dept = ?", (dept_name,))
+        # Students belonging to this department
+        try:
+            cur.execute("SELECT reg_no FROM students WHERE LOWER(TRIM(dept)) = LOWER(?)", (dept_name,))
+            for r in cur.fetchall():
+                val = r[0] if isinstance(r, (list, tuple)) else r.get("reg_no")
+                if val:
+                    all_reg_nos.add(str(val).strip())
+        except Exception as e_s:
+            print(f"[Department Delete] Error querying students for dept '{dept_name}': {e_s}")
 
-        # Delete department
-        cursor.execute("DELETE FROM departments WHERE name = ?", (dept_name,))
+        # Department IDs for relational references
+        dept_ids = []
+        try:
+            cur.execute("SELECT id FROM departments WHERE LOWER(TRIM(name)) = LOWER(?)", (dept_name,))
+            for r in cur.fetchall():
+                dept_ids.append(r[0] if isinstance(r, (list, tuple)) else r.get("id"))
+        except Exception:
+            pass
+
+        # 2. Delete individual user/staff/student data for every gathered reg_no
+        for reg in all_reg_nos:
+            try:
+                delete_user_data_by_reg_no(reg)
+            except Exception as e_reg:
+                print(f"[Department Delete] Error deleting user data for {reg}: {e_reg}")
+
+        # 3. Purge all department-scoped tables in PostgreSQL
+        dept_tables_to_purge = [
+            ("students", "dept"),
+            ("users", "dept"),
+            ("other_staff", "dept"),
+            ("class_timetable", "dept"),
+            ("class_advisors", "dept"),
+            ("subject_faculty_allocations", "dept"),
+            ("department_subjects", "dept"),
+            ("substitute_assignments", "dept"),
+            ("class_venue_overrides", "dept"),
+            ("class_attendance_sessions", "dept"),
+            ("academic_period_configs", "dept"),
+            ("attendance", "dept"),
+            ("daily_attendance_status", "dept"),
+            ("morning_attendance", "dept"),
+            ("evening_attendance", "dept"),
+            ("fn_attendance", "dept"),
+            ("an_attendance", "dept"),
+            ("other_staff_attendance", "dept"),
+            ("kiosk_attendance_logs", "dept"),
+            ("attendance_logs", "dept"),
+            ("attendance_corrections", "dept"),
+            ("attendance_session_logs", "dept"),
+            ("attendance_locations", "dept"),
+            ("multi_user_attendance_records", "dept"),
+            ("student_period_attendance", "dept"),
+            ("student_face_profiles", "dept"),
+            ("student_face_requests", "dept"),
+            ("student_feedback_grievances", "dept"),
+            ("student_promotion_logs", "dept"),
+            ("casual_leave", "dept"),
+            ("earned_leave", "dept"),
+            ("expired_leaves", "dept"),
+            ("leave_requests", "dept"),
+            ("staff_leave_requests", "dept"),
+            ("staff_leave_requests", "alternate_dept"),
+            ("staff_leave_timetable_assignments", "dept"),
+            ("ccl_earned_history", "dept"),
+            ("permission_requests", "dept"),
+            ("student_leave_od_requests", "dept"),
+            ("user_location_logs", "dept"),
+            ("user_latest_locations", "dept"),
+            ("campus_movement_alerts", "dept"),
+            ("notifications_all_roles", "target_dept"),
+            ("system_announcements", "target_dept"),
+            ("user_transfers_log", "old_dept"),
+            ("user_transfers_log", "new_dept"),
+        ]
+
+        for tbl, col in dept_tables_to_purge:
+            try:
+                cur.execute(f"DELETE FROM {tbl} WHERE LOWER(TRIM({col})) = LOWER(?)", (dept_name,))
+            except Exception:
+                pass
+
+        # Campus venues (delete dept-specific venues, keep GENERAL intact)
+        try:
+            cur.execute("DELETE FROM campus_venues WHERE LOWER(TRIM(dept)) = LOWER(?) AND UPPER(TRIM(dept)) != 'GENERAL'", (dept_name,))
+        except Exception:
+            pass
+
+        # ID-based academic tables
+        for d_id in dept_ids:
+            for acad_tbl in ["acad_attendance_rules", "acad_classrooms", "acad_programs", "acad_subjects"]:
+                try:
+                    cur.execute(f"DELETE FROM {acad_tbl} WHERE dept_id = ?", (d_id,))
+                except Exception:
+                    pass
+
+        # Purge from departments table (by name and dept_name)
+        try:
+            cur.execute("DELETE FROM departments WHERE LOWER(TRIM(name)) = LOWER(?)", (dept_name,))
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM departments WHERE LOWER(TRIM(dept_name)) = LOWER(?)", (dept_name,))
+        except Exception:
+            pass
+
         conn.commit()
+
+        # 4. Multi-database cleanup: Purge from any SQLite files
+        for sqlite_name in ['backend/attenda.db', 'backend/attendance.db', 'backend/college_attendance.db', 'backend/database.db', 'attenda.db']:
+            sqlite_path = sqlite_name if os.path.exists(sqlite_name) else os.path.join(os.path.dirname(__file__), '..', sqlite_name)
+            if os.path.exists(sqlite_path):
+                try:
+                    import sqlite3
+                    s_conn = sqlite3.connect(sqlite_path)
+                    s_cur = s_conn.cursor()
+                    s_cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                    s_tables = [row[0] for row in s_cur.fetchall()]
+                    if 'students' in s_tables:
+                        if 'student_academic_day_status' in s_tables:
+                            try:
+                                s_cur.execute("DELETE FROM student_academic_day_status WHERE student_reg_no IN (SELECT reg_no FROM students WHERE LOWER(TRIM(dept)) = LOWER(?))", (dept_name,))
+                            except Exception:
+                                pass
+                        s_cur.execute("DELETE FROM students WHERE LOWER(TRIM(dept)) = LOWER(?)", (dept_name,))
+                    if 'departments' in s_tables:
+                        s_cur.execute("DELETE FROM departments WHERE LOWER(TRIM(name)) = LOWER(?)", (dept_name,))
+                    s_conn.commit()
+                    s_conn.close()
+                except Exception as e_sq:
+                    print(f"[Department Delete] SQLite cleanup error in {sqlite_path}: {e_sq}")
+
+        # 5. Clear all in-memory caches
         _departments_cache["data"] = None
+        _departments_cache["timestamp"] = 0
+        for reg in all_reg_nos:
+            try:
+                _face_profile_cache.remove(reg)
+            except Exception:
+                pass
+            try:
+                if '_student_face_profile_cache' in globals() and reg in _student_face_profile_cache:
+                    del _student_face_profile_cache[reg]
+            except Exception:
+                pass
+            try:
+                _failed_attempts.remove(reg)
+                _lockout_storage.remove(reg)
+            except Exception:
+                pass
 
-        print(f"[ADMIN] Deleted department and its users: {dept_name}")
+        print(f"[ADMIN] Permanently deleted department '{dept_name}' and all associated {len(all_reg_nos)} users/students/schedules/data across all tables and databases.")
 
-        return {"message": f"Department '{dept_name}' and all associated users/data deleted successfully"}
+        return {
+            "success": True,
+            "message": f"Department '{dept_name}' and all associated users, students, timetable, and history records were deleted successfully.",
+            "purged_records_count": len(all_reg_nos)
+        }
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error deleting department: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete department")
+        raise HTTPException(status_code=500, detail=f"Failed to delete department: {str(e)}")
 
 
 @app.put("/admin/departments/{old_dept_name}")
 async def admin_update_department(request: Request, old_dept_name: str):
-    """Update a department name (admin only)"""
+    """Update a department name across all tables (admin only)"""
     verify_admin_token(request)
 
     # URL decode the department name (handle special characters)
@@ -16216,44 +16575,59 @@ async def admin_update_department(request: Request, old_dept_name: str):
         if not new_name:
             raise HTTPException(status_code=400, detail="Department name is required")
 
-        # Check if old department exists
-        cursor.execute("SELECT id FROM departments WHERE name = ?", (old_dept_name,))
-        old_dept = cursor.fetchone()
-        if not old_dept:
-            raise HTTPException(status_code=404, detail="Department not found")
-
         # Check if new name already exists
-        cursor.execute("SELECT id FROM departments WHERE name = ?", (new_name,))
+        cursor.execute("SELECT id FROM departments WHERE LOWER(TRIM(name)) = LOWER(?)", (new_name,))
         if cursor.fetchone():
             raise HTTPException(
-                status_code=400, detail="Department name already exists"
+                status_code=400, detail=f"Department '{new_name}' already exists"
             )
 
-        # Update department name - ensure we only update the specific department
-        cursor.execute(
-            "UPDATE departments SET name = ? WHERE name = ? AND id = ?",
-            (
-                new_name,
-                old_dept_name,
-                old_dept[0],
-            ),
-        )
+        # Check if old department exists in departments, students, or users
+        cursor.execute("SELECT id FROM departments WHERE LOWER(TRIM(name)) = LOWER(?)", (old_dept_name,))
+        old_dept = cursor.fetchone()
 
-        # Also update the department name in users table
-        cursor.execute(
-            "UPDATE users SET dept = ? WHERE dept = ?",
-            (
-                new_name,
-                old_dept_name,
-            ),
-        )
+        if old_dept:
+            cursor.execute(
+                "UPDATE departments SET name = ? WHERE id = ?",
+                (new_name, old_dept[0]),
+            )
+        else:
+            # If not yet in departments table, insert new department
+            cursor.execute("INSERT INTO departments (name) VALUES (?)", (new_name,))
+
+        # Cascade update across all related tables
+        tables_to_update = [
+            ("users", "dept"),
+            ("other_staff", "dept"),
+            ("students", "dept"),
+            ("class_timetable", "dept"),
+            ("class_advisors", "dept"),
+            ("subject_faculty_allocations", "dept"),
+            ("department_subjects", "dept"),
+            ("academic_period_configs", "dept"),
+            ("casual_leave", "dept"),
+            ("earned_leave", "dept"),
+            ("attendance", "dept"),
+            ("daily_attendance_status", "dept"),
+        ]
+
+        for tbl, col in tables_to_update:
+            try:
+                cursor.execute(
+                    f"UPDATE {tbl} SET {col} = ? WHERE LOWER(TRIM({col})) = LOWER(?)",
+                    (new_name, old_dept_name),
+                )
+            except Exception:
+                pass
 
         conn.commit()
         _departments_cache["data"] = None
+        _departments_cache["timestamp"] = 0
 
-        print(f"[ADMIN] Updated department: {old_dept_name} -> {new_name}")
+        print(f"[ADMIN] Updated department across all tables: '{old_dept_name}' -> '{new_name}'")
 
         return {
+            "success": True,
             "message": "Department updated successfully",
             "department": {"name": new_name},
         }
@@ -16378,19 +16752,19 @@ async def hod_dashboard(request: Request):
         dept = hod_user["dept"]
 
         # Get counts for this department only
-        cursor.execute("SELECT COUNT(*) FROM attendance WHERE dept = %s", (dept,))
+        cursor.execute("SELECT COUNT(*) FROM attendance WHERE LOWER(dept) = LOWER(%s)", (dept,))
         row = cursor.fetchone()
         dept_attendance = row[0] if row else 0
 
         cursor.execute(
-            "SELECT COUNT(*) FROM attendance WHERE dept = %s AND timestamp::date = CURRENT_DATE",
+            "SELECT COUNT(*) FROM attendance WHERE LOWER(dept) = LOWER(%s) AND timestamp::date = CURRENT_DATE",
             (dept,),
         )
         row = cursor.fetchone()
         today_attendance = row[0] if row else 0
 
         cursor.execute(
-            "SELECT COUNT(*) FROM users WHERE dept = %s AND role = 'staff'", (dept,)
+            "SELECT COUNT(*) FROM users WHERE LOWER(dept) = LOWER(%s) AND role = 'staff'", (dept,)
         )
         row = cursor.fetchone()
         dept_staff = row[0] if row else 0
@@ -16495,17 +16869,22 @@ async def hod_dashboard(request: Request):
             """
             SELECT status, COUNT(*) as cnt
             FROM daily_attendance_status
-            WHERE dept = %s AND date::date = CURRENT_DATE
+            WHERE LOWER(dept) = LOWER(%s) AND date::date = CURRENT_DATE
             GROUP BY status
         """,
             (dept,),
         )
-        das_breakdown = {row[0]: row[1] for row in cursor.fetchall() or []}
-        pie_full_day  = das_breakdown.get("Present", 0)
-        pie_half_day  = das_breakdown.get("Half Day", 0)
-        pie_absent    = das_breakdown.get("Absent", 0)
-        pie_leave     = das_breakdown.get("Leave", 0)
-        pie_holiday   = das_breakdown.get("Holiday", 0)
+        das_breakdown = {row[0]: row[1] for row in (cursor.fetchall() or [])}
+        pie_full_day = sum(cnt for st, cnt in das_breakdown.items() if st and ("full" in str(st).lower() or str(st).strip().lower() == "present"))
+        pie_half_day = sum(cnt for st, cnt in das_breakdown.items() if st and ("half" in str(st).lower() or "0.5" in str(st).lower()))
+        pie_absent   = sum(cnt for st, cnt in das_breakdown.items() if st and "absent" in str(st).lower())
+        pie_leave    = sum(cnt for st, cnt in das_breakdown.items() if st and any(k in str(st).lower() for k in ["leave", "od", "duty", "earned", "casual"]))
+        pie_holiday  = sum(cnt for st, cnt in das_breakdown.items() if st and "holiday" in str(st).lower())
+
+        # Fallback to live attendance punches if daily_attendance_status hasn't closed yet today
+        if (pie_full_day + pie_half_day + pie_absent + pie_leave) == 0:
+            pie_half_day = today_attendance + od_count
+            pie_absent = max(0, total_staff_in_dept - pie_half_day)
 
         return JSONResponse(
             content={
@@ -16523,6 +16902,7 @@ async def hod_dashboard(request: Request):
                     # Pie chart breakdown fields
                     "today_full_day": pie_full_day,
                     "today_half_day": pie_half_day,
+                    "today_absent_das": pie_absent,
                     "today_leave": pie_leave,
                     "today_holiday": pie_holiday,
                 },
@@ -17589,24 +17969,7 @@ async def admin_register_face(
     admin_user = verify_admin_token(request)
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-
-    # Check image quality before face extraction
-    quality = check_image_quality(img)
-    print(f"📷 Image quality score: {quality['quality_score']}")
-    if quality["warnings"]:
-        for warning in quality["warnings"]:
-            print(warning)
-
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
     # Debug: Print embedding statistics
     print(f"DEBUG: Admin registering face for {reg_no}")
@@ -17665,17 +18028,7 @@ async def admin_register_own_face(request: Request, image: UploadFile = File(...
     dept = admin_user["dept"]
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
     # Debug: Print embedding statistics
     print(f"DEBUG: Admin self-registering face for {reg_no}")
@@ -17804,17 +18157,7 @@ async def hod_register_face(
         )
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
     # Debug: Print embedding statistics
     print(f"DEBUG: HOD registering face for {reg_no}")
@@ -17875,17 +18218,7 @@ async def hod_register_own_face(request: Request, image: UploadFile = File(...))
     dept = hod_user["dept"]
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
     # Debug: Print embedding statistics
     print(f"DEBUG: HOD self-registering face for {reg_no}")
@@ -17926,22 +18259,7 @@ async def hod_register_own_face(request: Request, image: UploadFile = File(...))
 
 
 def _register_face_sync_work(reg_no: str, name: str, dept: str, img_bytes: bytes) -> dict:
-    img = preprocess_image_data(img_bytes)
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-    if ANTISPOOFING_ENABLED:
-        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
-        if not is_live:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Registration rejected: {liveness_reason}. Face must be registered using a live camera feed, not a photo or screen.",
-            )
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
     print(f"DEBUG: Registering face for {reg_no}")
     print(f"  Embedding shape: {embedding.shape}")
     print(f"  Embedding norm: {np.linalg.norm(embedding):.4f}")
@@ -20694,12 +21012,12 @@ async def staff_dashboard(request: Request):
     dept = staff_user["dept"]
 
     # Get face scan attendance count
-    cursor.execute("SELECT COUNT(*) FROM attendance WHERE reg_no = ?", (reg_no,))
+    cursor.execute("SELECT COUNT(*) FROM attendance WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
     total_face_scan = cursor.fetchone()[0]
 
     # Get today's face scan
     cursor.execute(
-        "SELECT COUNT(*) FROM attendance WHERE reg_no = %s AND timestamp::date = CURRENT_DATE",
+        "SELECT COUNT(*) FROM attendance WHERE LOWER(reg_no) = LOWER(%s) AND timestamp::date = CURRENT_DATE",
         (reg_no,),
     )
     today_face_scan = cursor.fetchone()[0]
@@ -20709,7 +21027,7 @@ async def staff_dashboard(request: Request):
         """
         SELECT leave_type, COUNT(*) as cnt
         FROM daily_attendance_status
-        WHERE reg_no = %s AND date::date = CURRENT_DATE AND status = 'Present' 
+        WHERE LOWER(reg_no) = LOWER(%s) AND date::date = CURRENT_DATE AND status = 'Present' 
         AND leave_type IN ('od', 'earned', 'casual')
         GROUP BY leave_type
     """,
@@ -20730,7 +21048,7 @@ async def staff_dashboard(request: Request):
         """
         SELECT id, reg_no, name, dept, class_div, timestamp, 'face_scan' as source, status
         FROM attendance 
-        WHERE reg_no = %s 
+        WHERE LOWER(reg_no) = LOWER(%s) 
         ORDER BY id DESC 
         LIMIT 8
     """,
@@ -20742,7 +21060,7 @@ async def staff_dashboard(request: Request):
     cursor.execute(
         """
         SELECT das.id, das.reg_no, das.name, das.dept, das.date as timestamp, 'od' as source, 
-               das.leave_type, lr.processed_date
+                das.leave_type, lr.processed_date
         FROM daily_attendance_status das
         LEFT JOIN leave_requests lr ON das.leave_request_id = lr.id
         WHERE das.reg_no = %s AND das.date::date = CURRENT_DATE AND das.status = 'Present' 
@@ -20804,7 +21122,7 @@ async def staff_dashboard(request: Request):
         """
         SELECT status, first_half_status, second_half_status
         FROM daily_attendance_status
-        WHERE reg_no = %s AND date::date = CURRENT_DATE
+        WHERE LOWER(reg_no) = LOWER(%s) AND date::date = CURRENT_DATE
         LIMIT 1
     """,
         (reg_no,),
@@ -20814,21 +21132,33 @@ async def staff_dashboard(request: Request):
     today_first_half    = today_das_row[1] if today_das_row else None
     today_second_half   = today_das_row[2] if today_das_row else None
 
+    # Fallback for today_status if not yet recorded in daily_attendance_status
+    if not today_status_str and (today_face_scan + od_count) > 0:
+        today_status_str = "Half Day Present (FN)" if datetime.now().hour < 13 else "Present"
+        today_first_half = "Present"
+
     # Historical full-day vs half-day counts from daily_attendance_status
     cursor.execute(
         """
         SELECT status, COUNT(*) as cnt
         FROM daily_attendance_status
-        WHERE reg_no = %s
+        WHERE LOWER(reg_no) = LOWER(%s)
         GROUP BY status
     """,
         (reg_no,),
     )
     hist_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
-    hist_full_day_count = hist_breakdown.get("Present", 0)
-    hist_half_day_count = hist_breakdown.get("Half Day", 0)
-    hist_absent_count   = hist_breakdown.get("Absent", 0)
-    hist_leave_count    = hist_breakdown.get("Leave", 0)
+    hist_full_day_count = sum(cnt for st, cnt in hist_breakdown.items() if st and ("full" in str(st).lower() or str(st).strip().lower() == "present"))
+    hist_half_day_count = sum(cnt for st, cnt in hist_breakdown.items() if st and ("half" in str(st).lower() or "0.5" in str(st).lower()))
+    hist_absent_count   = sum(cnt for st, cnt in hist_breakdown.items() if st and "absent" in str(st).lower())
+    hist_leave_count    = sum(cnt for st, cnt in hist_breakdown.items() if st and any(k in str(st).lower() for k in ["leave", "od", "duty", "earned", "casual"]))
+
+    # If daily_attendance_status is empty for this staff member, compute from attendance punches
+    if (hist_full_day_count + hist_half_day_count) == 0 and total_face_scan > 0:
+        cursor.execute("SELECT COUNT(DISTINCT timestamp::date) FROM attendance WHERE LOWER(reg_no) = LOWER(%s)", (reg_no,))
+        row_att_days = cursor.fetchone()
+        distinct_att_days = row_att_days[0] if row_att_days else total_face_scan
+        hist_full_day_count = distinct_att_days
 
     return JSONResponse(
         content={
@@ -21633,7 +21963,7 @@ async def other_staff_dashboard(request: Request):
         """
         SELECT status, first_half_status, second_half_status
         FROM daily_attendance_status
-        WHERE reg_no = %s AND date::date = CURRENT_DATE
+        WHERE LOWER(reg_no) = LOWER(%s) AND date::date = CURRENT_DATE
         LIMIT 1
     """,
         (reg_no,),
@@ -21643,20 +21973,32 @@ async def other_staff_dashboard(request: Request):
     os_today_first_half = os_today_das_row[1] if os_today_das_row else None
     os_today_second_half= os_today_das_row[2] if os_today_das_row else None
 
+    # Fallback for today_status if not yet in daily_attendance_status
+    if not os_today_status and (today_face_scan + od_count) > 0:
+        os_today_status = "Half Day Present (FN)" if datetime.now().hour < 13 else "Present"
+        os_today_first_half = "Present"
+
     cursor.execute(
         """
         SELECT status, COUNT(*) as cnt
         FROM daily_attendance_status
-        WHERE reg_no = %s
+        WHERE LOWER(reg_no) = LOWER(%s)
         GROUP BY status
     """,
         (reg_no,),
     )
     os_hist_breakdown     = {row[0]: row[1] for row in cursor.fetchall()}
-    os_hist_full_day      = os_hist_breakdown.get("Present", 0)
-    os_hist_half_day      = os_hist_breakdown.get("Half Day", 0)
-    os_hist_absent        = os_hist_breakdown.get("Absent", 0)
-    os_hist_leave         = os_hist_breakdown.get("Leave", 0)
+    os_hist_full_day      = sum(cnt for st, cnt in os_hist_breakdown.items() if st and ("full" in str(st).lower() or str(st).strip().lower() == "present"))
+    os_hist_half_day      = sum(cnt for st, cnt in os_hist_breakdown.items() if st and ("half" in str(st).lower() or "0.5" in str(st).lower()))
+    os_hist_absent        = sum(cnt for st, cnt in os_hist_breakdown.items() if st and "absent" in str(st).lower())
+    os_hist_leave         = sum(cnt for st, cnt in os_hist_breakdown.items() if st and any(k in str(st).lower() for k in ["leave", "od", "duty", "earned", "casual"]))
+
+    # If daily_attendance_status is empty for this staff member, compute from punches
+    if (os_hist_full_day + os_hist_half_day) == 0 and total_face_scan > 0:
+        cursor.execute("SELECT COUNT(DISTINCT timestamp::date) FROM other_staff_attendance WHERE LOWER(reg_no) = LOWER(%s)", (reg_no,))
+        row_att_days = cursor.fetchone()
+        distinct_att_days = row_att_days[0] if row_att_days else total_face_scan
+        os_hist_full_day = distinct_att_days
 
     return JSONResponse(
         content={
@@ -22303,17 +22645,7 @@ async def other_staff_register_face(
         conn.commit()
 
     img_bytes = await image.read()
-    img = preprocess_image_data(img_bytes)
-
-    face = extract_face(img)
-    if face is None:
-        save_debug_image(img, "register_fail")
-        raise HTTPException(
-            status_code=400,
-            detail="Face not detected clearly. Ensure your face is fully visible in frame.",
-        )
-
-    embedding = face.embedding.astype(np.float32)
+    img, face, embedding = _process_and_validate_registration_face(img_bytes)
 
     # Debug: Print embedding statistics
     print(f"DEBUG: Registering face for other_staff {reg_no}")
@@ -24916,10 +25248,21 @@ def verify_student_token(request: Request) -> dict:
                 stu_active = stu.get("is_active") if isinstance(stu, dict) else stu[20]
                 stu_susp = stu.get("suspended") if isinstance(stu, dict) else stu[21]
 
+                dob_variants = {stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"}
+                dob_parts = stu_dob.split("-")
+                if len(dob_parts) == 3:
+                    dob_variants.add(f"{dob_parts[2]}-{dob_parts[1]}-{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[2]}/{dob_parts[1]}/{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[2]}{dob_parts[1]}{dob_parts[0]}")
+                    dob_variants.add(f"{dob_parts[0]}{dob_parts[1]}{dob_parts[2]}")
+
+                pw_input = str(password).strip()
+                pw_input_clean = pw_input.replace("-", "").replace("/", "")
+
                 pw_valid = False
                 if stu_pw and verify_password(password, stu_pw):
                     pw_valid = True
-                elif password in [stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"]:
+                elif pw_input in dob_variants or pw_input_clean in dob_variants:
                     pw_valid = True
 
                 if pw_valid:
@@ -24963,7 +25306,7 @@ async def student_login(request: Request):
     try:
         data = await request.json()
         reg_no = data.get("reg_no") or data.get("username")
-        password = data.get("password")
+        password = data.get("password") or data.get("dob")
         device_id = data.get("device_id")
 
         if not reg_no or not password:
@@ -24990,7 +25333,7 @@ async def student_login(request: Request):
         stu_name = stu.get("name") if isinstance(stu, dict) else stu[3]
         stu_email = stu.get("email") if isinstance(stu, dict) else stu[4]
         stu_phone = stu.get("phone_number") if isinstance(stu, dict) else stu[5]
-        stu_dob = str(stu.get("dob") if isinstance(stu, dict) else stu[6])
+        stu_dob = str(stu.get("dob") if isinstance(stu, dict) else stu[6]).strip()
         stu_gender = stu.get("gender") if isinstance(stu, dict) else stu[7]
         stu_bg = stu.get("blood_group") if isinstance(stu, dict) else stu[8]
         stu_degree = stu.get("degree") if isinstance(stu, dict) else stu[9]
@@ -25010,10 +25353,21 @@ async def student_login(request: Request):
         if stu_susp or not stu_active:
             raise HTTPException(status_code=403, detail="Student account suspended or inactive.")
 
+        dob_variants = {stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"}
+        dob_parts = stu_dob.split("-")
+        if len(dob_parts) == 3:
+            dob_variants.add(f"{dob_parts[2]}-{dob_parts[1]}-{dob_parts[0]}")
+            dob_variants.add(f"{dob_parts[2]}/{dob_parts[1]}/{dob_parts[0]}")
+            dob_variants.add(f"{dob_parts[2]}{dob_parts[1]}{dob_parts[0]}")
+            dob_variants.add(f"{dob_parts[0]}{dob_parts[1]}{dob_parts[2]}")
+
+        pw_input = str(password).strip()
+        pw_input_clean = pw_input.replace("-", "").replace("/", "")
+
         pw_valid = False
         if stu_pw and verify_password(password, stu_pw):
             pw_valid = True
-        elif password in [stu_dob, stu_dob.replace("-", ""), stu_dob.replace("/", ""), "Welcome@123", "student123"]:
+        elif pw_input in dob_variants or pw_input_clean in dob_variants:
             pw_valid = True
 
         if not pw_valid:
@@ -25033,6 +25387,7 @@ async def student_login(request: Request):
         return {
             "message": "Student login successful",
             "token": token,
+            "access_token": token,
             "role": "student",
             "user": {
                 "id": stu_id,
@@ -25354,11 +25709,26 @@ async def student_apply_leave_od(request: Request):
             FROM class_advisors ca
             LEFT JOIN users u ON LOWER(ca.staff_reg_no) = LOWER(u.reg_no)
             WHERE UPPER(ca.dept) = UPPER(?) AND ca.batch = ? AND ca.section = ?
-            LIMIT 1
+              AND COALESCE(ca.is_active, TRUE) = TRUE
+            ORDER BY CASE WHEN ca.advisor_type = 'primary' THEN 0 ELSE 1 END, ca.id DESC LIMIT 1
             """,
             (dept, batch, sec)
         )
         ca_row = cursor.fetchone()
+        if not ca_row:
+            # Fallback without strict section match if no section-specific advisor exists
+            cursor.execute(
+                """
+                SELECT ca.staff_reg_no, u.name 
+                FROM class_advisors ca
+                LEFT JOIN users u ON LOWER(ca.staff_reg_no) = LOWER(u.reg_no)
+                WHERE UPPER(ca.dept) = UPPER(?) AND ca.batch = ?
+                  AND COALESCE(ca.is_active, TRUE) = TRUE
+                ORDER BY CASE WHEN ca.advisor_type = 'primary' THEN 0 ELSE 1 END, ca.id DESC LIMIT 1
+                """,
+                (dept, batch)
+            )
+            ca_row = cursor.fetchone()
         if ca_row:
             mentor_reg = (ca_row[0] if isinstance(ca_row, (list, tuple)) else ca_row.get("staff_reg_no")) or ""
             mentor_name = (ca_row[1] if isinstance(ca_row, (list, tuple)) else ca_row.get("name")) or mentor_name
@@ -25696,10 +26066,9 @@ def get_student_leave_od_timeline(request_id: int, request: Request):
 # ─────────────────────────────────────────────────────────
 @app.get("/staff/student-leave-od/pending")
 def staff_get_pending_student_leave_od(request: Request):
-    """Fetch pending student leave & OD applications for the logged in staff / class advisor."""
+    """Fetch pending student leave & OD applications exclusively for their designated class advisor."""
     staff = verify_staff_token(request)
     staff_reg = staff["reg_no"]
-    staff_dept = staff.get("dept", "")
 
     cursor.execute(
         """
@@ -25709,18 +26078,18 @@ def staff_get_pending_student_leave_od(request: Request):
         FROM student_leave_od_requests lr
         JOIN students s ON lr.student_reg_no = s.reg_no
         WHERE (LOWER(lr.mentor_staff_reg_no) = LOWER(?) OR LOWER(s.mentor_staff_reg_no) = LOWER(?)
-               OR UPPER(s.dept) = UPPER(?)
                OR EXISTS (
                    SELECT 1 FROM class_advisors ca 
                    WHERE LOWER(ca.staff_reg_no) = LOWER(?) 
                      AND UPPER(ca.dept) = UPPER(s.dept) 
                      AND ca.batch = s.batch 
                      AND ca.section = s.section
+                     AND COALESCE(ca.is_active, TRUE) = TRUE
                ))
           AND (lr.mentor_status = 'PENDING' OR lr.mentor_status IS NULL)
         ORDER BY lr.created_at DESC
         """,
-        (staff_reg, staff_reg, staff_dept, staff_reg)
+        (staff_reg, staff_reg, staff_reg)
     )
     rows = cursor.fetchall()
     items = []
@@ -25747,7 +26116,7 @@ def staff_get_pending_student_leave_od(request: Request):
 
 @app.post("/staff/student-leave-od/review")
 async def staff_review_student_leave_od(request: Request):
-    """Staff Advisor Endorsement: RECOMMEND or REJECT with remarks."""
+    """Staff Advisor Endorsement: RECOMMEND or REJECT with remarks. Only student's advisor is authorized."""
     staff = verify_staff_token(request)
     data = await request.json()
     req_id = data.get("request_id")
@@ -25759,13 +26128,56 @@ async def staff_review_student_leave_od(request: Request):
     if action not in ["RECOMMEND", "REJECT"]:
         raise HTTPException(status_code=400, detail="Action must be RECOMMEND or REJECT")
 
-    cursor.execute("SELECT student_reg_no, mentor_status, request_type FROM student_leave_od_requests WHERE id = ?", (req_id,))
+    cursor.execute(
+        """
+        SELECT lr.student_reg_no, lr.mentor_status, lr.request_type, lr.mentor_staff_reg_no,
+               s.mentor_staff_reg_no, s.dept, s.batch, s.section
+        FROM student_leave_od_requests lr
+        JOIN students s ON lr.student_reg_no = s.reg_no
+        WHERE lr.id = ?
+        """,
+        (req_id,)
+    )
     cur_row = cursor.fetchone()
     if not cur_row:
         raise HTTPException(status_code=404, detail="Request not found")
     stu_reg = cur_row[0] if isinstance(cur_row, (list, tuple)) else cur_row.get("student_reg_no")
     prev_st = cur_row[1] if isinstance(cur_row, (list, tuple)) else cur_row.get("mentor_status")
     req_type = (cur_row[2] if isinstance(cur_row, (list, tuple)) else cur_row.get("request_type")) or "Leave/OD"
+    req_mentor_reg = cur_row[3] if isinstance(cur_row, (list, tuple)) else cur_row.get("mentor_staff_reg_no")
+    stu_mentor_reg = cur_row[4] if isinstance(cur_row, (list, tuple)) else cur_row.get("mentor_staff_reg_no")
+    stu_dept = cur_row[5] if isinstance(cur_row, (list, tuple)) else cur_row.get("dept")
+    stu_batch = cur_row[6] if isinstance(cur_row, (list, tuple)) else cur_row.get("batch")
+    stu_sec = cur_row[7] if isinstance(cur_row, (list, tuple)) else cur_row.get("section")
+
+    # Verify authorization: Must be student's assigned mentor or class advisor
+    staff_reg = staff["reg_no"]
+    is_authorized = False
+    if req_mentor_reg and str(req_mentor_reg).lower() == str(staff_reg).lower():
+        is_authorized = True
+    elif stu_mentor_reg and str(stu_mentor_reg).lower() == str(staff_reg).lower():
+        is_authorized = True
+    else:
+        cursor.execute(
+            """
+            SELECT 1 FROM class_advisors ca 
+            WHERE LOWER(ca.staff_reg_no) = LOWER(?) 
+              AND UPPER(ca.dept) = UPPER(?) 
+              AND ca.batch = ? 
+              AND ca.section = ?
+              AND COALESCE(ca.is_active, TRUE) = TRUE
+            LIMIT 1
+            """,
+            (staff_reg, stu_dept, stu_batch, stu_sec)
+        )
+        if cursor.fetchone():
+            is_authorized = True
+
+    if not is_authorized:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only the assigned Class Advisor can endorse or reject this request."
+        )
 
     new_status = "RECOMMENDED" if action == "RECOMMEND" else "REJECTED"
 
@@ -25809,20 +26221,19 @@ def staff_get_student_leave_od_history(
     """History of student leave/OD applications reviewed by or assigned to staff."""
     staff = verify_staff_token(request)
     staff_reg = staff["reg_no"]
-    staff_dept = staff.get("dept", "")
 
     where_clauses = [
         """(LOWER(lr.mentor_staff_reg_no) = LOWER(?) OR LOWER(s.mentor_staff_reg_no) = LOWER(?)
-            OR UPPER(s.dept) = UPPER(?)
             OR EXISTS (
                 SELECT 1 FROM class_advisors ca 
                 WHERE LOWER(ca.staff_reg_no) = LOWER(?) 
                   AND UPPER(ca.dept) = UPPER(s.dept) 
                   AND ca.batch = s.batch 
                   AND ca.section = s.section
+                  AND COALESCE(ca.is_active, TRUE) = TRUE
             ))"""
     ]
-    params = [staff_reg, staff_reg, staff_dept, staff_reg]
+    params = [staff_reg, staff_reg, staff_reg]
 
     if batch and batch != "ALL":
         where_clauses.append("s.batch = ?")
@@ -26555,7 +26966,7 @@ async def student_mark_attendance(
         raise HTTPException(status_code=400, detail="❌ Face not detected. Please position your face clearly in the camera frame.")
 
     if ANTISPOOFING_ENABLED:
-        is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+        is_live, liveness_reason = detect_single_image_liveness(img, face=face, reg_no=stu_reg)
         if not is_live:
             raise HTTPException(
                 status_code=400,
@@ -27402,6 +27813,8 @@ def get_student_detailed_analytics(request: Request):
 @app.get("/student/timetable/today")
 def get_student_today_timetable(request: Request, day: Optional[str] = Query(None)):
     """Fetch today's (or requested day's) active period timeline and subjects for the student."""
+    if not isinstance(day, str):
+        day = None
     stu = verify_student_token(request)
     dept = stu.get("dept", "CSE")
     batch = stu.get("batch", "2022-2026")
@@ -28160,7 +28573,7 @@ def get_student_notifications(request: Request):
 @app.get("/student/my-feedback")
 @app.get("/api/v1/student/my-feedback")
 def get_student_my_feedback(request: Request):
-    """Retrieve student's submitted feedback records and responses."""
+    """Retrieve student's submitted grievances and feedback records."""
     stu = verify_student_token(request)
     reg_no = stu["reg_no"]
     conn = get_db_connection()
@@ -28168,15 +28581,17 @@ def get_student_my_feedback(request: Request):
     feedback_list = []
     try:
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS student_course_feedback (
+            CREATE TABLE IF NOT EXISTS student_feedback_grievances (
                 id SERIAL PRIMARY KEY,
                 student_reg_no VARCHAR(64) NOT NULL,
-                course_code VARCHAR(32),
-                faculty_name VARCHAR(128),
-                feedback_text TEXT,
-                rating INTEGER DEFAULT 5,
-                response_text TEXT,
+                student_name VARCHAR(160),
+                dept VARCHAR(64),
+                category VARCHAR(64) DEFAULT 'General',
+                subject VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL,
                 status VARCHAR(32) DEFAULT 'PENDING',
+                admin_remarks TEXT,
+                resolved_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -28186,8 +28601,8 @@ def get_student_my_feedback(request: Request):
 
     try:
         cursor.execute("""
-            SELECT id, course_code, faculty_name, feedback_text, rating, response_text, status, created_at
-            FROM student_course_feedback
+            SELECT id, student_reg_no, student_name, dept, category, subject, description, status, admin_remarks, resolved_at, created_at
+            FROM student_feedback_grievances
             WHERE LOWER(student_reg_no) = LOWER(?)
             ORDER BY created_at DESC
         """, (reg_no,))
@@ -28197,18 +28612,134 @@ def get_student_my_feedback(request: Request):
                 feedback_list.append(r)
             else:
                 feedback_list.append({
-                    "id": r[0], "course_code": r[1], "faculty_name": r[2],
-                    "feedback_text": r[3], "rating": r[4], "response_text": r[5],
-                    "status": r[6], "created_at": str(r[7])
+                    "id": r[0],
+                    "student_reg_no": r[1],
+                    "student_name": r[2],
+                    "dept": r[3],
+                    "category": r[4] or "General",
+                    "subject": r[5] or "",
+                    "description": r[6] or "",
+                    "status": r[7] or "Pending",
+                    "admin_remarks": r[8],
+                    "resolved_at": str(r[9]) if r[9] else None,
+                    "created_at": str(r[10]) if r[10] else None,
                 })
     except Exception as _fb_err:
-        print(f"[StudentFeedback] Notice: {_fb_err}")
+        print(f"[StudentFeedback] Error: {_fb_err}")
     finally:
         try:
             conn.close()
         except Exception:
             pass
     return {"success": True, "feedback": feedback_list}
+
+
+@app.post("/student/feedback")
+@app.post("/api/v1/student/feedback")
+async def submit_student_feedback(request: Request):
+    """Student submits new grievance or feedback ticket."""
+    stu = verify_student_token(request)
+    data = await request.json()
+    category = data.get("category") or "General"
+    subject = (data.get("subject") or "").strip()
+    description = (data.get("description") or "").strip()
+
+    if not subject or not description:
+        raise HTTPException(status_code=400, detail="Subject and description are required")
+
+    reg_no = stu["reg_no"]
+    name = stu.get("name", "Student")
+    dept = stu.get("dept", "CSE")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO student_feedback_grievances
+            (student_reg_no, student_name, dept, category, subject, description, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'Pending', CURRENT_TIMESTAMP)
+        """, (reg_no, name, dept, category, subject, description))
+        conn.commit()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return {"success": True, "message": "Feedback submitted successfully"}
+
+
+@app.get("/admin/student-feedback")
+@app.get("/api/v1/admin/student-feedback")
+def get_admin_student_feedback(request: Request, status: Optional[str] = Query(None)):
+    """Admin/HOD views student feedback tickets."""
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    user = get_user_from_token(token)
+    if not user or user.get("role") not in ["admin", "hod", "principal"]:
+        raise HTTPException(status_code=403, detail="Unauthorized access")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    feedback_list = []
+    try:
+        query = "SELECT id, student_reg_no, student_name, dept, category, subject, description, status, admin_remarks, resolved_at, created_at FROM student_feedback_grievances"
+        params = []
+        if status and status.upper() != "ALL":
+            query += " WHERE UPPER(status) = UPPER(?)"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        cursor.execute(query, params)
+        for r in cursor.fetchall():
+            if isinstance(r, dict):
+                feedback_list.append(r)
+            else:
+                feedback_list.append({
+                    "id": r[0],
+                    "student_reg_no": r[1],
+                    "student_name": r[2],
+                    "dept": r[3],
+                    "category": r[4] or "General",
+                    "subject": r[5] or "",
+                    "description": r[6] or "",
+                    "status": r[7] or "Pending",
+                    "admin_remarks": r[8],
+                    "resolved_at": str(r[9]) if r[9] else None,
+                    "created_at": str(r[10]) if r[10] else None,
+                })
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return {"success": True, "feedback": feedback_list}
+
+
+@app.post("/admin/student-feedback/{feedback_id}/resolve")
+@app.post("/api/v1/admin/student-feedback/{feedback_id}/resolve")
+async def resolve_student_feedback(feedback_id: int, request: Request):
+    """Admin/HOD marks student feedback as resolved."""
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    user = get_user_from_token(token)
+    if not user or user.get("role") not in ["admin", "hod", "principal"]:
+        raise HTTPException(status_code=403, detail="Unauthorized access")
+
+    data = await request.json()
+    notes = data.get("resolution_notes") or data.get("admin_remarks") or "Resolved by Administration"
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE student_feedback_grievances
+            SET status = 'Resolved', admin_remarks = ?, resolved_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (notes, feedback_id))
+        conn.commit()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return {"success": True, "message": "Grievance marked as resolved"}
 
 
 # -------------------------------------------------
@@ -28708,6 +29239,7 @@ def _resolve_student_advisor_and_hod(cur, stu_reg, dept="", batch="", semester=1
                 WHERE UPPER(ca.dept) = UPPER(?)
                   AND (ca.batch = ? OR ? = '')
                   AND (ca.section = ? OR ? = '')
+                  AND ca.advisor_type = 'primary'
                   AND COALESCE(ca.is_active, TRUE) = TRUE
                 ORDER BY ca.id DESC LIMIT 1
                 """,
@@ -29161,9 +29693,11 @@ async def student_submit_face_registration(request: Request):
             SELECT ca.staff_reg_no, u.name
             FROM class_advisors ca
             LEFT JOIN users u ON LOWER(ca.staff_reg_no) = LOWER(u.reg_no)
-            WHERE LOWER(ca.dept) = LOWER(?) AND ca.batch = ? AND ca.semester = ? AND ca.section = ? AND ca.is_active = TRUE
+            WHERE LOWER(ca.dept) = LOWER(?) AND ca.batch = ? AND (ca.semester = ? OR ? IS NULL) AND LOWER(ca.section) = LOWER(?)
+              AND ca.advisor_type = 'primary' AND ca.is_active = TRUE
+            ORDER BY ca.id DESC
             LIMIT 1
-        """, (stu_dept, stu_batch, stu_sem, stu_sec))
+        """, (stu_dept, stu_batch, stu_sem, stu_sem, stu_sec))
         ca_row = cursor.fetchone()
         if ca_row:
             mentor_staff_reg = ca_row[0]
@@ -29250,6 +29784,11 @@ async def student_submit_face_registration(request: Request):
                 face = extract_face(flipped_img)
 
             if face is not None and hasattr(face, "embedding") and face.embedding is not None:
+                if ANTISPOOFING_ENABLED:
+                    is_live, liveness_reason = detect_single_image_liveness(img, face=face, reg_no=stu_reg_clean)
+                    if not is_live:
+                        print(f"[STUDENT REGISTRATION SPOOF REJECTED] RegNo: {stu_reg_clean} | Reason: {liveness_reason}")
+                        continue
                 emb = np.array(face.embedding, dtype=np.float32)
                 norm = np.linalg.norm(emb)
                 if norm > 0:
@@ -29592,7 +30131,7 @@ async def get_student_bootstrap_data(request: Request):
     # 4. Today Schedule
     schedule_data = {}
     try:
-        schedule_data = get_student_today_timetable(request)
+        schedule_data = get_student_today_timetable(request, day=None)
     except Exception as e:
         print(f"[bootstrap schedule] {e}")
 
@@ -30214,9 +30753,9 @@ async def register_university_student(request: Request):
                 degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                 father_name, mother_name, parent_phone, parent_email, emergency_contact,
                 permanent_address, city, state, district, pincode, password_hash, first_time_login,
-                registered_by, registered_role, year
+                registered_by, registered_role
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
             ON CONFLICT (reg_no) DO UPDATE SET
                 roll_no = EXCLUDED.roll_no,
                 name = EXCLUDED.name,
@@ -30243,14 +30782,13 @@ async def register_university_student(request: Request):
                 state = EXCLUDED.state,
                 district = EXCLUDED.district,
                 pincode = EXCLUDED.pincode,
-                year = EXCLUDED.year,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
                 reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                 degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                 father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
+                permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role
             )
         )
     except Exception as e_sql:
@@ -30263,14 +30801,14 @@ async def register_university_student(request: Request):
                     roll_no = ?, name = ?, email = ?, phone_number = ?, dob = ?, gender = ?, blood_group = ?,
                     degree = ?, dept = ?, batch = ?, year_of_study = ?, semester = ?, section = ?, quota = ?,
                     mentor_staff_reg_no = ?, father_name = ?, mother_name = ?, parent_phone = ?, parent_email = ?,
-                    emergency_contact = ?, permanent_address = ?, city = ?, state = ?, district = ?, pincode = ?, year = ?, updated_at = CURRENT_TIMESTAMP
+                    emergency_contact = ?, permanent_address = ?, city = ?, state = ?, district = ?, pincode = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE LOWER(reg_no) = LOWER(?)
                 """,
                 (
                     roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota,
                     mentor_staff_reg_no, father_name, mother_name, parent_phone, parent_email,
-                    emergency_contact, permanent_address, city, state, district, pincode, year_of_study, reg_no
+                    emergency_contact, permanent_address, city, state, district, pincode, reg_no
                 )
             )
         else:
@@ -30281,15 +30819,15 @@ async def register_university_student(request: Request):
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                     father_name, mother_name, parent_phone, parent_email, emergency_contact,
                     permanent_address, city, state, district, pincode, password_hash, first_time_login,
-                    registered_by, registered_role, year
+                    registered_by, registered_role
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
                 """,
                 (
                     reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
                     degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
                     father_name, mother_name, parent_phone, parent_email, emergency_contact,
-                    permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
+                    permanent_address, city, state, district, pincode, pw_hash, caller_reg_no, caller_role
                 )
             )
 
@@ -30449,6 +30987,22 @@ BULK_TEMPLATE_HEADERS = [
 ]
 
 
+def _clean_str(val: Any) -> str:
+    """Sanitize spreadsheet cell values, safely stripping trailing .0 from numbers/floats."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        if val.is_integer():
+            return str(int(val)).strip()
+        return str(val).strip()
+    if isinstance(val, int):
+        return str(val).strip()
+    s = str(val).strip()
+    if re.match(r'^\d+\.0$', s):
+        return s[:-2]
+    return s
+
+
 def _normalize_student_header(h: str) -> str:
     cleaned = re.sub(r'[^a-zA-Z0-9]', '', str(h).lower())
     mapping = {
@@ -30484,7 +31038,14 @@ def _parse_bulk_date(val: Any) -> Optional[str]:
     import datetime as _dt
     if isinstance(val, (_dt.datetime, _dt.date)):
         return val.strftime("%Y-%m-%d")
-    s = str(val).strip()
+    # Handle Excel float/integer serial dates (e.g. 38852 -> 2006-05-15)
+    if isinstance(val, (int, float)) and 10000 < val < 60000:
+        try:
+            excel_epoch = datetime(1899, 12, 30)
+            return (excel_epoch + _dt.timedelta(days=float(val))).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    s = _clean_str(val)
     if not s or s.lower() in ["nan", "none", "null", "-"]:
         return None
     # Try multiple standard formats
@@ -30515,21 +31076,22 @@ def get_student_bulk_template(
     target_sec = section or "A"
     target_deg = degree or "B.E."
 
+    # Exactly 23 columns perfectly matching BULK_TEMPLATE_HEADERS
     sample_rows = [
         [
             "714024104101", "24CS101", "Aravind Kumar S", target_dept, target_deg, target_batch,
             1, 1, target_sec, "Govt", "Male", "O+", "2006-05-15", "9876543210",
-            "aravind@example.com", "Suresh K", "Meena S", "9876543211", "", "12, College Road, Coimbatore"
+            "aravind@example.com", "Suresh K", "Meena S", "9876543211", "", "Tamil Nadu", "Coimbatore", "12, College Road, Coimbatore", "641001"
         ],
         [
             "714024104102", "24CS102", "Bhavana R", target_dept, target_deg, target_batch,
             1, 1, target_sec, "Management", "Female", "B+", "2006-08-20", "9876543212",
-            "bhavana@example.com", "Ramesh P", "Kavitha R", "9876543213", "", "45, North Street, Coimbatore"
+            "bhavana@example.com", "Ramesh P", "Kavitha R", "9876543213", "", "Tamil Nadu", "Coimbatore", "45, North Street, Coimbatore", "641002"
         ],
         [
             "714024104103", "24CS103", "Dinesh M", target_dept, target_deg, target_batch,
             1, 1, target_sec, "Govt", "Male", "A+", "2006-01-10", "9876543214",
-            "dinesh@example.com", "Murugan V", "Shanthi M", "9876543215", "", "78, Cross Cut Rd, Coimbatore"
+            "dinesh@example.com", "Murugan V", "Shanthi M", "9876543215", "", "Tamil Nadu", "Coimbatore", "78, Cross Cut Rd, Coimbatore", "641003"
         ]
     ]
 
@@ -30700,27 +31262,31 @@ async def validate_student_bulk_import(
                 key = key_mapping[c_idx]
                 row_dict[key] = val
 
-        # Extract & sanitize fields
-        reg_no = str(row_dict.get("reg_no") or "").strip()
-        name = str(row_dict.get("name") or "").strip()
-        dept = str(row_dict.get("dept") or "").strip().upper()
-        batch = str(row_dict.get("batch") or "").strip()
-        roll_no = str(row_dict.get("roll_no") or "").strip() or None
-        degree = str(row_dict.get("degree") or "B.E.").strip()
-        section = str(row_dict.get("section") or "A").strip().upper()
-        quota = str(row_dict.get("quota") or "Govt").strip()
-        gender = str(row_dict.get("gender") or "Male").strip().capitalize()
-        blood_group = str(row_dict.get("blood_group") or "").strip().upper() or None
+        # Extract & sanitize fields with _clean_str (prevents Excel .0 numeric corruption)
+        reg_no = _clean_str(row_dict.get("reg_no"))
+        name = _clean_str(row_dict.get("name"))
+        dept = _clean_str(row_dict.get("dept")).upper()
+        batch = _clean_str(row_dict.get("batch"))
+        roll_no = _clean_str(row_dict.get("roll_no")) or None
+        degree = _clean_str(row_dict.get("degree")) or "B.E."
+        section = _clean_str(row_dict.get("section")).upper() or "A"
+        quota = _clean_str(row_dict.get("quota")) or "Govt"
+        gender = _clean_str(row_dict.get("gender")).capitalize() or "Male"
+        blood_group = _clean_str(row_dict.get("blood_group")).upper() or None
         raw_dob = row_dict.get("dob")
         dob = _parse_bulk_date(raw_dob) or "2005-01-01"
-        phone = str(row_dict.get("phone_number") or "").strip() or None
-        email = str(row_dict.get("email") or "").strip().lower() or None
-        father_name = str(row_dict.get("father_name") or "").strip() or None
-        mother_name = str(row_dict.get("mother_name") or "").strip() or None
-        parent_phone = str(row_dict.get("parent_phone") or "").strip() or None
-        parent_email = str(row_dict.get("parent_email") or "").strip().lower() or None
-        mentor_reg = str(row_dict.get("mentor_staff_reg_no") or "").strip() or None
-        address = str(row_dict.get("permanent_address") or "").strip() or None
+        phone = _clean_str(row_dict.get("phone_number")) or None
+        email = _clean_str(row_dict.get("email")).lower() or None
+        father_name = _clean_str(row_dict.get("father_name")) or None
+        mother_name = _clean_str(row_dict.get("mother_name")) or None
+        parent_phone = _clean_str(row_dict.get("parent_phone")) or "9876543210"
+        parent_email = _clean_str(row_dict.get("parent_email")).lower() or None
+        mentor_reg = _clean_str(row_dict.get("mentor_staff_reg_no")) or None
+        address = _clean_str(row_dict.get("permanent_address")) or None
+        state = _clean_str(row_dict.get("state")) or "Tamil Nadu"
+        district = _clean_str(row_dict.get("district")) or None
+        city = _clean_str(row_dict.get("city")) or district or None
+        pincode = _clean_str(row_dict.get("pincode")) or None
 
         # Numeric fields
         try:
@@ -30805,10 +31371,14 @@ async def validate_student_bulk_import(
             "email": email,
             "father_name": father_name,
             "mother_name": mother_name,
-            "parent_phone": parent_phone or "9876543210",
+            "parent_phone": parent_phone,
             "parent_email": parent_email,
             "mentor_staff_reg_no": mentor_reg,
             "permanent_address": address,
+            "state": state,
+            "district": district,
+            "city": city,
+            "pincode": pincode,
             "is_valid": is_valid,
             "errors": errors,
             "warnings": warnings,
@@ -30856,17 +31426,18 @@ def execute_student_bulk_import(
     inserted_count = 0
     updated_count = 0
     failed_rows = []
+    pw_cache: Dict[str, str] = {}
 
     for s in students_to_import:
-        reg_no = (s.get("reg_no") or "").strip()
-        name = (s.get("name") or "").strip()
-        dept = (s.get("dept") or "").strip().upper()
-        batch = (s.get("batch") or "").strip()
+        reg_no = _clean_str(s.get("reg_no"))
+        name = _clean_str(s.get("name"))
+        dept = _clean_str(s.get("dept")).upper() or "CSE"
+        batch = _clean_str(s.get("batch")) or "2024-2028"
         year_of_study = int(s.get("year_of_study") or 1)
         semester = int(s.get("semester") or 1)
-        section = (s.get("section") or "A").strip().upper()
-        dob = (s.get("dob") or "2005-01-01").strip()
-        parent_phone = (s.get("parent_phone") or "9876543210").strip()
+        section = _clean_str(s.get("section")).upper() or "A"
+        dob = _clean_str(s.get("dob")) or "2005-01-01"
+        parent_phone = _clean_str(s.get("parent_phone")) or "9876543210"
 
         # Scope enforcement
         if caller_role in ["hod", "head of department"] and dept != caller_dept.upper():
@@ -30880,121 +31451,117 @@ def execute_student_bulk_import(
             failed_rows.append({"reg_no": reg_no, "error": "Missing required fields (reg_no or name)"})
             continue
 
-        roll_no = (s.get("roll_no") or "").strip() or None
-        degree = (s.get("degree") or "B.E.").strip()
-        quota = (s.get("quota") or "Govt").strip()
-        gender = (s.get("gender") or "Male").strip()
-        blood_group = (s.get("blood_group") or "").strip() or None
-        phone_number = (s.get("phone_number") or "").strip() or None
-        email = (s.get("email") or "").strip() or None
-        father_name = (s.get("father_name") or "").strip() or None
-        mother_name = (s.get("mother_name") or "").strip() or None
-        parent_email = (s.get("parent_email") or "").strip() or None
-        mentor_reg = (s.get("mentor_staff_reg_no") or "").strip() or (caller_reg_no if caller_role in ["staff", "faculty"] else None)
-        address = (s.get("permanent_address") or "").strip() or None
-        state = (s.get("state") or "Tamil Nadu").strip()
-        district = (s.get("district") or s.get("city") or "").strip() or None
-        city = (s.get("city") or district or "").strip() or None
-        pincode = (s.get("pincode") or "").strip() or None
+        roll_no = _clean_str(s.get("roll_no")) or None
+        degree = _clean_str(s.get("degree")) or "B.E."
+        quota = _clean_str(s.get("quota")) or "Govt"
+        gender = _clean_str(s.get("gender")) or "Male"
+        blood_group = _clean_str(s.get("blood_group")) or None
+        phone_number = _clean_str(s.get("phone_number")) or None
+        email = _clean_str(s.get("email")).lower() or None
+        father_name = _clean_str(s.get("father_name")) or None
+        mother_name = _clean_str(s.get("mother_name")) or None
+        parent_email = _clean_str(s.get("parent_email")).lower() or None
+        mentor_reg = _clean_str(s.get("mentor_staff_reg_no")) or (caller_reg_no if caller_role in ["staff", "faculty"] else None)
+        address = _clean_str(s.get("permanent_address")) or None
+        state = _clean_str(s.get("state")) or "Tamil Nadu"
+        district = _clean_str(s.get("district")) or None
+        city = _clean_str(s.get("city")) or district or None
+        pincode = _clean_str(s.get("pincode")) or None
 
-        pw_hash = hash_password(dob.replace("-", "").replace("/", "") or "Welcome@123")
+        raw_pw = dob.replace("-", "").replace("/", "") or "Welcome@123"
+        if raw_pw not in pw_cache:
+            pw_cache[raw_pw] = hash_password(raw_pw)
+        pw_hash = pw_cache[raw_pw]
+
+        params = (
+            reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
+            degree, dept, batch, year_of_study, semester, section, quota, mentor_reg,
+            father_name, mother_name, parent_phone, parent_email,
+            address, state, district, city, pincode, pw_hash, caller_reg_no, caller_role
+        )
 
         try:
-            cursor.execute(
-                """
-                INSERT INTO students (
-                    reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
-                    degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
-                    father_name, mother_name, parent_phone, parent_email,
-                    permanent_address, state, district, city, pincode, password_hash, first_time_login,
-                    registered_by, registered_role, year
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
-                ON CONFLICT (reg_no) DO UPDATE SET
-                    roll_no = CASE WHEN ? = TRUE THEN EXCLUDED.roll_no ELSE students.roll_no END,
-                    name = CASE WHEN ? = TRUE THEN EXCLUDED.name ELSE students.name END,
-                    email = CASE WHEN ? = TRUE THEN EXCLUDED.email ELSE students.email END,
-                    phone_number = CASE WHEN ? = TRUE THEN EXCLUDED.phone_number ELSE students.phone_number END,
-                    dob = CASE WHEN ? = TRUE THEN EXCLUDED.dob ELSE students.dob END,
-                    gender = CASE WHEN ? = TRUE THEN EXCLUDED.gender ELSE students.gender END,
-                    blood_group = CASE WHEN ? = TRUE THEN EXCLUDED.blood_group ELSE students.blood_group END,
-                    degree = CASE WHEN ? = TRUE THEN EXCLUDED.degree ELSE students.degree END,
-                    dept = CASE WHEN ? = TRUE THEN EXCLUDED.dept ELSE students.dept END,
-                    batch = CASE WHEN ? = TRUE THEN EXCLUDED.batch ELSE students.batch END,
-                    year_of_study = CASE WHEN ? = TRUE THEN EXCLUDED.year_of_study ELSE students.year_of_study END,
-                    semester = CASE WHEN ? = TRUE THEN EXCLUDED.semester ELSE students.semester END,
-                    section = CASE WHEN ? = TRUE THEN EXCLUDED.section ELSE students.section END,
-                    quota = CASE WHEN ? = TRUE THEN EXCLUDED.quota ELSE students.quota END,
-                    mentor_staff_reg_no = CASE WHEN ? = TRUE THEN EXCLUDED.mentor_staff_reg_no ELSE students.mentor_staff_reg_no END,
-                    father_name = CASE WHEN ? = TRUE THEN EXCLUDED.father_name ELSE students.father_name END,
-                    mother_name = CASE WHEN ? = TRUE THEN EXCLUDED.mother_name ELSE students.mother_name END,
-                    parent_phone = CASE WHEN ? = TRUE THEN EXCLUDED.parent_phone ELSE students.parent_phone END,
-                    parent_email = CASE WHEN ? = TRUE THEN EXCLUDED.parent_email ELSE students.parent_email END,
-                    permanent_address = CASE WHEN ? = TRUE THEN EXCLUDED.permanent_address ELSE students.permanent_address END,
-                    state = CASE WHEN ? = TRUE THEN EXCLUDED.state ELSE students.state END,
-                    district = CASE WHEN ? = TRUE THEN EXCLUDED.district ELSE students.district END,
-                    city = CASE WHEN ? = TRUE THEN EXCLUDED.city ELSE students.city END,
-                    pincode = CASE WHEN ? = TRUE THEN EXCLUDED.pincode ELSE students.pincode END,
-                    year = CASE WHEN ? = TRUE THEN EXCLUDED.year ELSE students.year END,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
-                    degree, dept, batch, year_of_study, semester, section, quota, mentor_reg,
-                    father_name, mother_name, parent_phone, parent_email,
-                    address, state, district, city, pincode, pw_hash, caller_reg_no, caller_role, year_of_study,
-                    overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
-                    overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
-                    overwrite, overwrite, overwrite, overwrite, overwrite, overwrite, overwrite,
-                    overwrite, overwrite, overwrite, overwrite
-                )
-            )
-            inserted_count += 1
-        except Exception as e_ins:
-            # Fallback for DB without ON CONFLICT syntax
-            try:
-                cursor.execute("SELECT reg_no FROM students WHERE LOWER(reg_no) = LOWER(?)", (reg_no,))
-                if cursor.fetchone():
-                    if overwrite:
-                        cursor.execute(
-                            """
-                            UPDATE students SET
-                                roll_no = ?, name = ?, email = ?, phone_number = ?, dob = ?, gender = ?, blood_group = ?,
-                                degree = ?, dept = ?, batch = ?, year_of_study = ?, semester = ?, section = ?, quota = ?,
-                                mentor_staff_reg_no = ?, father_name = ?, mother_name = ?, parent_phone = ?, parent_email = ?,
-                                permanent_address = ?, state = ?, district = ?, city = ?, pincode = ?, year = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE LOWER(reg_no) = LOWER(?)
-                            """,
-                            (
-                                roll_no, name, email, phone_number, dob, gender, blood_group,
-                                degree, dept, batch, year_of_study, semester, section, quota,
-                                mentor_reg, father_name, mother_name, parent_phone, parent_email,
-                                address, state, district, city, pincode, year_of_study, reg_no
-                            )
-                        )
-                        updated_count += 1
-                else:
-                    cursor.execute(
-                        """
-                        INSERT INTO students (
-                            reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
-                            degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
-                            father_name, mother_name, parent_phone, parent_email,
-                            permanent_address, state, district, city, pincode, password_hash, first_time_login,
-                            registered_by, registered_role, year
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?)
-                        """,
-                        (
-                            reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
-                            degree, dept, batch, year_of_study, semester, section, quota, mentor_reg,
-                            father_name, mother_name, parent_phone, parent_email,
-                            address, state, district, city, pincode, pw_hash, caller_reg_no, caller_role, year_of_study
-                        )
+            if overwrite:
+                cursor.execute(
+                    """
+                    INSERT INTO students (
+                        reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
+                        degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
+                        father_name, mother_name, parent_phone, parent_email,
+                        permanent_address, state, district, city, pincode, password_hash, first_time_login,
+                        registered_by, registered_role
                     )
+                    VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, TRUE,
+                        ?, ?
+                    )
+                    ON CONFLICT (reg_no) DO UPDATE SET
+                        roll_no = EXCLUDED.roll_no,
+                        name = EXCLUDED.name,
+                        email = EXCLUDED.email,
+                        phone_number = EXCLUDED.phone_number,
+                        dob = EXCLUDED.dob,
+                        gender = EXCLUDED.gender,
+                        blood_group = EXCLUDED.blood_group,
+                        degree = EXCLUDED.degree,
+                        dept = EXCLUDED.dept,
+                        batch = EXCLUDED.batch,
+                        year_of_study = EXCLUDED.year_of_study,
+                        semester = EXCLUDED.semester,
+                        section = EXCLUDED.section,
+                        quota = EXCLUDED.quota,
+                        mentor_staff_reg_no = COALESCE(EXCLUDED.mentor_staff_reg_no, students.mentor_staff_reg_no),
+                        father_name = EXCLUDED.father_name,
+                        mother_name = EXCLUDED.mother_name,
+                        parent_phone = EXCLUDED.parent_phone,
+                        parent_email = EXCLUDED.parent_email,
+                        permanent_address = EXCLUDED.permanent_address,
+                        state = EXCLUDED.state,
+                        district = EXCLUDED.district,
+                        city = EXCLUDED.city,
+                        pincode = EXCLUDED.pincode,
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING (xmax = 0) AS is_inserted
+                    """,
+                    params
+                )
+                res = cursor.fetchone()
+                if res and res[0]:
                     inserted_count += 1
-            except Exception as e2:
-                failed_rows.append({"reg_no": reg_no, "error": str(e2)})
+                else:
+                    updated_count += 1
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO students (
+                        reg_no, roll_no, name, email, phone_number, dob, gender, blood_group,
+                        degree, dept, batch, year_of_study, semester, section, quota, mentor_staff_reg_no,
+                        father_name, mother_name, parent_phone, parent_email,
+                        permanent_address, state, district, city, pincode, password_hash, first_time_login,
+                        registered_by, registered_role
+                    )
+                    VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, TRUE,
+                        ?, ?
+                    )
+                    ON CONFLICT (reg_no) DO NOTHING
+                    RETURNING reg_no
+                    """,
+                    params
+                )
+                res = cursor.fetchone()
+                if res:
+                    inserted_count += 1
+                else:
+                    updated_count += 1
+        except Exception as e_ins:
+            failed_rows.append({"reg_no": reg_no, "error": str(e_ins)})
 
     conn.commit()
 
@@ -31002,7 +31569,7 @@ def execute_student_bulk_import(
         "STUDENTS_BULK_IMPORTED",
         caller_reg_no or "ADMIN",
         True,
-        f"Bulk imported {inserted_count} student records (Overwrite: {overwrite})"
+        f"Bulk imported {inserted_count} new, {updated_count} updated student records (Overwrite: {overwrite})"
     )
 
     return {
@@ -31011,7 +31578,7 @@ def execute_student_bulk_import(
         "updated_count": updated_count,
         "failed_count": len(failed_rows),
         "failed_rows": failed_rows,
-        "message": f"Successfully processed {inserted_count} student records."
+        "message": f"Successfully processed {inserted_count + updated_count} student records."
     }
 
 
@@ -31064,21 +31631,35 @@ def get_students_list(
     # Role-based scoping for Staff
     if caller_role in ["staff", "faculty"]:
         if scope_mode == "advised" or my_class_only:
+            # Change 2: Use exact class_advisors JOIN matching dept, semester, and section — zero cross-class bleed
+            # Does not drop students if student batch string has whitespace or minor format discrepancy
+            query += """ AND EXISTS (
+                SELECT 1 FROM class_advisors ca
+                WHERE TRIM(LOWER(ca.staff_reg_no)) = TRIM(LOWER(?))
+                  AND TRIM(LOWER(ca.dept)) = TRIM(LOWER(s.dept))
+                  AND ca.semester = s.semester
+                  AND TRIM(LOWER(ca.section)) = TRIM(LOWER(s.section))
+                  AND (ca.is_active IS TRUE OR ca.is_active IS NULL)
+            )"""
+            params.append(caller_reg_no)
+        elif scope_mode == "teaching":
+            # Guard teaching scope — staff must have an allocation for this exact class
             query += """ AND (
-                TRIM(LOWER(s.mentor_staff_reg_no)) = TRIM(LOWER(?)) OR
                 EXISTS (
-                    SELECT 1 FROM class_advisors ca
-                    WHERE TRIM(LOWER(ca.staff_reg_no)) = TRIM(LOWER(?))
-                      AND TRIM(LOWER(ca.dept)) = TRIM(LOWER(s.dept))
-                      AND (TRIM(ca.batch) = TRIM(s.batch) OR ca.batch IS NULL)
-                      AND (TRIM(LOWER(ca.section)) = TRIM(LOWER(s.section)) OR ca.section IS NULL)
-                      AND (ca.is_active IS TRUE OR ca.is_active IS NULL)
+                    SELECT 1 FROM subject_faculty_allocations sfa
+                    WHERE TRIM(LOWER(sfa.staff_reg_no)) = TRIM(LOWER(?))
+                      AND TRIM(LOWER(sfa.dept)) = TRIM(LOWER(s.dept))
+                      AND sfa.semester = s.semester
+                      AND TRIM(LOWER(sfa.section)) = TRIM(LOWER(s.section))
+                ) OR EXISTS (
+                    SELECT 1 FROM class_timetable ct
+                    WHERE TRIM(LOWER(ct.staff_reg_no)) = TRIM(LOWER(?))
+                      AND TRIM(LOWER(ct.dept)) = TRIM(LOWER(s.dept))
+                      AND ct.semester = s.semester
+                      AND TRIM(LOWER(ct.section)) = TRIM(LOWER(s.section))
                 )
             )"""
             params.extend([caller_reg_no, caller_reg_no])
-        elif scope_mode == "teaching":
-            # Direct class teaching filter
-            pass
         elif not dept or dept.upper() == "ALL":
             # Restrict to all assigned classes (advised + teaching)
             query += """ AND (
@@ -31087,7 +31668,7 @@ def get_students_list(
                     SELECT 1 FROM class_advisors ca
                     WHERE TRIM(LOWER(ca.staff_reg_no)) = TRIM(LOWER(?))
                       AND TRIM(LOWER(ca.dept)) = TRIM(LOWER(s.dept))
-                      AND (TRIM(ca.batch) = TRIM(s.batch) OR ca.batch IS NULL)
+                      AND (ca.semester = s.semester OR TRIM(ca.batch) = TRIM(s.batch) OR ca.batch IS NULL)
                       AND (TRIM(LOWER(ca.section)) = TRIM(LOWER(s.section)) OR ca.section IS NULL)
                       AND (ca.is_active IS TRUE OR ca.is_active IS NULL)
                 ) OR
@@ -31095,16 +31676,14 @@ def get_students_list(
                     SELECT 1 FROM subject_faculty_allocations sfa
                     WHERE TRIM(LOWER(sfa.staff_reg_no)) = TRIM(LOWER(?))
                       AND TRIM(LOWER(sfa.dept)) = TRIM(LOWER(s.dept))
-                      AND (TRIM(sfa.batch) = TRIM(s.batch) OR sfa.batch IS NULL)
-                      AND (sfa.semester = s.semester OR sfa.semester = s.semester - 1 OR sfa.semester = s.semester + 1 OR sfa.semester IS NULL)
+                      AND (sfa.semester = s.semester OR TRIM(sfa.batch) = TRIM(s.batch) OR sfa.batch IS NULL)
                       AND (TRIM(LOWER(sfa.section)) = TRIM(LOWER(s.section)) OR sfa.section IS NULL)
                 ) OR
                 EXISTS (
                     SELECT 1 FROM class_timetable ct
                     WHERE TRIM(LOWER(ct.staff_reg_no)) = TRIM(LOWER(?))
                       AND TRIM(LOWER(ct.dept)) = TRIM(LOWER(s.dept))
-                      AND (TRIM(ct.batch) = TRIM(s.batch) OR ct.batch IS NULL)
-                      AND (ct.semester = s.semester OR ct.semester = s.semester - 1 OR ct.semester = s.semester + 1 OR ct.semester IS NULL)
+                      AND (ct.semester = s.semester OR TRIM(ct.batch) = TRIM(s.batch) OR ct.semester IS NULL)
                       AND (TRIM(LOWER(ct.section)) = TRIM(LOWER(s.section)) OR ct.section IS NULL)
                 )
             )"""
@@ -31113,18 +31692,15 @@ def get_students_list(
         query += " AND (TRIM(LOWER(s.dept)) = TRIM(LOWER(?)) OR UPPER(s.dept) = UPPER(?))"
         params.extend([dept, dept])
     if batch and batch.upper() != "ALL":
-        query += " AND TRIM(s.batch) = TRIM(?)"
-        params.append(batch)
+        if not (caller_role in ["staff", "faculty"] and (scope_mode in ["advised", "teaching"] or my_class_only)):
+            query += " AND (TRIM(s.batch) = TRIM(?) OR TRIM(REPLACE(s.batch, ' ', '')) = TRIM(REPLACE(?, ' ', '')))"
+            params.extend([batch, batch])
     if year_of_study:
         query += " AND s.year_of_study = ?"
         params.append(year_of_study)
     if semester:
-        if caller_role in ["staff", "faculty"] and (scope_mode == "advised" or my_class_only):
-            # For advised class mode, staff is viewing their assigned class cohort; do not drop promoted advisees
-            pass
-        else:
-            query += " AND s.semester = ?"
-            params.append(semester)
+        query += " AND s.semester = ?"
+        params.append(semester)
     elif semester_type and semester_type.strip().lower() in ["odd", "even"]:
         if semester_type.strip().lower() == "odd":
             query += " AND s.semester IN (1, 3, 5, 7)"
@@ -31231,7 +31807,19 @@ def get_students_list(
     ranges = acad_settings.get("academic_ranges", [])
     active_range = next((r for r in ranges if r.get("is_active")), ranges[0] if ranges else None)
     batch_configs = acad_settings.get("batch_configs", {})
-    configured_batches = [b.get("batch") for b in batch_configs.values() if b.get("batch")]
+    configured_batches = []
+    for k, v in batch_configs.items():
+        b_val = v.get("batch") if isinstance(v, dict) else None
+        configured_batches.append(str(b_val or k).strip())
+    # Augment with any distinct batches from students table
+    try:
+        cursor.execute("SELECT DISTINCT batch FROM students WHERE batch IS NOT NULL AND TRIM(batch) != '' ORDER BY batch")
+        for r in cursor.fetchall():
+            db_b = (r.get("batch") if isinstance(r, dict) else r[0])
+            if db_b and str(db_b).strip() not in configured_batches:
+                configured_batches.append(str(db_b).strip())
+    except Exception:
+        pass
 
     return {
         "count": len(students_list),
@@ -32324,7 +32912,7 @@ def get_class_advisors(
         FROM class_advisors ca
         LEFT JOIN users u ON LOWER(u.reg_no) = LOWER(ca.staff_reg_no)
         LEFT JOIN other_staff os ON LOWER(os.reg_no) = LOWER(ca.staff_reg_no)
-        WHERE 1=1
+        WHERE COALESCE(ca.is_active, TRUE) = TRUE
     """
     params = []
     if dept and dept.upper() != "ALL":
@@ -32340,7 +32928,7 @@ def get_class_advisors(
         query += " AND LOWER(ca.section) = LOWER(?)"
         params.append(section.strip())
 
-    query += " ORDER BY ca.dept, ca.batch, ca.semester, ca.section, ca.advisor_type"
+    query += " ORDER BY ca.dept, ca.batch, ca.semester, ca.section, ca.id DESC"
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
@@ -32415,7 +33003,7 @@ def get_staff_student_hub_allocations(
                ca.advisor_type, ca.academic_year, ca.is_active
         FROM class_advisors ca
         WHERE LOWER(ca.staff_reg_no) = LOWER(?) AND (ca.is_active IS TRUE OR ca.is_active IS NULL)
-        ORDER BY ca.dept, ca.year_of_study, ca.section
+        ORDER BY ca.dept, ca.year_of_study, ca.semester DESC, ca.section, ca.advisor_type
         """,
         (target_staff,)
     )
@@ -32431,35 +33019,26 @@ def get_staff_student_hub_allocations(
                 "id": r[0],
                 "dept": r[1],
                 "batch": r[2],
-                "year_of_study": r[3],
-                "semester": r[4],
+                "year_of_study": int(r[3]) if r[3] is not None else 1,
+                "semester": int(r[4]) if r[4] is not None else 1,
                 "section": r[5],
                 "advisor_type": r[6],
                 "academic_year": r[7],
                 "is_active": bool(r[8]),
             }
-        key = (d["dept"].lower(), str(d["batch"]).strip().lower(), d["section"].lower())
+
+        d["advisor_type"] = "primary"
+        d["advisor_role_title"] = "Class Advisor"
+
+        key = (
+            d["dept"].lower(),
+            str(d["batch"]).strip().lower(),
+            int(d["semester"]),
+            d["section"].lower(),
+        )
         if key in seen_adv:
             continue
         seen_adv.add(key)
-
-        # Dynamically resolve current semester and year of study for the advised class cohort
-        cursor.execute(
-            """
-            SELECT COALESCE(MAX(s.semester), ?), COALESCE(MAX(s.year_of_study), ?)
-            FROM students s
-            WHERE LOWER(s.dept) = LOWER(?) AND TRIM(s.batch) = TRIM(?) AND LOWER(s.section) = LOWER(?)
-            """,
-            (d["semester"], d["year_of_study"], d["dept"], d["batch"], d["section"])
-        )
-        curr_sem_row = cursor.fetchone()
-        if curr_sem_row:
-            if isinstance(curr_sem_row, dict):
-                d["semester"] = curr_sem_row.get("semester") or d["semester"]
-                d["year_of_study"] = curr_sem_row.get("year_of_study") or d["year_of_study"]
-            else:
-                d["semester"] = curr_sem_row[0] or d["semester"]
-                d["year_of_study"] = curr_sem_row[1] or d["year_of_study"]
 
         # Count enrolled students for this advised class cohort
         cursor.execute(
@@ -32468,9 +33047,11 @@ def get_staff_student_hub_allocations(
                    SUM(CASE WHEN (SELECT COUNT(*) FROM student_face_embeddings e WHERE e.student_reg_no = s.reg_no) > 0 THEN 1 ELSE 0 END) as face_enrolled,
                    SUM(CASE WHEN s.suspended IS FALSE OR s.suspended IS NULL THEN 1 ELSE 0 END) as active_count
             FROM students s
-            WHERE LOWER(s.dept) = LOWER(?) AND TRIM(s.batch) = TRIM(?) AND LOWER(s.section) = LOWER(?)
+            WHERE LOWER(s.dept) = LOWER(?) 
+              AND s.semester = ?
+              AND LOWER(s.section) = LOWER(?)
             """,
-            (d["dept"], d["batch"], d["section"])
+            (d["dept"], d["semester"], d["section"])
         )
         cnt_row = cursor.fetchone()
         if cnt_row:
@@ -32507,36 +33088,26 @@ def get_staff_student_hub_allocations(
                 md = {
                     "dept": r[0],
                     "batch": r[1],
-                    "year_of_study": r[2],
-                    "semester": r[3],
+                    "year_of_study": int(r[2]) if r[2] is not None else 1,
+                    "semester": int(r[3]) if r[3] is not None else 1,
                     "section": r[4],
                 }
-            key = (md["dept"].lower(), str(md["batch"]).strip().lower(), md["section"].lower())
-            if key in seen_adv:
-                continue
-            seen_adv.add(key)
-
             md["id"] = 0
-            md["advisor_type"] = "mentor"
+            md["advisor_type"] = "primary"
+            md["advisor_role_title"] = "Primary Class Advisor (Mentor)"
             md["academic_year"] = "2024-2025"
             md["is_active"] = True
 
-            cursor.execute(
-                """
-                SELECT COALESCE(MAX(s.semester), ?), COALESCE(MAX(s.year_of_study), ?)
-                FROM students s
-                WHERE LOWER(s.dept) = LOWER(?) AND TRIM(s.batch) = TRIM(?) AND LOWER(s.section) = LOWER(?)
-                """,
-                (md["semester"], md["year_of_study"], md["dept"], md["batch"], md["section"])
+            key = (
+                md["dept"].lower(),
+                str(md["batch"]).strip().lower(),
+                int(md["semester"]),
+                md["section"].lower(),
+                md["advisor_type"]
             )
-            m_sem_row = cursor.fetchone()
-            if m_sem_row:
-                if isinstance(m_sem_row, dict):
-                    md["semester"] = m_sem_row.get("semester") or md["semester"]
-                    md["year_of_study"] = m_sem_row.get("year_of_study") or md["year_of_study"]
-                else:
-                    md["semester"] = m_sem_row[0] or md["semester"]
-                    md["year_of_study"] = m_sem_row[1] or md["year_of_study"]
+            if key in seen_adv:
+                continue
+            seen_adv.add(key)
 
             cursor.execute(
                 """
@@ -32606,9 +33177,11 @@ def get_staff_student_hub_allocations(
             SELECT COUNT(*) as total,
                    SUM(CASE WHEN (SELECT COUNT(*) FROM student_face_embeddings e WHERE e.student_reg_no = s.reg_no) > 0 THEN 1 ELSE 0 END) as face_enrolled
             FROM students s
-            WHERE LOWER(s.dept) = LOWER(?) AND TRIM(s.batch) = TRIM(?) AND s.semester = ? AND LOWER(s.section) = LOWER(?)
+            WHERE LOWER(s.dept) = LOWER(?) 
+              AND s.semester = ?
+              AND LOWER(s.section) = LOWER(?)
             """,
-            (td["dept"], td["batch"], td["semester"], td["section"])
+            (td["dept"], td["semester"], td["section"])
         )
         cnt_row = cursor.fetchone()
         if cnt_row:
@@ -32661,9 +33234,11 @@ def get_staff_student_hub_allocations(
                 SELECT COUNT(*) as total,
                        SUM(CASE WHEN (SELECT COUNT(*) FROM student_face_embeddings e WHERE e.student_reg_no = s.reg_no) > 0 THEN 1 ELSE 0 END) as face_enrolled
                 FROM students s
-                WHERE LOWER(s.dept) = LOWER(?) AND TRIM(s.batch) = TRIM(?) AND s.semester = ? AND LOWER(s.section) = LOWER(?)
+                WHERE LOWER(s.dept) = LOWER(?) 
+                  AND s.semester = ?
+                  AND LOWER(s.section) = LOWER(?)
                 """,
-                (ctd["dept"], ctd["batch"], ctd["semester"], ctd["section"])
+                (ctd["dept"], ctd["semester"], ctd["section"])
             )
             cnt_row = cursor.fetchone()
             if cnt_row:
@@ -32862,7 +33437,8 @@ async def assign_class_advisor(request: Request):
     semester = int(data.get("semester") or 1)
     section = (data.get("section") or "A").strip()
     staff_reg_no = (data.get("staff_reg_no") or "").strip()
-    advisor_type = (data.get("advisor_type") or "primary").strip().lower()
+    advisor_type = "primary"
+    role_title = "Class Advisor"
     academic_year = (data.get("academic_year") or "2024-2025").strip()
 
     if not dept or not batch or not staff_reg_no:
@@ -32882,6 +33458,56 @@ async def assign_class_advisor(request: Request):
 
     staff_name = staff_row.get("name") if isinstance(staff_row, dict) else staff_row[0]
 
+    # Constraint 1: One class advisor assignment per staff member
+    cursor.execute(
+        """
+        SELECT ca.dept, ca.batch, ca.semester, ca.section
+        FROM class_advisors ca
+        WHERE TRIM(LOWER(ca.staff_reg_no)) = TRIM(LOWER(?))
+          AND ca.is_active IS TRUE
+          AND NOT (
+              TRIM(LOWER(ca.dept)) = TRIM(LOWER(?))
+              AND TRIM(ca.batch) = TRIM(?)
+              AND TRIM(LOWER(ca.section)) = TRIM(LOWER(?))
+          )
+        LIMIT 1
+        """,
+        (staff_reg_no, dept, batch, section)
+    )
+    conflict_row = cursor.fetchone()
+    if conflict_row:
+        if isinstance(conflict_row, dict):
+            c_dept = conflict_row["dept"]
+            c_batch = conflict_row["batch"]
+            c_sem = conflict_row["semester"]
+            c_sec = conflict_row["section"]
+        else:
+            c_dept, c_batch, c_sem, c_sec = conflict_row[0], conflict_row[1], conflict_row[2], conflict_row[3]
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Faculty member '{staff_name}' ({staff_reg_no}) is already the active Class Advisor for "
+                f"{c_dept} — Batch {c_batch}, Sem {c_sem}, Sec {c_sec}. "
+                f"One staff member can hold only one advisor post at a time. "
+                f"To assign this staff member, please remove their current class advisor assignment first."
+            )
+        )
+
+    # Constraint 2: Strictly ONE advisor for each class — deactivate all existing active advisor records for this class
+    try:
+        cursor.execute(
+            """
+            UPDATE class_advisors 
+            SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+            WHERE LOWER(dept) = LOWER(?) AND TRIM(batch) = TRIM(?) AND LOWER(section) = LOWER(?)
+              AND is_active IS TRUE
+            """,
+            (dept, batch, section)
+        )
+    except Exception:
+        pass
+
     # Upsert into class_advisors
     try:
         cursor.execute(
@@ -32890,7 +33516,7 @@ async def assign_class_advisor(request: Request):
                 dept, batch, year_of_study, semester, section, staff_reg_no,
                 advisor_type, academic_year, assigned_by, assigned_role, is_active, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, 'primary', ?, ?, ?, TRUE, CURRENT_TIMESTAMP)
             ON CONFLICT (dept, batch, semester, section, advisor_type) DO UPDATE SET
                 staff_reg_no = EXCLUDED.staff_reg_no,
                 year_of_study = EXCLUDED.year_of_study,
@@ -32900,13 +33526,27 @@ async def assign_class_advisor(request: Request):
                 is_active = TRUE,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (dept, batch, year_of_study, semester, section, staff_reg_no, advisor_type, academic_year, caller_reg_no, caller_role)
+            (dept, batch, year_of_study, semester, section, staff_reg_no, academic_year, caller_reg_no, caller_role)
         )
     except Exception as e:
+        err_str = str(e).lower()
+        if "uq_active_staff_advisor" in err_str or ("unique" in err_str and "staff" in err_str):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            conn.close()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Conflict: Faculty member '{staff_name}' ({staff_reg_no}) is already an active Class Advisor "
+                    f"for another class. One staff member can hold only one advisor post at a time."
+                )
+            )
         # Fallback for databases without ON CONFLICT syntax
         cursor.execute(
-            "DELETE FROM class_advisors WHERE LOWER(dept) = LOWER(?) AND batch = ? AND semester = ? AND LOWER(section) = LOWER(?) AND advisor_type = ?",
-            (dept, batch, semester, section, advisor_type)
+            "DELETE FROM class_advisors WHERE LOWER(dept) = LOWER(?) AND batch = ? AND semester = ? AND LOWER(section) = LOWER(?)",
+            (dept, batch, semester, section)
         )
         cursor.execute(
             """
@@ -32914,30 +33554,57 @@ async def assign_class_advisor(request: Request):
                 dept, batch, year_of_study, semester, section, staff_reg_no,
                 advisor_type, academic_year, assigned_by, assigned_role, is_active
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+            VALUES (?, ?, ?, ?, ?, ?, 'primary', ?, ?, ?, TRUE)
             """,
-            (dept, batch, year_of_study, semester, section, staff_reg_no, advisor_type, academic_year, caller_reg_no, caller_role)
+            (dept, batch, year_of_study, semester, section, staff_reg_no, academic_year, caller_reg_no, caller_role)
         )
     conn.commit()
 
-    # If primary advisor, sync mentor_staff_reg_no in students table
-    if advisor_type == "primary":
-        try:
-            cursor.execute(
-                """
-                UPDATE students SET mentor_staff_reg_no = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE LOWER(dept) = LOWER(?) AND batch = ? AND semester = ? AND LOWER(section) = LOWER(?)
-                """,
-                (staff_reg_no, dept, batch, semester, section)
-            )
-            conn.commit()
-        except Exception:
-            pass
+    # Atomically synchronize student cohort in students table
+    try:
+        # 1. Update all students in this canonical class (dept, semester, section)
+        cursor.execute(
+            """
+            UPDATE students 
+            SET mentor_staff_reg_no = ?, 
+                year_of_study = ?, 
+                batch = CASE WHEN batch IS NULL OR TRIM(batch) = '' OR TRIM(batch) != TRIM(?) THEN ? ELSE batch END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE LOWER(dept) = LOWER(?) 
+              AND LOWER(section) = LOWER(?)
+              AND semester = ?
+            """,
+            (staff_reg_no, year_of_study, batch, batch, dept, section, semester)
+        )
+        # 2. Also assign any unassigned students in this dept and section who have matching batch but null/zero semester
+        cursor.execute(
+            """
+            UPDATE students 
+            SET mentor_staff_reg_no = ?, 
+                semester = ?,
+                year_of_study = ?, 
+                batch = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE LOWER(dept) = LOWER(?) 
+              AND LOWER(section) = LOWER(?)
+              AND (semester IS NULL OR semester = 0)
+              AND TRIM(batch) = TRIM(?)
+            """,
+            (staff_reg_no, semester, year_of_study, batch, dept, section, batch)
+        )
+        conn.commit()
+    except Exception as sync_err:
+        print(f"Student sync warning during advisor assignment: {sync_err}")
+        pass
 
     return {
-        "message": f"Assigned {staff_name} as {advisor_type.capitalize()} Class Advisor for {dept} - {batch} (Sem {semester} {section})",
+        "message": f"Assigned {staff_name} as Class Advisor for {dept} - {batch} (Sem {semester} {section})",
         "staff_reg_no": staff_reg_no,
         "staff_name": staff_name,
+        "advisor_type": "primary",
+        "role_title": "Class Advisor",
+        "semester": semester,
+        "section": section,
     }
 
 
@@ -32957,12 +33624,77 @@ def remove_class_advisor(advisor_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Class advisor assignment not found.")
 
     adv_dept = row.get("dept") if isinstance(row, dict) else row[0]
-    if caller_role in ["hod", "head of department"] and adv_dept.upper() != caller_dept.upper():
+    adv_batch = row.get("batch") if isinstance(row, dict) else row[1]
+    adv_sem = row.get("semester") if isinstance(row, dict) else row[2]
+    adv_sec = row.get("section") if isinstance(row, dict) else row[3]
+    adv_type = (row.get("advisor_type") if isinstance(row, dict) else row[4]) or ""
+
+    if caller_role in ["hod", "head of department"] and str(adv_dept).upper() != caller_dept.upper():
         raise HTTPException(status_code=403, detail="HOD can only remove advisors from their department.")
 
     cursor.execute("DELETE FROM class_advisors WHERE id = ?", (advisor_id,))
+    if str(adv_type).lower() == "primary":
+        try:
+            cursor.execute(
+                """
+                UPDATE students SET mentor_staff_reg_no = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE LOWER(dept) = LOWER(?) AND TRIM(batch) = TRIM(?) AND LOWER(section) = LOWER(?)
+                """,
+                (adv_dept, adv_batch, adv_sec)
+            )
+        except Exception:
+            pass
     conn.commit()
     return {"message": "Class advisor assignment removed."}
+
+
+@app.get("/api/v1/academics/active-advisor-index")
+def get_active_advisor_index(request: Request):
+    """Return a map of staff_reg_no → their active primary advisor assignment.
+    Used by admin/HOD faculty picker to annotate staff already advising a class.
+    """
+    verify_any_user_token(request)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT ca.staff_reg_no, ca.dept, ca.batch, ca.semester, ca.section,
+               COALESCE(u.name, os.name, ca.staff_reg_no) as staff_name
+        FROM class_advisors ca
+        LEFT JOIN users u ON LOWER(TRIM(u.reg_no)) = LOWER(TRIM(ca.staff_reg_no))
+        LEFT JOIN other_staff os ON LOWER(TRIM(os.reg_no)) = LOWER(TRIM(ca.staff_reg_no))
+        WHERE COALESCE(ca.is_active, TRUE) = TRUE
+        """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    index = {}
+    for r in rows:
+        if isinstance(r, dict):
+            reg = str(r["staff_reg_no"] or "").strip()
+            dept = str(r["dept"] or "").strip()
+            batch = str(r["batch"] or "").strip()
+            sem = r["semester"]
+            sec = str(r["section"] or "").strip()
+            staff_name = str(r["staff_name"] or "").strip()
+        else:
+            reg = str(r[0] or "").strip()
+            dept = str(r[1] or "").strip()
+            batch = str(r[2] or "").strip()
+            sem = r[3]
+            sec = str(r[4] or "").strip()
+            staff_name = str(r[5] or "").strip()
+        info = {
+            "dept": dept,
+            "batch": batch,
+            "semester": sem,
+            "section": sec,
+            "staff_name": staff_name,
+            "label": f"{dept} Batch {batch} Sem {sem}–{sec}",
+        }
+        index[reg] = info
+        index[reg.lower()] = info
+    return {"advisor_index": index}
 
 
 def get_academic_period_config_for_class(
@@ -37663,7 +38395,7 @@ async def student_session_checkout(
             raise HTTPException(status_code=400, detail="❌ Face not detected. Please position your face clearly in the camera frame.")
 
         if ANTISPOOFING_ENABLED:
-            is_live, liveness_reason = detect_single_image_liveness(img, face=face)
+            is_live, liveness_reason = detect_single_image_liveness(img, face=face, reg_no=reg_no)
             if not is_live:
                 try:
                     conn.close()

@@ -15,6 +15,7 @@ dependencies:
   # 📷 Live camera preview & frame capture
   camera: ^0.10.6
   camera_windows: ^0.2.6
+  screen_brightness: ^2.1.11
 
   # 🌐 API communication
   http: ^1.2.0
