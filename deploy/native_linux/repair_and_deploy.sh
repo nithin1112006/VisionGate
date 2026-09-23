@@ -270,15 +270,20 @@ if [ -f "${BACKEND_DIR}/run_migrations.py" ]; then
     sudo -u "${RUN_USER}" PG_PORT="${DB_PORT}" PG_HOST="127.0.0.1" PG_USER="${DB_USER}" PG_PASSWORD="${DB_PASS}" PG_DB="${DB_NAME}" "${VENV_PYTHON}" "${BACKEND_DIR}/run_migrations.py" || true
 fi
 
-# Pre-cache InsightFace model
-echo "Ensuring InsightFace buffalo_s model weights are cached..."
+# Pre-cache InsightFace model with GPU acceleration
+echo "Ensuring InsightFace buffalo_s model weights are cached on NVIDIA GPU..."
 sudo -u "${RUN_USER}" "${VENV_PYTHON}" -c "
 import warnings; warnings.filterwarnings('ignore')
 try:
+    import onnxruntime as ort
+    avail = ort.get_available_providers()
+    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in avail else ['CPUExecutionProvider']
+    ctx = 0 if 'CUDAExecutionProvider' in providers else -1
     from insightface.app import FaceAnalysis
-    app = FaceAnalysis(name='buffalo_s', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-    app.prepare(ctx_id=-1, det_size=(640, 640))
-    print('[✓] buffalo_s model pre-cached successfully.')
+    app = FaceAnalysis(name='buffalo_s', providers=providers)
+    app.prepare(ctx_id=ctx, det_size=(640, 640))
+    target = 'GPU 0 (CUDAExecutionProvider)' if ctx == 0 else 'CPU'
+    print(f'[✓] buffalo_s model pre-cached successfully on {target}.')
 except Exception as e:
     print(f'[!] Model pre-cache notice: {e}')
 " || true
@@ -327,6 +332,16 @@ Environment=PG_PASSWORD=${DB_PASS}
 Environment=PG_DB=${DB_NAME}
 Environment=HOME=/home/${RUN_USER}
 Environment=INSIGHTFACE_HOME=/home/${RUN_USER}/.insightface
+
+# NVIDIA GPU & CUDA Acceleration Configuration
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=NVIDIA_VISIBLE_DEVICES=all
+Environment=NVIDIA_DRIVER_CAPABILITIES=compute,utility
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=ORT_CUDA_DEVICE_ID=0
+Environment=TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0;12.0"
+Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu
+
 EnvironmentFile=-${ROOT_DIR}/.env
 EnvironmentFile=-${BACKEND_DIR}/.env
 ExecStart=${VENV_PYTHON} main.py
@@ -547,6 +562,11 @@ echo -e "  - Backend Loopback:   http://127.0.0.1:8001/health ($(curl -sf http:/
 echo -e "  - Nginx Ingress:      http://127.0.0.1/healthz ($(curl -sf http://127.0.0.1/healthz || echo 'offline'))"
 echo -e "  - Public Tunnel URL:  https://app.srishakthicgpa.in (Active & Verified)"
 echo -e "  - Database Tables:    ${TABLE_COUNT} verified"
+GPU_STATUS="Not detected"
+if command -v nvidia-smi &>/dev/null; then
+    GPU_STATUS=$(nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader 2>/dev/null || echo "Active")
+fi
+echo -e "  - GPU Acceleration:   ${GREEN}${GPU_STATUS}${NC}"
 echo -e "  - Systemd Service:    sudo systemctl status attenda-backend"
 echo -e "  - Ingress Service:    sudo systemctl status cloudflared"
 echo -e "${BLUE}==============================================================================${NC}\n"
