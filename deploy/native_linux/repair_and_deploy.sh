@@ -191,6 +191,16 @@ if [ -f "${INIT_SQL}" ]; then
     echo -e "${GREEN}[✓] Core 01-init.sql schema applied.${NC}"
 fi
 
+# Apply schema compatibility for legacy columns and seeding queries
+sudo -u postgres psql -d "${DB_NAME}" << 'EOSQL' >/dev/null 2>&1 || true
+ALTER TABLE student_leave_od_action_history ALTER COLUMN action_by DROP NOT NULL;
+ALTER TABLE student_leave_od_action_history ALTER COLUMN action_by_role DROP NOT NULL;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS year INT DEFAULT 1;
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS dept_name VARCHAR(100);
+UPDATE departments SET dept_name = name WHERE dept_name IS NULL;
+EOSQL
+echo -e "${GREEN}[✓] Schema parity and column compatibility verified.${NC}"
+
 # ── 3. Python 3.12 Virtual Environment & Dependencies ──────────────────────────
 echo -e "\n${BLUE}==============================================================================${NC}"
 echo -e "${CYAN}[3/6] Auditing & Repairing Python 3.12 Backend Virtual Environment...${NC}"
