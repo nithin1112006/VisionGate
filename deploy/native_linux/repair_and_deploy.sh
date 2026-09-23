@@ -98,16 +98,65 @@ echo -e "\n${BLUE}==============================================================
 echo -e "${CYAN}[2/6] Auditing & Repairing Database, Schema & Migrations...${NC}"
 echo -e "${BLUE}==============================================================================${NC}"
 
+# Detect actual listening port and configuration of running PostgreSQL cluster
+ACTIVE_PG_PORT=$(sudo -u postgres psql -tAc "SHOW port;" 2>/dev/null || echo "5432")
 DB_USER="attenda"
 DB_PASS="attenda_password"
 DB_NAME="attenda"
-DB_PORT="5432"
+DB_PORT="${ACTIVE_PG_PORT:-5432}"
 
 if [ -f "${ROOT_DIR}/.env" ]; then
     DB_USER=$(grep -E "^PG_USER=" "${ROOT_DIR}/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'" || echo "attenda")
     DB_PASS=$(grep -E "^PG_PASSWORD=" "${ROOT_DIR}/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'" || echo "attenda_password")
     DB_NAME=$(grep -E "^PG_DB=" "${ROOT_DIR}/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'" || echo "attenda")
 fi
+
+echo -e "  Active PostgreSQL Cluster Port: ${GREEN}${DB_PORT}${NC}"
+
+# Ensure listen_addresses allows localhost TCP connections
+PG_CONF=$(sudo -u postgres psql -tAc "SHOW config_file;" 2>/dev/null || true)
+if [ -f "${PG_CONF}" ]; then
+    CURRENT_LISTEN=$(sudo -u postgres psql -tAc "SHOW listen_addresses;" 2>/dev/null || true)
+    if [ "${CURRENT_LISTEN}" != "*" ] && [[ ! "${CURRENT_LISTEN}" =~ "127.0.0.1" ]] && [[ ! "${CURRENT_LISTEN}" =~ "localhost" ]]; then
+        echo -e "${YELLOW}Enabling TCP/IP loopback listening in ${PG_CONF}...${NC}"
+        sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost,127.0.0.1'/g" "${PG_CONF}"
+        sed -i "s/listen_addresses = '.*'/listen_addresses = 'localhost,127.0.0.1'/g" "${PG_CONF}"
+        systemctl restart postgresql
+        sleep 2
+    fi
+fi
+
+# Ensure pg_hba.conf allows local md5/scram connections
+PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file;" 2>/dev/null || true)
+if [ -f "${PG_HBA}" ]; then
+    if ! grep -E -q "host\s+all\s+all\s+127\.0\.0\.1/32" "${PG_HBA}"; then
+        echo -e "${YELLOW}Adding loopback TCP authentication rule to ${PG_HBA}...${NC}"
+        echo "host    all             all             127.0.0.1/32            md5" >> "${PG_HBA}"
+        systemctl reload postgresql 2>/dev/null || systemctl restart postgresql 2>/dev/null || true
+    fi
+fi
+
+# Update .env files with the exact detected port
+for ENV_TARGET in "${ROOT_DIR}/.env" "${BACKEND_DIR}/.env"; do
+    if [ -f "${ENV_TARGET}" ]; then
+        sed -i "s/^PG_PORT=.*/PG_PORT=${DB_PORT}/g" "${ENV_TARGET}"
+        if ! grep -q "^PG_PORT=" "${ENV_TARGET}"; then
+            echo "PG_PORT=${DB_PORT}" >> "${ENV_TARGET}"
+        fi
+        sed -i "s/^PG_HOST=.*/PG_HOST=127.0.0.1/g" "${ENV_TARGET}"
+    else
+        cat << EOF > "${ENV_TARGET}"
+PG_DB=${DB_NAME}
+PG_USER=${DB_USER}
+PG_PASSWORD=${DB_PASS}
+PG_HOST=127.0.0.1
+PG_PORT=${DB_PORT}
+PORT=8001
+HOST=127.0.0.1
+CLOUDFLARE_DOMAIN=app.srishakthi.in
+EOF
+    fi
+done
 
 # Ensure user and database exist
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1 || {
@@ -135,7 +184,10 @@ fi
 
 if [ -f "${INIT_SQL}" ]; then
     echo "Applying core table definitions from ${INIT_SQL}..."
-    PGPASSWORD="${DB_PASS}" psql -h 127.0.0.1 -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f "${INIT_SQL}" > /tmp/attenda_db_init.log 2>&1 || true
+    PGPASSWORD="${DB_PASS}" psql -h 127.0.0.1 -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f "${INIT_SQL}" > /tmp/attenda_db_init.log 2>&1 || {
+        # Fallback to local socket if TCP still syncing
+        sudo -u postgres psql -d "${DB_NAME}" -f "${INIT_SQL}" > /tmp/attenda_db_init.log 2>&1 || true
+    }
     echo -e "${GREEN}[✓] Core 01-init.sql schema applied.${NC}"
 fi
 
@@ -174,7 +226,7 @@ echo -e "${GREEN}[✓] Python packages and runtime libraries installed.${NC}"
 # Execute Anti-Spoofing & Liveness Migrations
 if [ -f "${BACKEND_DIR}/migrations/apply_antispoof_migrations.py" ]; then
     echo "Running anti-spoofing database schema migrations..."
-    sudo -u "${RUN_USER}" "${VENV_PYTHON}" -c "
+    sudo -u "${RUN_USER}" PG_PORT="${DB_PORT}" PG_HOST="127.0.0.1" PG_USER="${DB_USER}" PG_PASSWORD="${DB_PASS}" PG_DB="${DB_NAME}" "${VENV_PYTHON}" -c "
 import sys; sys.path.insert(0, '${BACKEND_DIR}')
 try:
     from migrations.apply_antispoof_migrations import apply_migrations
@@ -187,7 +239,7 @@ fi
 # Execute Python Migrations & Default Seeding
 if [ -f "${BACKEND_DIR}/run_migrations.py" ]; then
     echo "Executing database migration suite and table seeding..."
-    sudo -u "${RUN_USER}" "${VENV_PYTHON}" "${BACKEND_DIR}/run_migrations.py" || true
+    sudo -u "${RUN_USER}" PG_PORT="${DB_PORT}" PG_HOST="127.0.0.1" PG_USER="${DB_USER}" PG_PASSWORD="${DB_PASS}" PG_DB="${DB_NAME}" "${VENV_PYTHON}" "${BACKEND_DIR}/run_migrations.py" || true
 fi
 
 # Pre-cache InsightFace model
@@ -204,7 +256,7 @@ except Exception as e:
 " || true
 
 # Audit table count
-TABLE_COUNT=$(PGPASSWORD="${DB_PASS}" psql -h 127.0.0.1 -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
+TABLE_COUNT=$(PGPASSWORD="${DB_PASS}" psql -h 127.0.0.1 -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || sudo -u postgres psql -d "${DB_NAME}" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
 echo -e "${GREEN}[✓] Total active public database tables: ${TABLE_COUNT}${NC}"
 
 # ── 4. Systemd Backend Service ─────────────────────────────────────────────────
@@ -228,6 +280,11 @@ WorkingDirectory=${BACKEND_DIR}
 Environment=PYTHONUNBUFFERED=1
 Environment=PORT=8001
 Environment=HOST=127.0.0.1
+Environment=PG_PORT=${DB_PORT}
+Environment=PG_HOST=127.0.0.1
+Environment=PG_USER=${DB_USER}
+Environment=PG_PASSWORD=${DB_PASS}
+Environment=PG_DB=${DB_NAME}
 Environment=HOME=/home/${RUN_USER}
 Environment=INSIGHTFACE_HOME=/home/${RUN_USER}/.insightface
 EnvironmentFile=-${ROOT_DIR}/.env
