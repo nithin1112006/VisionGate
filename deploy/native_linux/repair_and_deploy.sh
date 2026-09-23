@@ -196,8 +196,26 @@ sudo -u postgres psql -d "${DB_NAME}" << 'EOSQL' >/dev/null 2>&1 || true
 ALTER TABLE student_leave_od_action_history ALTER COLUMN action_by DROP NOT NULL;
 ALTER TABLE student_leave_od_action_history ALTER COLUMN action_by_role DROP NOT NULL;
 ALTER TABLE students ADD COLUMN IF NOT EXISTS year INT DEFAULT 1;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS roll_no VARCHAR(64);
+ALTER TABLE students ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255);
+ALTER TABLE students ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS first_time_login BOOLEAN DEFAULT TRUE;
 ALTER TABLE departments ADD COLUMN IF NOT EXISTS dept_name VARCHAR(100);
 UPDATE departments SET dept_name = name WHERE dept_name IS NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(160) DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20) DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(80) DEFAULT 'staff';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kiosk_enabled BOOLEAN DEFAULT TRUE;
+ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS current_device_id VARCHAR(255);
+ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS suspended BOOLEAN DEFAULT FALSE;
+ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS email VARCHAR(160) DEFAULT '';
+ALTER TABLE other_staff ADD COLUMN IF NOT EXISTS phone VARCHAR(20) DEFAULT '';
 EOSQL
 echo -e "${GREEN}[✓] Schema parity and column compatibility verified.${NC}"
 
@@ -264,6 +282,18 @@ try:
 except Exception as e:
     print(f'[!] Model pre-cache notice: {e}')
 " || true
+
+# ── Apply Server Authentication Resilience Engine ──
+if [ -f "${SCRIPT_DIR}/patch_server_auth.py" ]; then
+    echo "Applying server-side authentication resilience engine to backend/main.py..."
+    sudo -u "${RUN_USER}" "${VENV_PYTHON}" "${SCRIPT_DIR}/patch_server_auth.py" "${BACKEND_DIR}/main.py" || true
+fi
+
+# ── Audit Existing Database Credentials & Accounts ──
+if [ -f "${SCRIPT_DIR}/diagnose_and_repair_auth.py" ]; then
+    echo "Auditing existing accounts and verifying credentials on port ${DB_PORT}..."
+    sudo -u "${RUN_USER}" PG_PORT="${DB_PORT}" PG_HOST="127.0.0.1" PG_USER="${DB_USER}" PG_PASSWORD="${DB_PASS}" PG_DB="${DB_NAME}" "${VENV_PYTHON}" "${SCRIPT_DIR}/diagnose_and_repair_auth.py" --audit || true
+fi
 
 # Audit table count
 TABLE_COUNT=$(PGPASSWORD="${DB_PASS}" psql -h 127.0.0.1 -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || sudo -u postgres psql -d "${DB_NAME}" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
