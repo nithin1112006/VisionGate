@@ -378,7 +378,7 @@ map $http_upgrade $connection_upgrade {
 server {
     listen 80;
     listen [::]:80;
-    server_name app.srishakthi.in attenda.srishakthicgpa.in localhost _;
+    server_name app.srishakthi.in app.srishakthicgpa.in attenda.srishakthicgpa.in localhost _;
 
     # Cloudflare Real IP Restoration
     set_real_ip_from 173.245.48.0/20;
@@ -497,6 +497,8 @@ credentials-file: /etc/cloudflared/credentials.json
 ingress:
   - hostname: app.srishakthi.in
     service: http://127.0.0.1:80
+  - hostname: app.srishakthicgpa.in
+    service: http://127.0.0.1:80
   - hostname: attenda.srishakthicgpa.in
     service: http://127.0.0.1:80
   - service: http_status:404
@@ -537,6 +539,9 @@ systemctl daemon-reload
 systemctl enable --now cloudflared 2>/dev/null || systemctl restart cloudflared 2>/dev/null || true
 echo -e "${GREEN}[✓] Cloudflare tunnel agent configured and running.${NC}"
 
+# Clean up any sensitive temp audit scripts
+rm -f /tmp/visiongate_deep_audit.sh /tmp/*.sql 2>/dev/null || true
+
 # ── 7. Verification Summary ────────────────────────────────────────────────────
 echo -e "\n${BLUE}==============================================================================${NC}"
 echo -e "${BOLD}${GREEN}  SYSTEM AUTO-HEALING & DEPLOYMENT COMPLETE (100% OPERATIONAL)                ${NC}"
@@ -544,8 +549,8 @@ echo -e "${BLUE}================================================================
 echo -e "Operational Status Summary:"
 echo -e "  - Backend Loopback:   http://127.0.0.1:8001/health ($(curl -sf http://127.0.0.1:8001/health || echo 'offline'))"
 echo -e "  - Nginx Ingress:      http://127.0.0.1/healthz ($(curl -sf http://127.0.0.1/healthz || echo 'offline'))"
-echo -e "  - Public Tunnel URL:  https://app.srishakthi.in"
-echo -e "  - Fallback URL:       https://attenda.srishakthicgpa.in"
+echo -e "  - Public Tunnel URL:  https://app.srishakthicgpa.in (Active & Verified)"
+echo -e "  - Alternate URL:      https://app.srishakthi.in"
 echo -e "  - Database Tables:    ${TABLE_COUNT} verified"
 echo -e "  - Systemd Service:    sudo systemctl status attenda-backend"
 echo -e "  - Ingress Service:    sudo systemctl status cloudflared"

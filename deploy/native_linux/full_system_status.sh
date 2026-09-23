@@ -75,7 +75,10 @@ curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" http://127.
 echo -n "Nginx Proxy (http://127.0.0.1/healthz):        "
 curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" http://127.0.0.1/healthz || echo "FAILED"
 
-echo -n "Public Gateway (https://app.srishakthi.in/healthz): "
+echo -n "Public Gateway (https://app.srishakthicgpa.in/healthz): "
+curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" https://app.srishakthicgpa.in/healthz 2>/dev/null || echo "FAILED / UNREACHABLE"
+
+echo -n "Public Gateway (https://app.srishakthi.in/healthz):     "
 curl -s -o /dev/null -w "HTTP %{http_code} (time: %{time_total}s)\n" https://app.srishakthi.in/healthz 2>/dev/null || echo "FAILED / UNREACHABLE"
 
 # 6. Database Schema & Accounts Audit
