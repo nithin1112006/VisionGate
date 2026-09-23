@@ -37,6 +37,10 @@ echo -e "  Backend Directory: ${GREEN}${BACKEND_DIR}${NC}"
 echo -e "  Executing User:    ${GREEN}${RUN_USER}${NC}"
 echo -e "  Target Host:       ${GREEN}app.srishakthi.in${NC}"
 
+# Ensure proper permissions on deployment directory (critical for /var/www)
+chown -R "${RUN_USER}:${RUN_USER}" "${ROOT_DIR}"
+chmod -R u+rwX "${ROOT_DIR}"
+
 # ── 1. System Package & Runtime Prerequisites ──────────────────────────────────
 echo -e "\n${BLUE}==============================================================================${NC}"
 echo -e "${CYAN}[1/6] Auditing & Installing System Prerequisites...${NC}"
@@ -224,6 +228,8 @@ WorkingDirectory=${BACKEND_DIR}
 Environment=PYTHONUNBUFFERED=1
 Environment=PORT=8001
 Environment=HOST=127.0.0.1
+Environment=HOME=/home/${RUN_USER}
+Environment=INSIGHTFACE_HOME=/home/${RUN_USER}/.insightface
 EnvironmentFile=-${ROOT_DIR}/.env
 EnvironmentFile=-${BACKEND_DIR}/.env
 ExecStart=${VENV_PYTHON} main.py
@@ -399,7 +405,9 @@ ingress:
   - service: http_status:404
 EOF
 
-cat << 'EOF' > /etc/systemd/system/cloudflared.service
+CF_BIN="$(command -v cloudflared || echo '/usr/bin/cloudflared')"
+
+cat << EOF > /etc/systemd/system/cloudflared.service
 [Unit]
 Description=Cloudflare Tunnel Agent (Native)
 After=network-online.target
@@ -407,7 +415,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run
+ExecStart=${CF_BIN} --config /etc/cloudflared/config.yml tunnel run
 Restart=always
 RestartSec=3s
 KillMode=mixed

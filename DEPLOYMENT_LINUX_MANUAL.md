@@ -13,8 +13,8 @@ This manual guides the complete bare-metal deployment of **VisionGate / Attenda*
 | **System Memory** | 32 GB RAM (31 GiB physical, NVMe swap) |
 | **Storage** | 952 GB NVMe SSD (231 GB available) |
 | **Default User** | `techpark-2` (with sudo privileges) |
-| **Workspace Directory** | `/home/techpark-2/attenda` |
-| **Public Domain** | `https://attenda.srishakthicgpa.in` |
+| **Workspace Directory** | `/var/www/attenda/VisionGate` |
+| **Public Domain** | `https://app.srishakthi.in` |
 
 ---
 
@@ -47,24 +47,18 @@ Before pushing to GitHub, the following compatibility fixes were engineered acro
 1. Review modified files and stage changes:
    ```powershell
    git status
-   git add backend/ requirements.txt docker/postgres/01-init.sql deploy/ .env.example
-   git commit -m "chore: prepare native linux deployment scripts and dependencies"
+   git add deploy/native_linux/repair_and_deploy.sh deploy/native_linux/setup_all.sh
+   git commit -m "chore: add universal self-healing deployment script for native linux"
    git push origin master
    ```
 
 ### On the Linux Server (`techpark-2`):
 1. SSH into the server or open the terminal:
    ```bash
-   cd /home/techpark-2
+   cd /var/www/attenda/VisionGate
    ```
-2. Clone the repository (or pull latest updates):
+2. Pull latest updates:
    ```bash
-   # If cloning for the first time:
-   git clone https://github.com/nithin1112006/VisionGate.git attenda
-   cd attenda
-
-   # If updating an existing clone:
-   cd /home/techpark-2/attenda
    git fetch origin master
    git reset --hard origin/master
    ```
@@ -72,7 +66,7 @@ Before pushing to GitHub, the following compatibility fixes were engineered acro
    ```bash
    cp .env.example .env
    ```
-   Ensure the following values are in `/home/techpark-2/attenda/.env`:
+   Ensure the following values are in `/var/www/attenda/VisionGate/.env`:
    ```bash
    PG_DB=attenda
    PG_USER=attenda
@@ -93,8 +87,8 @@ Before pushing to GitHub, the following compatibility fixes were engineered acro
 To set up everything in one pass:
 
 ```bash
-cd /home/techpark-2/attenda/deploy/native_linux
-sudo bash setup_all.sh
+cd /var/www/attenda/VisionGate/deploy/native_linux
+sudo bash repair_and_deploy.sh
 ```
 
 This single command executes:
