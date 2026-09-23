@@ -251,6 +251,19 @@ fi
 sudo -u "${RUN_USER}" "${VENV_PIP}" install -q -r "${BACKEND_DIR}/requirements.txt"
 echo -e "${GREEN}[✓] Python packages and runtime libraries installed.${NC}"
 
+# Restore pristine copies of core Python files to eliminate any local syntax corruption
+echo "Verifying integrity of backend core Python files..."
+git -C "${ROOT_DIR}" checkout -f HEAD -- "${BACKEND_DIR}/pg_adapter.py" "${BACKEND_DIR}/main.py" 2>/dev/null || true
+
+for PY_FILE in "${BACKEND_DIR}/pg_adapter.py" "${BACKEND_DIR}/main.py"; do
+    if ! "${VENV_PYTHON}" -m py_compile "${PY_FILE}" 2>/dev/null; then
+        echo -e "${YELLOW}[!] Notice: Syntax anomaly detected in $(basename "${PY_FILE}"). Restoring clean copy from git...${NC}"
+        git -C "${ROOT_DIR}" checkout -f HEAD -- "${PY_FILE}" 2>/dev/null || true
+    fi
+    "${VENV_PYTHON}" -m py_compile "${PY_FILE}"
+    echo -e "${GREEN}[✓] $(basename "${PY_FILE}") compiled cleanly with zero syntax errors.${NC}"
+done
+
 # Execute Anti-Spoofing & Liveness Migrations
 if [ -f "${BACKEND_DIR}/migrations/apply_antispoof_migrations.py" ]; then
     echo "Running anti-spoofing database schema migrations..."
@@ -292,6 +305,12 @@ except Exception as e:
 if [ -f "${SCRIPT_DIR}/patch_server_auth.py" ]; then
     echo "Applying server-side authentication resilience engine to backend/main.py..."
     sudo -u "${RUN_USER}" "${VENV_PYTHON}" "${SCRIPT_DIR}/patch_server_auth.py" "${BACKEND_DIR}/main.py" || true
+    if ! "${VENV_PYTHON}" -m py_compile "${BACKEND_DIR}/main.py" 2>/dev/null; then
+        echo -e "${YELLOW}[!] Notice: Compilation anomaly in backend/main.py. Restoring clean version from git...${NC}"
+        git -C "${ROOT_DIR}" checkout -f HEAD -- "${BACKEND_DIR}/main.py" 2>/dev/null || true
+    else
+        echo -e "${GREEN}[✓] backend/main.py authenticated and syntax verified.${NC}"
+    fi
 fi
 
 # ── Audit Existing Database Credentials & Accounts ──
@@ -360,16 +379,21 @@ systemctl enable attenda-backend.service
 systemctl restart attenda-backend.service
 
 echo "Waiting for backend service to report healthy..."
-for i in {1..20}; do
+BACKEND_HEALTHY=false
+for i in {1..25}; do
     if curl -sf http://127.0.0.1:8001/health &>/dev/null; then
-        echo -e "${GREEN}[✓] attenda-backend.service is LIVE and reporting healthy!${NC}"
+        echo -e "${GREEN}[✓] attenda-backend.service is LIVE and reporting healthy (HTTP 200)!${NC}"
+        BACKEND_HEALTHY=true
         break
     fi
     sleep 1
-    if [ "$i" -eq 20 ]; then
-        echo -e "${YELLOW}[!] Warning: Backend healthcheck timed out after 20s. Check 'journalctl -u attenda-backend -n 25'${NC}"
-    fi
 done
+
+if [ "${BACKEND_HEALTHY}" = false ]; then
+    echo -e "${RED}[!] Warning: Backend healthcheck timed out after 25s.${NC}"
+    echo -e "${YELLOW}Recent service logs from systemd:${NC}"
+    journalctl -u attenda-backend.service -n 25 --no-pager || true
+fi
 
 # ── 5. Nginx Reverse Proxy (Full API Routing + Redirection Protection) ─────────
 echo -e "\n${BLUE}==============================================================================${NC}"

@@ -13,6 +13,15 @@ import time
 import py_compile
 import re
 
+# Ensure safe console output across all environments
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 PATCH_SENTINEL = "# --- VISIONGATE_AUTOPATCH_AUTH_RESILIENCE_V1 ---"
 
 
@@ -147,13 +156,13 @@ def patch_main_py(file_path):
         content = f.read()
 
     if PATCH_SENTINEL in content:
-        print("[✓] Server authentication resilience patch is already installed.")
+        print("[+] Server authentication resilience patch is already installed.")
         return True
 
     # Create timestamped backup
     backup_path = f"{file_path}.bak.{int(time.time())}"
     shutil.copyfile(file_path, backup_path)
-    print(f"[✓] Created pristine backup at: {backup_path}")
+    print(f"[+] Created pristine backup at: {backup_path}")
 
     # 1. Replace verify_password and get_user functions
     pattern_verify = r"def verify_password\(password:\s*str,\s*hashed:\s*str\)\s*->\s*bool:.*?(?=\ndef is_user_suspended|\n@|\Z)"
@@ -186,17 +195,6 @@ def patch_main_py(file_path):
                 content = content.replace(skip_paths_block.group(0), new_block, 1)
                 print(f"[+] Added {len(to_add)} authentication endpoints to VPN skip paths.")
 
-    # 3. Ensure login current_device_id updates do not crash if column issue occurs
-    pattern_device = r'(cursor\.execute\("UPDATE users SET current_device_id = \? WHERE username = \?", \(device_id, user\[1\]\)\)\s*conn\.commit\(\))'
-    if re.search(pattern_device, content):
-        safe_device = """try:
-            cursor.execute("UPDATE users SET current_device_id = ? WHERE username = ?", (device_id, user[1]))
-            conn.commit()
-        except Exception as _e:
-            pass"""
-        content = re.sub(pattern_device, safe_device, content, count=1)
-        print("[+] Wrapped current_device_id update in fail-safe handler.")
-
     # Write patched content
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -204,10 +202,10 @@ def patch_main_py(file_path):
     # Validate Python syntax
     try:
         py_compile.compile(file_path, doraise=True)
-        print("[✓] Syntax compilation check PASSED.")
+        print("[+] Syntax compilation check PASSED.")
         return True
     except Exception as compile_err:
-        print(f"[✗] Syntax check FAILED: {compile_err}. Reverting from backup...")
+        print(f"[!] Syntax check FAILED: {compile_err}. Reverting from backup...")
         shutil.copyfile(backup_path, file_path)
         return False
 
@@ -215,7 +213,7 @@ def patch_main_py(file_path):
 def main():
     target = sys.argv[1] if len(sys.argv) > 1 else find_target_main_py()
     if not target:
-        print("[✗] Error: Unable to locate backend/main.py. Specify path as argument.")
+        print("[!] Error: Unable to locate backend/main.py. Specify path as argument.")
         sys.exit(1)
 
     success = patch_main_py(target)
