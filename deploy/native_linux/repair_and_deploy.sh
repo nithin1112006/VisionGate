@@ -378,7 +378,7 @@ map $http_upgrade $connection_upgrade {
 server {
     listen 80;
     listen [::]:80;
-    server_name app.srishakthicgpa.in attenda.srishakthicgpa.in localhost _;
+    server_name app.srishakthicgpa.in localhost _;
 
     # Cloudflare Real IP Restoration
     set_real_ip_from 173.245.48.0/20;
@@ -497,8 +497,6 @@ credentials-file: /etc/cloudflared/credentials.json
 ingress:
   - hostname: app.srishakthicgpa.in
     service: http://127.0.0.1:80
-  - hostname: attenda.srishakthicgpa.in
-    service: http://127.0.0.1:80
   - service: http_status:404
 EOF
 
@@ -548,7 +546,6 @@ echo -e "Operational Status Summary:"
 echo -e "  - Backend Loopback:   http://127.0.0.1:8001/health ($(curl -sf http://127.0.0.1:8001/health || echo 'offline'))"
 echo -e "  - Nginx Ingress:      http://127.0.0.1/healthz ($(curl -sf http://127.0.0.1/healthz || echo 'offline'))"
 echo -e "  - Public Tunnel URL:  https://app.srishakthicgpa.in (Active & Verified)"
-echo -e "  - Fallback URL:       https://attenda.srishakthicgpa.in"
 echo -e "  - Database Tables:    ${TABLE_COUNT} verified"
 echo -e "  - Systemd Service:    sudo systemctl status attenda-backend"
 echo -e "  - Ingress Service:    sudo systemctl status cloudflared"
