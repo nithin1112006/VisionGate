@@ -41,6 +41,7 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386'
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
         'PERMISSION_CAMERA=1',
@@ -51,4 +52,48 @@ post_install do |installer|
       ]
     end
   end
+  installer.aggregate_targets.each do |target|
+    target.xcconfigs.each do |config_name, config_file|
+      config_file.attributes['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386'
+      config_file.save_as(target.xcconfig_path(config_name))
+    end
+  end
+
+  # Auto-patch MLKit binary frameworks for Apple Silicon iOS Simulator (platform 2 -> 7)
+  system("python3 -c \"
+import os, struct
+
+def patch_file_in_place(filepath):
+    if not os.path.exists(filepath): return
+    with open(filepath, 'rb') as f:
+        data = bytearray(f.read())
+    count = 0
+    i = 0
+    magic = b'\\xcf\\xfa\\xed\\xfe'
+    while True:
+        pos = data.find(magic, i)
+        if pos == -1: break
+        i = pos + 4
+        if pos + 32 > len(data): continue
+        cputype = struct.unpack_from('<I', data, pos + 4)[0]
+        if cputype == 0x0100000c: # arm64
+            ncmds = struct.unpack_from('<I', data, pos + 16)[0]
+            offset = pos + 32
+            for _ in range(ncmds):
+                if offset + 8 > len(data): break
+                cmd, cmdsize = struct.unpack_from('<II', data, offset)
+                if cmd == 0x32: # LC_BUILD_VERSION
+                    if offset + 12 <= len(data):
+                        platform = struct.unpack_from('<I', data, offset + 8)[0]
+                        if platform == 2: # PLATFORM_IOS -> PLATFORM_IOSSIMULATOR (7)
+                            struct.pack_into('<I', data, offset + 8, 7)
+                            count += 1
+                offset += cmdsize
+    if count > 0:
+        with open(filepath, 'wb') as f:
+            f.write(data)
+
+for fw in ['MLImage', 'MLKitCommon', 'MLKitFaceDetection', 'MLKitVision']:
+    patch_file_in_place(f'Pods/{fw}/Frameworks/{fw}.framework/{fw}')
+\"")
 end
