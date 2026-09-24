@@ -54,6 +54,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
   // Live Attendance Session State
   List<dynamic> _todayPeriods = [];
   Map<String, dynamic> _sessionPrefs = {};
+  final Map<int, bool> _periodWifiRequired = {};
   bool _isLiveSessionLoading = false;
   Timer? _liveSessionRefreshTimer;
 
@@ -102,6 +103,19 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
             _todayPeriods = data['periods'] ?? [];
             _sessionPrefs = data['prefs'] ?? {};
             _isLiveSessionLoading = false;
+
+            // Sync per-period Wi-Fi preferences
+            for (var p in _todayPeriods) {
+              if (p is Map<String, dynamic>) {
+                final pNum = p['period_number'] as int? ?? 1;
+                final sess = p['session'];
+                if (sess != null && sess['require_wifi'] != null) {
+                  _periodWifiRequired[pNum] = sess['require_wifi'] == true;
+                } else if (!_periodWifiRequired.containsKey(pNum)) {
+                  _periodWifiRequired[pNum] = (_sessionPrefs['require_wifi'] as bool?) ?? true;
+                }
+              }
+            }
           });
         }
       }
@@ -110,8 +124,54 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     }
   }
 
-  Future<void> _startCheckin(Map<String, dynamic> period, {List<int>? periodNumbers}) async {
+  Future<void> _toggleSessionWifi(String sessionId, bool requireWifi) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$API_URL/api/v1/class-session/toggle-wifi'),
+        headers: _authHeaders,
+        body: json.encode({
+          'session_id': sessionId,
+          'require_wifi': requireWifi,
+        }),
+      ).timeout(const Duration(seconds: 15));
+      if (res.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                requireWifi
+                    ? "📶 Campus Wi-Fi is now REQUIRED for students."
+                    : "🌐 Cellular / Mobile Data is now ALLOWED (Campus GPS active).",
+              ),
+              backgroundColor: requireWifi ? const Color(0xFF1E3A8A) : const Color(0xFF059669),
+            ),
+          );
+        }
+        await _fetchTodayPeriods();
+      } else {
+        final err = json.decode(res.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(err['detail'] ?? "Failed to update Wi-Fi requirement"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _startCheckin(Map<String, dynamic> period, {List<int>? periodNumbers, bool? requireWifi}) async {
     final periodsToOpen = periodNumbers ?? [period['period_number'] as int];
+    final pNum = period['period_number'] as int? ?? 1;
+    final bool wifiSetting = requireWifi ?? _periodWifiRequired[pNum] ?? ((_sessionPrefs['require_wifi'] as bool?) ?? true);
     try {
       final dateStr = "${_selectedDate.year.toString().padLeft(4, '0')}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}";
       final res = await http.post(
@@ -127,13 +187,16 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
           'subject_code': period['subject_code'],
           'subject_name': period['subject_name'],
           'target_date': dateStr,
+          'require_wifi': wifiSetting,
         }),
       ).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("Check-in opened for Period ${periodsToOpen.join(', ')}"),
+              content: Text(
+                "Check-in opened for Period ${periodsToOpen.join(', ')} (${wifiSetting ? 'Campus Wi-Fi' : 'Cellular Allowed'})",
+              ),
               backgroundColor: const Color(0xFF059669),
             ),
           );
@@ -247,6 +310,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     int checkoutGrace = _sessionPrefs['checkout_grace_mins'] ?? 5;
     int openWindow = _sessionPrefs['open_window_mins'] ?? 15;
     bool allowRetro = _sessionPrefs['allow_retroactive'] ?? true;
+    bool requireWifi = _sessionPrefs['require_wifi'] ?? true;
 
     await showDialog(
       context: context,
@@ -290,6 +354,13 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
                   value: allowRetro,
                   onChanged: (v) => setDlgState(() => allowRetro = v),
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text("Require Campus Wi-Fi by Default", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  subtitle: const Text("When disabled, students can mark attendance over cellular data within campus GPS", style: TextStyle(fontSize: 11)),
+                  value: requireWifi,
+                  onChanged: (v) => setDlgState(() => requireWifi = v),
+                ),
               ],
             ),
           ),
@@ -307,6 +378,7 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
                     'checkout_grace_mins': checkoutGrace,
                     'open_window_mins': openWindow,
                     'allow_retroactive': allowRetro,
+                    'require_wifi': requireWifi,
                   }),
                 );
                 await _fetchTodayPeriods();
@@ -1868,6 +1940,9 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     final absentCount = session != null ? (session['absent_count'] ?? 0) : 0;
     final checkoutCount = session != null ? (session['checkout_count'] ?? 0) : 0;
     final sessionId = session != null ? (session['session_id'] ?? '') : '';
+    final bool sessionRequireWifi = (session != null && session['require_wifi'] != null)
+        ? (session['require_wifi'] == true)
+        : (_periodWifiRequired[pNum] ?? ((_sessionPrefs['require_wifi'] as bool?) ?? true));
 
     Color borderColor = const Color(0xFFE2E8F0);
     Color headerBg = const Color(0xFFF8FAFC);
@@ -1957,6 +2032,9 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
                   ),
                 ],
                 const Spacer(),
+                // Wi-Fi Mode Badge
+                _buildWifiModeBadge(requireWifi: sessionRequireWifi),
+                const SizedBox(width: 6),
                 // Status Pill
                 _buildSessionStatusBadge(status, isCurrent),
               ],
@@ -2171,6 +2249,58 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     );
   }
 
+  Widget _buildWifiModeBadge({required bool requireWifi}) {
+    if (requireWifi) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E3A8A).withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF1E3A8A).withValues(alpha: 0.2)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_rounded, size: 12, color: Color(0xFF1E3A8A)),
+            SizedBox(width: 4),
+            Text(
+              "Wi-Fi Req",
+              style: TextStyle(
+                color: Color(0xFF1E3A8A),
+                fontWeight: FontWeight.w700,
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF059669).withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF059669).withValues(alpha: 0.3)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cell_tower_rounded, size: 12, color: Color(0xFF059669)),
+            SizedBox(width: 4),
+            Text(
+              "Cellular OK",
+              style: TextStyle(
+                color: Color(0xFF059669),
+                fontWeight: FontWeight.w700,
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
   Widget _buildPeriodActionButtons({
     required Map<String, dynamic> period,
     required String status,
@@ -2179,23 +2309,125 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
     required String classSummary,
     required int presentCount,
   }) {
+    final pNum = period['period_number'] as int? ?? 1;
+    final session = period['session'];
+    final bool currentWifiReq = (session != null && session['require_wifi'] != null)
+        ? (session['require_wifi'] == true)
+        : (_periodWifiRequired[pNum] ?? ((_sessionPrefs['require_wifi'] as bool?) ?? true));
+
     if (status == 'pending') {
-      return Row(
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF059669),
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          Row(
+            children: [
+              const Text(
+                "Student Network Mode:",
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF475569),
+                ),
               ),
-              icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: const Text(
-                "Start Attendance Check-In",
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+              const SizedBox(width: 8),
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () {
+                  setState(() {
+                    _periodWifiRequired[pNum] = true;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: currentWifiReq ? const Color(0xFF1E3A8A) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: currentWifiReq ? const Color(0xFF1E3A8A) : const Color(0xFFE2E8F0),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.wifi_rounded,
+                        size: 13,
+                        color: currentWifiReq ? Colors.white : const Color(0xFF64748B),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        "Campus Wi-Fi",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: currentWifiReq ? Colors.white : const Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              onPressed: () => _startCheckin(period),
-            ),
+              const SizedBox(width: 6),
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () {
+                  setState(() {
+                    _periodWifiRequired[pNum] = false;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: !currentWifiReq ? const Color(0xFF059669) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: !currentWifiReq ? const Color(0xFF059669) : const Color(0xFFE2E8F0),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.cell_tower_rounded,
+                        size: 13,
+                        color: !currentWifiReq ? Colors.white : const Color(0xFF64748B),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        "Without Wi-Fi (Cellular)",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: !currentWifiReq ? Colors.white : const Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF059669),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                  label: Text(
+                    currentWifiReq
+                        ? "Start Attendance Check-In (Wi-Fi)"
+                        : "Start Attendance Check-In (Cellular OK)",
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  onPressed: () => _startCheckin(period, requireWifi: currentWifiReq),
+                ),
+              ),
+            ],
           ),
         ],
       );
@@ -2206,6 +2438,16 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
         spacing: 8,
         runSpacing: 8,
         children: [
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A),
+              side: BorderSide(color: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: Icon(currentWifiReq ? Icons.cell_tower_rounded : Icons.wifi_rounded, size: 16),
+            label: Text(currentWifiReq ? "Allow Cellular" : "Require Wi-Fi", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+            onPressed: () => _toggleSessionWifi(sessionId, !currentWifiReq),
+          ),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFD97706),
@@ -2258,6 +2500,16 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
         children: [
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
+              foregroundColor: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A),
+              side: BorderSide(color: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: Icon(currentWifiReq ? Icons.cell_tower_rounded : Icons.wifi_rounded, size: 16),
+            label: Text(currentWifiReq ? "Allow Cellular" : "Require Wi-Fi", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+            onPressed: () => _toggleSessionWifi(sessionId, !currentWifiReq),
+          ),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2563EB),
               side: const BorderSide(color: Color(0xFF2563EB)),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -2296,6 +2548,16 @@ class _StaffScheduleWorkingListTabState extends State<StaffScheduleWorkingListTa
         spacing: 8,
         runSpacing: 8,
         children: [
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A),
+              side: BorderSide(color: currentWifiReq ? const Color(0xFF059669) : const Color(0xFF1E3A8A)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: Icon(currentWifiReq ? Icons.cell_tower_rounded : Icons.wifi_rounded, size: 16),
+            label: Text(currentWifiReq ? "Allow Cellular" : "Require Wi-Fi", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+            onPressed: () => _toggleSessionWifi(sessionId, !currentWifiReq),
+          ),
           FilledButton.icon(
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFFDC2626),

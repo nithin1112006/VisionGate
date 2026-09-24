@@ -256,8 +256,12 @@ def preprocess_image_data(img_np_or_bytes):
 
     return img
 
-def extract_face(img, _recursion_depth=0):
-    """Extract face from image with multi-angle rotation, selfie-flip fallback, and thread locking."""
+def extract_face(img, _recursion_depth=0, orientation=0):
+    """
+    Extract face from image using high-speed single-pass oriented detection.
+    Prioritizes client-provided orientation (0, 90, 180, 270) to eliminate
+    the redundant 6-pass rotation loop.
+    """
     global use_fallback, face_app, face_cascade, _face_app_lock
 
     if img is None or not hasattr(img, "shape") or img.size == 0:
@@ -268,53 +272,61 @@ def extract_face(img, _recursion_depth=0):
 
     if not use_fallback and face_app is not None:
         try:
-            # 1. Direct detection on original image
+            # Map client orientation to OpenCV rotation code
+            rot_map = {
+                90: (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
+                270: (cv2.ROTATE_90_COUNTERCLOCKWISE, "270_CCW"),
+                180: (cv2.ROTATE_180, "180"),
+            }
+            primary_rot = rot_map.get(int(orientation or 0), (None, "Original"))
+
+            # 1. Primary pass: evaluate directly in client orientation
+            primary_img = img if primary_rot[0] is None else cv2.rotate(img, primary_rot[0])
             with _face_app_lock:
-                faces = face_app.get(img)
+                faces = face_app.get(primary_img)
+
             if faces and len(faces) > 0:
                 best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
                 if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = primary_img
+                    best_face._rot = primary_rot[0]
                     return best_face
 
-            # 2. Flipped horizontal (front/selfie camera mirroring)
-            flipped = cv2.flip(img, 1)
+            # 2. Fast selfie mirror check on the same orientation
+            flipped = cv2.flip(primary_img, 1)
             with _face_app_lock:
                 faces = face_app.get(flipped)
             if faces and len(faces) > 0:
                 best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
                 if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = flipped
+                    best_face._rot = primary_rot[0]
                     return best_face
 
-            # 3. 90 deg clockwise (phone portrait orientation)
-            rot90 = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-            with _face_app_lock:
-                faces = face_app.get(rot90)
-            if faces and len(faces) > 0:
-                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                if best_face.embedding is not None and len(best_face.embedding) > 0:
-                    return best_face
+            # 3. Targeted fallback: only check alternative rotations if primary orientation completely failed
+            fallback_rotations = [
+                r for r in [
+                    (None, "Original"),
+                    (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
+                    (cv2.ROTATE_90_COUNTERCLOCKWISE, "270_CCW"),
+                    (cv2.ROTATE_180, "180")
+                ] if r[0] != primary_rot[0]
+            ]
 
-            # 4. 90 deg counter-clockwise (270 deg)
-            rot270 = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            with _face_app_lock:
-                faces = face_app.get(rot270)
-            if faces and len(faces) > 0:
-                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                if best_face.embedding is not None and len(best_face.embedding) > 0:
-                    return best_face
+            for fb_rot, fb_name in fallback_rotations:
+                fb_img = img if fb_rot is None else cv2.rotate(img, fb_rot)
+                with _face_app_lock:
+                    faces = face_app.get(fb_img)
+                if faces and len(faces) > 0:
+                    best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+                    if best_face.embedding is not None and len(best_face.embedding) > 0:
+                        best_face._oriented_img = fb_img
+                        best_face._rot = fb_rot
+                        return best_face
 
-            # 5. 180 deg upside-down
-            rot180 = cv2.rotate(img, cv2.ROTATE_180)
-            with _face_app_lock:
-                faces = face_app.get(rot180)
-            if faces and len(faces) > 0:
-                best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-                if best_face.embedding is not None and len(best_face.embedding) > 0:
-                    return best_face
-
-            # 6. Contrast-enhanced CLAHE fallback (for low-light/harsh backlighting)
+            # 4. Low-light CLAHE fallback (only on primary orientation)
             try:
-                lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+                lab = cv2.cvtColor(primary_img, cv2.COLOR_BGR2LAB)
                 l_channel, a, b = cv2.split(lab)
                 clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
                 cl = clahe.apply(l_channel)
@@ -324,6 +336,8 @@ def extract_face(img, _recursion_depth=0):
                 if faces and len(faces) > 0:
                     best_face = max(faces, key=lambda f: getattr(f, "det_score", 0.0) or (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
                     if best_face.embedding is not None and len(best_face.embedding) > 0:
+                        best_face._oriented_img = enhanced
+                        best_face._rot = primary_rot[0]
                         return best_face
             except Exception:
                 pass

@@ -796,6 +796,7 @@ ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS checkin_opened_at
 ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS checkout_opened_at  TIMESTAMP;
 ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS checkin_closed_at   TIMESTAMP;
 ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS checkout_closed_at  TIMESTAMP;
+ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS require_wifi         BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_cas_staff_date         ON class_attendance_sessions (staff_reg_no, date);
 CREATE INDEX IF NOT EXISTS idx_cas_date_dept          ON class_attendance_sessions (date, dept);

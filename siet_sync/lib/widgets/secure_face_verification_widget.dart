@@ -171,9 +171,11 @@ class _SecureFaceVerificationWidgetState
           },
         );
       } else {
+        final sensorOrientation = _controller?.description.sensorOrientation ?? 0;
         result = await FaceVerificationService.verifyAndMarkAttendance(
           regNo: widget.regNo,
           imageFile: capturedImage,
+          orientation: sensorOrientation,
           onError: (error) {
             if (mounted) {
               setState(() {

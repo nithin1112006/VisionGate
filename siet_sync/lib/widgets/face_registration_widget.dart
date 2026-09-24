@@ -1187,6 +1187,7 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
       }
 
       final clientPlatform = kIsWeb ? 'web' : 'app';
+      final sensorOrientation = _controller?.description.sensorOrientation ?? 0;
       final uri = Uri.parse("$API_URL/mark_attendance?reg_no=${Uri.encodeComponent(widget.regNo)}");
       var request = http.MultipartRequest("POST", uri);
 
@@ -1194,6 +1195,8 @@ class _FaceVerificationWidgetState extends State<FaceVerificationWidget> with Si
       request.fields['reg_no'] = widget.regNo;
       request.fields['client_platform'] = clientPlatform;
       request.headers['X-Client-Platform'] = clientPlatform;
+      request.fields['client_orientation'] = sensorOrientation.toString();
+      request.headers['X-Client-Orientation'] = sensorOrientation.toString();
 
       Position? position = preVerif.position ?? GeoFenceChecker.lastFetchedPosition;
 

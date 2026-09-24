@@ -1,0 +1,94 @@
+# Codemagic CI/CD configuration for VisionGate iOS Application (siet_sync subfolder root)
+
+workflows:
+  ios-simulator:
+    name: iOS Simulator Build (Test & Validation - No Apple Developer Account Needed)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter dependencies
+        script: |
+          flutter packages pub get
+      - name: Pod install
+        script: |
+          cd ios
+          pod install
+      - name: Build for iOS Simulator
+        script: |
+          flutter build ios --simulator --debug --no-codesign
+      - name: Package Simulator App
+        script: |
+          cd build/ios/iphonesimulator
+          zip -r -X Runner.app.zip Runner.app
+    artifacts:
+      - build/ios/iphonesimulator/Runner.app.zip
+      - /tmp/xcodebuild_logs/*.log
+
+  ios-unsigned-ipa:
+    name: iOS Unsigned IPA (For Physical Device Sideloading / AltStore / Sideloadly)
+    instance_type: mac_mini_m2
+    max_build_duration: 35
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter dependencies
+        script: |
+          flutter packages pub get
+      - name: Pod install
+        script: |
+          cd ios
+          pod install
+      - name: Build iOS Release (Unsigned)
+        script: |
+          flutter build ios --release --no-codesign
+      - name: Package Unsigned IPA
+        script: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r -X VisionGate-unsigned.ipa Payload
+    artifacts:
+      - build/ios/iphoneos/VisionGate-unsigned.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+  ios-release:
+    name: iOS Signed Release (TestFlight & App Store)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      groups:
+        - ios_credentials # Configure in Codemagic UI: App Store Connect API key or Certificates
+      vars:
+        BUNDLE_ID: "com.siet.visiongate"
+        XCODE_WORKSPACE: "ios/Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter dependencies
+        script: |
+          flutter packages pub get
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+      - name: Pod install
+        script: |
+          cd ios
+          pod install
+      - name: Build IPA
+        script: |
+          flutter build ipa --release
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false

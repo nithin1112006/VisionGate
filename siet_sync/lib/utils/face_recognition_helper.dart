@@ -15,7 +15,7 @@ class FaceRecognitionHelper {
 
   static const List<num> _laplacianKernel = [0, -1, 0, -1, 4, -1, 0, -1, 0];
 
-  /// Capture the frame with automatic low-light detection & screen illumination
+  /// Capture the frame with automatic low-light detection, screen illumination, and 640px downscaling
   static Future<XFile?> captureBestFrame(
     CameraController controller, {
     int maxFrames = 3,
@@ -33,18 +33,59 @@ class FaceRecognitionHelper {
           // Trigger high brightness screen illumination
           await ScreenIlluminationService.instance.activate(isAutoTriggered: true);
 
-          // Allow 450ms for front camera hardware auto-exposure (AE) to adapt to the illuminated face
-          await Future.delayed(const Duration(milliseconds: 450));
+          // Allow brief 300ms for front camera hardware auto-exposure (AE) to adapt to the illuminated face
+          await Future.delayed(const Duration(milliseconds: 300));
 
           // Retake frame with proper illumination
           final illuminatedFrame = await controller.takePicture();
-          return illuminatedFrame;
+          return await downscaleAndCompressFrame(illuminatedFrame);
         }
       }
 
-      return initialFrame;
+      return await downscaleAndCompressFrame(initialFrame);
     } catch (e) {
       return null;
+    }
+  }
+
+  /// Ultra-fast client downscale & compress to 640px JPEG (quality 85, ~45 KB payload)
+  static Future<XFile> downscaleAndCompressFrame(
+    XFile rawFrame, {
+    int maxSize = 640,
+    int quality = 85,
+  }) async {
+    try {
+      final bytes = await rawFrame.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return rawFrame;
+
+      img.Image processed = decoded;
+      if (decoded.width > maxSize || decoded.height > maxSize) {
+        final aspectRatio = decoded.width / decoded.height;
+        int newWidth, newHeight;
+        if (decoded.width > decoded.height) {
+          newWidth = maxSize;
+          newHeight = (maxSize / aspectRatio).round();
+        } else {
+          newHeight = maxSize;
+          newWidth = (maxSize * aspectRatio).round();
+        }
+        processed = img.copyResize(
+          decoded,
+          width: newWidth,
+          height: newHeight,
+          interpolation: img.Interpolation.linear,
+        );
+      }
+
+      final compressedBytes = Uint8List.fromList(img.encodeJpg(processed, quality: quality));
+      return XFile.fromData(
+        compressedBytes,
+        mimeType: 'image/jpeg',
+        name: 'face_640.jpg',
+      );
+    } catch (_) {
+      return rawFrame;
     }
   }
 

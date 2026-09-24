@@ -258,6 +258,7 @@ class _StudentDashboardPageState extends State<StudentDashboardPage> with Widget
     final isCheckoutOpen = sess['checkout_open'] == true;
     final alreadyIn = sess['already_checked_in'] == true;
     final alreadyOut = sess['already_checked_out'] == true;
+    final bool requireWifi = sess['require_wifi'] != false;
 
     // If checkin open and not yet marked
     if (isCheckinOpen && !alreadyIn) {
@@ -284,13 +285,47 @@ class _StudentDashboardPageState extends State<StudentDashboardPage> with Widget
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    "Attendance Window Open · Period $periods",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          "Attendance Window Open · Period $periods",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              requireWifi ? Icons.wifi_rounded : Icons.cell_tower_rounded,
+                              size: 11,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              requireWifi ? "Wi-Fi Req" : "Cellular OK",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     "$subName  ·  $staffName",
@@ -372,13 +407,47 @@ class _StudentDashboardPageState extends State<StudentDashboardPage> with Widget
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    "Check-Out Window Open · $subName",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          "Check-Out Window Open · $subName",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              requireWifi ? Icons.wifi_rounded : Icons.cell_tower_rounded,
+                              size: 11,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              requireWifi ? "Wi-Fi Req" : "Cellular OK",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     "Record your departure for Period $periods",
@@ -2264,12 +2333,14 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
 
       final isCheckout = _isCheckoutOpen;
       final sessionId = widget.activeSession?['session_id']?.toString();
+      final bool sessRequireWifi = widget.activeSession?['require_wifi'] != false;
 
       final result = isCheckout
           ? await FaceVerificationService.markStudentCheckout(
               token: widget.token,
               imageFile: captured,
               sessionId: sessionId,
+              requireWifi: sessRequireWifi,
               onError: (err) {
                 if (mounted) {
                   setState(() {
@@ -2282,6 +2353,7 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
           : await FaceVerificationService.markStudentAttendance(
               token: widget.token,
               imageFile: captured,
+              requireWifi: sessRequireWifi,
               onError: (err) {
                 if (mounted) {
                   setState(() {
@@ -3063,6 +3135,43 @@ class _StudentMarkAttendanceTabState extends State<_StudentMarkAttendanceTab> wi
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: isDark ? Colors.white70 : const Color(0xFF065F46),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (widget.activeSession?['require_wifi'] == false)
+                              ? const Color(0xFF059669).withValues(alpha: 0.15)
+                              : const Color(0xFF1E3A8A).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              (widget.activeSession?['require_wifi'] == false)
+                                  ? Icons.cell_tower_rounded
+                                  : Icons.wifi_rounded,
+                              size: 11,
+                              color: (widget.activeSession?['require_wifi'] == false)
+                                  ? const Color(0xFF059669)
+                                  : const Color(0xFF1E3A8A),
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              (widget.activeSession?['require_wifi'] == false)
+                                  ? 'Cellular OK'
+                                  : 'Wi-Fi Req',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: (widget.activeSession?['require_wifi'] == false)
+                                    ? const Color(0xFF059669)
+                                    : const Color(0xFF1E3A8A),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],

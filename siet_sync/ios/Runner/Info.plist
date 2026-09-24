@@ -45,13 +45,37 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is required for biometric facial recognition and student attendance marking.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required for audio during camera operations.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access is required to select document proofs and roll sheet records.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location is required to verify attendance within campus.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Location is required to verify attendance within campus.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Location is required to verify attendance within campus.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo library access is required to save attendance documents and reports.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>https</string>
+		<string>http</string>
+		<string>tel</string>
+		<string>mailto</string>
 	</array>
 </dict>
 </plist>

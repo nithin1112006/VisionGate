@@ -8,6 +8,7 @@ import '../utils/wifi_check.dart';
 import '../utils/api_response_utils.dart';
 import 'pre_verification_service.dart';
 import 'client_face_prefilter.dart';
+import '../utils/face_recognition_helper.dart';
 
 /// Secure face verification service with liveness detection and audit logging
 class FaceVerificationService {
@@ -107,7 +108,9 @@ class FaceVerificationService {
   static Future<Map<String, dynamic>> verifyAndMarkAttendance({
     required String regNo,
     required XFile imageFile,
+    int orientation = 0,
     String? token,
+    bool requireWifi = true,
     VoidCallback? onVerificationComplete,
     VoidCallback? onVerificationFailed,
     Function(String)? onError,
@@ -138,7 +141,7 @@ class FaceVerificationService {
     }
 
     // 2. WiFi/Network check (app only)
-    if (!kIsWeb && !AppSettings.allowAnyNetwork && preVerif.wifiError != null) {
+    if (!kIsWeb && requireWifi && !AppSettings.allowAnyNetwork && preVerif.wifiError != null) {
       onError?.call(preVerif.wifiError!);
       return {'success': false, 'error': preVerif.wifiError, 'wifi_blocked': true};
     }
@@ -169,8 +172,9 @@ class FaceVerificationService {
     }
 
     try {
-      // Read image bytes
-      final bytes = await imageFile.readAsBytes();
+      // Ensure image is downscaled to max 640px before uploading to eliminate network delay
+      final compressedFile = await FaceRecognitionHelper.downscaleAndCompressFrame(imageFile);
+      final bytes = await compressedFile.readAsBytes();
 
       // Build multipart request
       final clientPlatform = kIsWeb ? 'web' : 'app';
@@ -181,8 +185,10 @@ class FaceVerificationService {
         ), // Also add as query param
       );
 
-      // Add reg_no as a field (form data)
+      // Add reg_no and orientation fields
       request.fields['reg_no'] = regNo;
+      request.fields['client_orientation'] = orientation.toString();
+      request.headers['X-Client-Orientation'] = orientation.toString();
 
       // Always send client platform — backend check_wifi and _enforce_web_geofence
       // both rely on this to distinguish web vs app requests
@@ -608,6 +614,7 @@ class FaceVerificationService {
   static Future<Map<String, dynamic>> markStudentAttendance({
     required String token,
     required XFile imageFile,
+    bool requireWifi = true,
     VoidCallback? onVerificationComplete,
     VoidCallback? onVerificationFailed,
     Function(String)? onError,
@@ -618,6 +625,11 @@ class FaceVerificationService {
     if (preVerif.vpnError != null) {
       onError?.call(preVerif.vpnError!);
       return {'success': false, 'error': preVerif.vpnError, 'vpn_blocked': true};
+    }
+
+    if (!kIsWeb && requireWifi && !AppSettings.allowAnyNetwork && preVerif.wifiError != null) {
+      onError?.call(preVerif.wifiError!);
+      return {'success': false, 'error': preVerif.wifiError, 'wifi_blocked': true};
     }
 
     // On-device Google ML Kit edge pre-filter (fast mobile check)
@@ -709,6 +721,7 @@ class FaceVerificationService {
     required String token,
     required XFile imageFile,
     String? sessionId,
+    bool requireWifi = true,
     VoidCallback? onVerificationComplete,
     VoidCallback? onVerificationFailed,
     Function(String)? onError,
@@ -719,6 +732,11 @@ class FaceVerificationService {
     if (preVerif.vpnError != null) {
       onError?.call(preVerif.vpnError!);
       return {'success': false, 'error': preVerif.vpnError, 'vpn_blocked': true};
+    }
+
+    if (!kIsWeb && requireWifi && !AppSettings.allowAnyNetwork && preVerif.wifiError != null) {
+      onError?.call(preVerif.wifiError!);
+      return {'success': false, 'error': preVerif.wifiError, 'wifi_blocked': true};
     }
 
     // On-device Google ML Kit edge pre-filter (fast mobile check)

@@ -6899,6 +6899,7 @@ def _run_ddl():
             checkout_closed_at TIMESTAMP,
             status           VARCHAR(30) DEFAULT 'pending',
             notes            TEXT,
+            require_wifi     BOOLEAN NOT NULL DEFAULT TRUE,
             created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -6906,6 +6907,7 @@ def _run_ddl():
         "CREATE INDEX IF NOT EXISTS idx_cas_date_dept ON class_attendance_sessions (date, dept)",
         "CREATE INDEX IF NOT EXISTS idx_cas_staff_date ON class_attendance_sessions (staff_reg_no, date)",
         "CREATE INDEX IF NOT EXISTS idx_cas_status ON class_attendance_sessions (status, date)",
+        "ALTER TABLE class_attendance_sessions ADD COLUMN IF NOT EXISTS require_wifi BOOLEAN NOT NULL DEFAULT TRUE",
     ]:
         try:
             cursor.execute(idx)
@@ -6921,9 +6923,14 @@ def _run_ddl():
             checkout_grace_mins   INTEGER DEFAULT 5,
             open_window_mins      INTEGER DEFAULT 15,
             allow_retroactive     BOOLEAN DEFAULT TRUE,
+            require_wifi          BOOLEAN NOT NULL DEFAULT TRUE,
             updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE class_session_staff_prefs ADD COLUMN IF NOT EXISTS require_wifi BOOLEAN NOT NULL DEFAULT TRUE")
+    except Exception:
+        pass
 
     # 8b. Student Academic Day Status — per-student per-date day-type registry
     cursor.execute("""
@@ -10422,13 +10429,14 @@ def preprocess_image_data(img_np_or_bytes):
 # -------------------------------------------------
 # FACE EXTRACTION - GUARANTEED TO WORK
 # -------------------------------------------------
-def extract_face(img, _recursion_depth=0):
+def extract_face(img, _recursion_depth=0, orientation=0):
     """
-    Extract face from image with quality checking and recursion protection.
+    Extract face from image with quality checking, single-pass orientation, and recursion protection.
 
     Args:
         img: Input image (BGR format)
         _recursion_depth: Internal counter to prevent infinite loops (don't set manually)
+        orientation: Client device sensor orientation in degrees (0, 90, 180, 270)
 
     Returns:
         Face object with embedding, or None if extraction fails
@@ -10528,59 +10536,82 @@ def extract_face(img, _recursion_depth=0):
         return face_result
 
     else:
-        # Use InsightFace
-        # Try Original upright first; if no face detected, try 90 CW, 90 CCW, 180 rotations for mobile photos
-        rotations = [
-            (None, "Original"),
-            (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
-            (cv2.ROTATE_90_COUNTERCLOCKWISE, "90_CCW"),
-            (cv2.ROTATE_180, "180"),
+        # High-Speed Single-Pass InsightFace Detection
+        rot_map = {
+            90: (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
+            270: (cv2.ROTATE_90_COUNTERCLOCKWISE, "270_CCW"),
+            180: (cv2.ROTATE_180, "180"),
+        }
+        primary_rot = rot_map.get(int(orientation or 0), (None, "Original"))
+
+        # 1. Primary pass: evaluate directly in client orientation (completes in 1 pass for 95%+ of scans)
+        primary_img = img if primary_rot[0] is None else cv2.rotate(img, primary_rot[0])
+        try:
+            with _face_app_lock:
+                faces = face_app.get(primary_img)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = primary_img
+                    best_face._rot = primary_rot[0]
+                    return best_face
+        except Exception as e:
+            print(f"Error in primary rotation {primary_rot[1]}: {e}")
+
+        # 2. Fast selfie mirror check on the primary orientation
+        try:
+            flipped = cv2.flip(primary_img, 1)
+            with _face_app_lock:
+                faces = face_app.get(flipped)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = flipped
+                    best_face._rot = primary_rot[0]
+                    return best_face
+        except Exception as e:
+            print(f"Error in selfie flipped check: {e}")
+
+        # 3. Targeted fallback: only check alternative rotations if primary orientation failed
+        fallback_rotations = [
+            r for r in [
+                (None, "Original"),
+                (cv2.ROTATE_90_CLOCKWISE, "90_CW"),
+                (cv2.ROTATE_90_COUNTERCLOCKWISE, "270_CCW"),
+                (cv2.ROTATE_180, "180")
+            ] if r[0] != primary_rot[0]
         ]
 
-        for rot, rot_name in rotations:
-            temp = img if rot is None else cv2.rotate(img, rot)
-
+        for fb_rot, fb_name in fallback_rotations:
+            fb_img = img if fb_rot is None else cv2.rotate(img, fb_rot)
             try:
                 with _face_app_lock:
-                    faces = face_app.get(temp)
+                    faces = face_app.get(fb_img)
                 if len(faces) == 0:
                     continue
-
-                # Pick largest face
-                face = max(
-                    faces,
-                    key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-                )
-
-                if face.embedding is not None and len(face.embedding) > 0:
-                    face._oriented_img = temp
-                    face._rot = rot
-                    print(f"InsightFace embedding found in rotation {rot_name}")
-                    return face
-                else:
-                    print(f"No embedding in rotation {rot_name}")
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = fb_img
+                    best_face._rot = fb_rot
+                    return best_face
             except Exception as e:
-                print(f"Error in rotation {rot_name}: {e}")
+                print(f"Error in fallback rotation {fb_name}: {e}")
                 continue
 
-        # Low-light adaptive illumination enhancement pass if initial detection failed
+        # 4. Low-light CLAHE fallback (only on primary orientation)
         try:
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            lab = cv2.cvtColor(primary_img, cv2.COLOR_BGR2LAB)
             l_ch, a_ch, b_ch = cv2.split(lab)
             clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             enhanced_bgr = cv2.cvtColor(cv2.merge((clahe.apply(l_ch), a_ch, b_ch)), cv2.COLOR_LAB2BGR)
-            for rot, rot_name in rotations:
-                temp_enh = enhanced_bgr if rot is None else cv2.rotate(enhanced_bgr, rot)
-                with _face_app_lock:
-                    faces = face_app.get(temp_enh)
-                if len(faces) == 0:
-                    continue
-                face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-                if face.embedding is not None and len(face.embedding) > 0:
-                    face._oriented_img = temp_enh
-                    face._rot = rot
-                    print(f"InsightFace embedding found in low-light enhanced pass ({rot_name})")
-                    return face
+            with _face_app_lock:
+                faces = face_app.get(enhanced_bgr)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                if best_face.embedding is not None and len(best_face.embedding) > 0:
+                    best_face._oriented_img = enhanced_bgr
+                    best_face._rot = primary_rot[0]
+                    return best_face
         except Exception as _enh_err:
             print(f"Low-light enhancement pass exception: {_enh_err}")
 
@@ -11188,11 +11219,26 @@ async def mark_attendance_secure(
     if lng is None and form_data is not None:
         lng = form_data.get("client_lng")
 
+    orientation = 0
+    if form_data is not None and form_data.get("client_orientation"):
+        try:
+            orientation = int(form_data.get("client_orientation"))
+        except:
+            pass
+    else:
+        hdr_orient = request.headers.get("X-Client-Orientation")
+        if hdr_orient:
+            try:
+                orientation = int(hdr_orient)
+            except:
+                pass
+
     validation_form = {
         "client_platform": platform,
         "client_lat": lat,
         "client_lng": lng,
-        "reg_no": reg_no
+        "reg_no": reg_no,
+        "client_orientation": orientation
     }
 
     # Run geofence first — if it's enabled and passes, WiFi check is redundant
@@ -11581,7 +11627,14 @@ def _secure_verify_and_mark(
             detail="Image is completely dark. Please ensure camera lens is uncovered.",
         )
 
-    face = extract_face(img)
+    client_orient = 0
+    if form_data and isinstance(form_data, dict):
+        try:
+            client_orient = int(form_data.get("client_orientation", 0))
+        except:
+            pass
+
+    face = extract_face(img, orientation=client_orient)
 
     if face is None:
         save_debug_image(img, f"fail_detection_{reg_no}")
@@ -26888,7 +26941,7 @@ async def student_mark_attendance(
     # 4. Active Faculty Attendance Recording Session Verification (CSO Guard)
     cursor.execute(
         """
-        SELECT session_id, period_numbers, subject_code, subject_name, status, staff_reg_no
+        SELECT session_id, period_numbers, subject_code, subject_name, status, staff_reg_no, require_wifi
         FROM class_attendance_sessions
         WHERE date = ? 
           AND TRIM(LOWER(dept)) = TRIM(LOWER(?)) 
@@ -26917,12 +26970,27 @@ async def student_mark_attendance(
         class_sub_code = active_class_sess.get("subject_code") or ""
         class_sub_name = active_class_sess.get("subject_name") or ""
         class_staff_reg = active_class_sess.get("staff_reg_no") or ""
+        sess_require_wifi = bool(active_class_sess.get("require_wifi", True)) if active_class_sess.get("require_wifi") is not None else True
     else:
         class_sess_id = active_class_sess[0]
         class_period_nums = active_class_sess[1]
         class_sub_code = active_class_sess[2]
         class_sub_name = active_class_sess[3]
         class_staff_reg = active_class_sess[5]
+        sess_require_wifi = bool(active_class_sess[6]) if len(active_class_sess) > 6 and active_class_sess[6] is not None else True
+
+    # 4b. Wi-Fi Enforcement Check
+    # If the faculty configured this session to require campus Wi-Fi, enforce network validation.
+    # If toggled off (Without Wi-Fi), allow cellular/mobile data while strict GPS campus geofencing & face biometrics remain active.
+    if sess_require_wifi:
+        try:
+            check_wifi(request)
+        except HTTPException as wifi_exc:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise wifi_exc
 
     first_pnum = int(str(class_period_nums).split(",")[0]) if str(class_period_nums) else 1
     session_period_name = f"Period {first_pnum}"
@@ -27984,7 +28052,8 @@ def get_student_today_timetable(request: Request, day: Optional[str] = Query(Non
     try:
         cursor.execute("""
             SELECT session_id, period_numbers, subject_code, subject_name,
-                   staff_reg_no, status, scheduled_start_time, scheduled_end_time
+                   staff_reg_no, status, scheduled_start_time, scheduled_end_time,
+                   require_wifi
             FROM class_attendance_sessions
             WHERE date = %s
               AND TRIM(LOWER(dept)) = TRIM(LOWER(%s))
@@ -28001,8 +28070,10 @@ def get_student_today_timetable(request: Request, day: Optional[str] = Query(Non
                 s_name = asr["subject_name"]
                 s_stat = asr["status"]
                 s_staff = asr["staff_reg_no"]
+                s_wifi = bool(asr.get("require_wifi", True)) if asr.get("require_wifi") is not None else True
             else:
-                s_id, p_nums_str, s_code, s_name, s_staff, s_stat, _, _ = asr
+                s_id, p_nums_str, s_code, s_name, s_staff, s_stat, _, _, *rest = asr
+                s_wifi = bool(rest[0]) if rest and rest[0] is not None else True
 
             # Check if student already checked in
             cursor.execute("""
@@ -28022,6 +28093,7 @@ def get_student_today_timetable(request: Request, day: Optional[str] = Query(Non
                         "status": s_stat,
                         "staff_reg_no": s_staff,
                         "has_checked_in": has_checked_in,
+                        "require_wifi": s_wifi,
                     }
     except Exception as e:
         print(f"[TIMETABLE] Active session check error: {e}")
@@ -28107,6 +28179,7 @@ def get_student_today_timetable(request: Request, day: Optional[str] = Query(Non
                 "is_substitute": p_num in sub_map,
                 "session_id": act_sess.get("session_id") if act_sess else None,
                 "session_status": act_sess.get("status") if act_sess else None,
+                "require_wifi": act_sess.get("require_wifi", True) if act_sess else True,
                 "has_checked_in": has_checked_in,
                 "attendance_status": personal_att,
             })
@@ -28259,7 +28332,8 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
     # Fetch active class_attendance_sessions for today
     cursor.execute("""
         SELECT session_id, period_numbers, subject_code, subject_name, staff_reg_no, status,
-               scheduled_start_time, scheduled_end_time, checkin_opened_at, checkin_closed_at
+               scheduled_start_time, scheduled_end_time, checkin_opened_at, checkin_closed_at,
+               require_wifi
         FROM class_attendance_sessions
         WHERE date = %s AND TRIM(LOWER(dept)) = TRIM(LOWER(%s))
           AND (semester = %s OR TRIM(batch) = TRIM(%s))
@@ -28277,8 +28351,10 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
             s_code = sr["subject_code"]
             s_name = sr["subject_name"]
             s_staff = sr["staff_reg_no"]
+            s_wifi = bool(sr.get("require_wifi", True)) if sr.get("require_wifi") is not None else True
         else:
-            sid, p_nums_str, s_code, s_name, s_staff, s_stat, _, _, _, _ = sr
+            sid, p_nums_str, s_code, s_name, s_staff, s_stat, _, _, _, _, *rest = sr
+            s_wifi = bool(rest[0]) if rest and rest[0] is not None else True
 
         for p_str in (p_nums_str or "").split(","):
             if p_str.strip().isdigit():
@@ -28290,6 +28366,7 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
                         "subject_code": s_code,
                         "subject_name": s_name,
                         "staff_reg_no": s_staff,
+                        "require_wifi": s_wifi,
                     }
 
     # Build per-period response objects
@@ -28312,6 +28389,7 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
         is_gate_open = bool(sess_info and sess_info.get("status") == "checkin_open")
         session_id = sess_info.get("session_id") if sess_info else None
         session_status = sess_info.get("status") if sess_info else "not_started"
+        period_require_wifi = sess_info.get("require_wifi", True) if sess_info else True
 
         # Student's attendance status for this period
         if att_record:
@@ -28368,7 +28446,8 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
                     "faculty": faculty,
                     "room": room,
                     "start_time": p_start,
-                    "end_time": p_end
+                    "end_time": p_end,
+                    "require_wifi": period_require_wifi,
                 }
         elif session_status in ("closed", "checkin_closed"):
             btn_state = "session_closed"
@@ -28392,6 +28471,7 @@ def get_student_today_period_status(request: Request, date: Optional[str] = Quer
             "is_gate_open": is_gate_open,
             "session_id": session_id,
             "session_status": session_status,
+            "require_wifi": period_require_wifi,
             "attendance_status": att_status,
             "already_marked": already_marked,
             "can_mark": can_mark,
@@ -37331,31 +37411,36 @@ def _get_session_staff_prefs(staff_reg_no: str) -> dict:
         "checkout_grace_mins": 5,
         "open_window_mins": 15,
         "allow_retroactive": True,
+        "require_wifi": True,
     }
     try:
         cursor.execute(
             "SELECT checkin_grace_mins, checkout_required, checkout_grace_mins, "
-            "open_window_mins, allow_retroactive "
+            "open_window_mins, allow_retroactive, require_wifi "
             "FROM class_session_staff_prefs WHERE staff_reg_no=%s",
             (staff_reg_no,)
         )
         row = cursor.fetchone()
         if row:
             if isinstance(row, dict):
+                rw = row.get("require_wifi")
                 prefs_res = {
                     "checkin_grace_mins": row.get("checkin_grace_mins", 5),
                     "checkout_required": row.get("checkout_required", False),
                     "checkout_grace_mins": row.get("checkout_grace_mins", 5),
                     "open_window_mins": row.get("open_window_mins", 15),
                     "allow_retroactive": row.get("allow_retroactive", True),
+                    "require_wifi": bool(rw) if rw is not None else True,
                 }
             else:
+                rw = row[5] if len(row) > 5 and row[5] is not None else True
                 prefs_res = {
                     "checkin_grace_mins": row[0] or 5,
                     "checkout_required": bool(row[1]),
                     "checkout_grace_mins": row[2] or 5,
                     "open_window_mins": row[3] or 15,
                     "allow_retroactive": bool(row[4]) if row[4] is not None else True,
+                    "require_wifi": bool(rw),
                 }
     except Exception:
         pass
@@ -37609,20 +37694,22 @@ async def save_class_session_staff_prefs(request: Request):
     checkout_grace = int(data.get("checkout_grace_mins", 5))
     open_window = int(data.get("open_window_mins", 15))
     allow_retroactive = bool(data.get("allow_retroactive", True))
+    require_wifi = bool(data.get("require_wifi", True))
 
     cursor.execute("""
         INSERT INTO class_session_staff_prefs
             (staff_reg_no, checkin_grace_mins, checkout_required,
-             checkout_grace_mins, open_window_mins, allow_retroactive, updated_at)
-        VALUES (%s,%s,%s,%s,%s,%s,NOW())
+             checkout_grace_mins, open_window_mins, allow_retroactive, require_wifi, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())
         ON CONFLICT (staff_reg_no) DO UPDATE SET
             checkin_grace_mins  = EXCLUDED.checkin_grace_mins,
             checkout_required   = EXCLUDED.checkout_required,
             checkout_grace_mins = EXCLUDED.checkout_grace_mins,
             open_window_mins    = EXCLUDED.open_window_mins,
             allow_retroactive   = EXCLUDED.allow_retroactive,
+            require_wifi        = EXCLUDED.require_wifi,
             updated_at          = NOW()
-    """, (staff_reg_no, checkin_grace, checkout_required, checkout_grace, open_window, allow_retroactive))
+    """, (staff_reg_no, checkin_grace, checkout_required, checkout_grace, open_window, allow_retroactive, require_wifi))
     pg_adapter.conn.commit()
     _fast_cache.invalidate_prefix(f"staff_prefs:{staff_reg_no.lower()}")
     return {"success": True, "prefs": _get_session_staff_prefs(staff_reg_no)}
@@ -37707,7 +37794,8 @@ def get_today_periods_with_session_status(request: Request, target_date: Optiona
         cursor.execute("""
             SELECT session_id, period_numbers, status,
                    checkin_opened_at, checkin_closed_at,
-                   checkout_opened_at, checkout_closed_at
+                   checkout_opened_at, checkout_closed_at,
+                   require_wifi
             FROM class_attendance_sessions
             WHERE date = %s AND dept = %s AND batch = %s AND semester = %s
               AND section = %s AND subject_code = %s
@@ -37725,8 +37813,11 @@ def get_today_periods_with_session_status(request: Request, target_date: Optiona
                 s_close   = sess_row["checkin_closed_at"]
                 s_co_open = sess_row["checkout_opened_at"]
                 s_co_close= sess_row["checkout_closed_at"]
+                s_wifi_val= sess_row.get("require_wifi")
+                s_wifi    = bool(s_wifi_val) if s_wifi_val is not None else True
             else:
-                s_id, _, s_status, s_open, s_close, s_co_open, s_co_close = sess_row
+                s_id, _, s_status, s_open, s_close, s_co_open, s_co_close, *rest = sess_row
+                s_wifi = bool(rest[0]) if rest and rest[0] is not None else True
 
             # Count attendance
             cursor.execute(
@@ -37751,6 +37842,7 @@ def get_today_periods_with_session_status(request: Request, target_date: Optiona
             session_data = {
                 "session_id": s_id,
                 "status": s_status,
+                "require_wifi": s_wifi,
                 "checkin_opened_at": s_open.isoformat() if hasattr(s_open, "isoformat") else str(s_open) if s_open else None,
                 "checkin_closed_at": s_close.isoformat() if hasattr(s_close, "isoformat") else str(s_close) if s_close else None,
                 "checkout_opened_at": s_co_open.isoformat() if hasattr(s_co_open, "isoformat") else str(s_co_open) if s_co_open else None,
@@ -37812,6 +37904,13 @@ async def start_checkin_session(request: Request):
     period_list = sorted([int(p) for p in raw_periods])
     prefs       = _get_session_staff_prefs(staff_reg_no)
 
+    # Determine Wi-Fi requirement (override from request or fallback to staff saved preference)
+    req_wifi_in = data.get("require_wifi")
+    if req_wifi_in is not None:
+        require_wifi = bool(req_wifi_in)
+    else:
+        require_wifi = bool(prefs.get("require_wifi", True))
+
     from datetime import date as _date_cls, datetime as _dt
     target_date_str = (data.get("target_date") or "").strip()
     if target_date_str:
@@ -37857,23 +37956,63 @@ async def start_checkin_session(request: Request):
             (session_id, date, dept, batch, semester, section,
              period_numbers, subject_code, subject_name, staff_reg_no,
              timetable_slot_id, scheduled_start_time, scheduled_end_time,
-             checkin_opened_at, status, created_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),'checkin_open',NOW())
+             checkin_opened_at, status, created_at, require_wifi)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),'checkin_open',NOW(),%s)
     """, (session_id, ref_date.isoformat(), dept, batch, semester, section,
           period_nums_str, subject_code, subject_name, staff_reg_no,
-          slot_id, start_str, end_str))
+          slot_id, start_str, end_str, require_wifi))
     pg_adapter.conn.commit()
 
     return {
         "success": True,
         "session_id": session_id,
         "status": "checkin_open",
+        "require_wifi": require_wifi,
         "period_numbers": period_list,
         "subject_name": subject_name,
         "dept": dept, "batch": batch, "section": section,
         "scheduled_start": start_str,
         "scheduled_end": end_str,
         "prefs": prefs,
+    }
+
+
+# ── POST /api/v1/class-session/toggle-wifi ────────────────────────────────────
+@app.post("/api/v1/class-session/toggle-wifi")
+async def toggle_class_session_wifi(request: Request):
+    """
+    Staff dynamically toggles Wi-Fi requirement on or off for an active or created session.
+    body: { session_id: str, require_wifi: bool }
+    """
+    caller = verify_any_user_token(request)
+    staff_reg_no = (caller.get("reg_no") or caller.get("username") or "").strip()
+    data = await request.json()
+    session_id = (data.get("session_id") or "").strip()
+    require_wifi = bool(data.get("require_wifi", True))
+
+    cursor.execute("SELECT staff_reg_no, status FROM class_attendance_sessions WHERE session_id=%s", (session_id,))
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    owner = row["staff_reg_no"] if isinstance(row, dict) else row[0]
+    status = row["status"] if isinstance(row, dict) else row[1]
+    if owner != staff_reg_no:
+        raise HTTPException(status_code=403, detail="You do not own this session.")
+    if status in ("closed",):
+        raise HTTPException(status_code=400, detail="Cannot alter Wi-Fi requirements for a closed session.")
+
+    cursor.execute("""
+        UPDATE class_attendance_sessions
+        SET require_wifi=%s
+        WHERE session_id=%s
+    """, (require_wifi, session_id))
+    pg_adapter.conn.commit()
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "require_wifi": require_wifi,
+        "message": "Campus Wi-Fi is now required for students" if require_wifi else "Cellular / Mobile data is now allowed for students (Campus GPS & Face ID active)"
     }
 
 
@@ -37998,7 +38137,7 @@ def get_active_session_for_student(request: Request):
     cursor.execute("""
         SELECT session_id, period_numbers, subject_code, subject_name, status,
                checkin_opened_at, checkin_closed_at,
-               checkout_opened_at, scheduled_end_time, staff_reg_no
+               checkout_opened_at, scheduled_end_time, staff_reg_no, require_wifi
         FROM class_attendance_sessions
         WHERE date=%s AND TRIM(LOWER(dept))=TRIM(LOWER(%s)) 
           AND (semester=%s OR TRIM(batch)=TRIM(%s))
@@ -38015,7 +38154,8 @@ def get_active_session_for_student(request: Request):
             "button_disabled": True,
             "button_status_reason": "Waiting for faculty to start attendance for this period.",
             "gate_open": False,
-            "status": "not_started"
+            "status": "not_started",
+            "require_wifi": True,
         }
 
     if isinstance(sess, dict):
@@ -38027,8 +38167,12 @@ def get_active_session_for_student(request: Request):
         co_open     = sess["checkout_opened_at"]
         end_time    = sess["scheduled_end_time"]
         staff_rno   = sess["staff_reg_no"]
+        s_wifi_val  = sess.get("require_wifi")
+        require_wifi = bool(s_wifi_val) if s_wifi_val is not None else True
     else:
-        sid, p_nums, sub_code, sub_name, status, _, _, co_open, end_time, staff_rno = sess
+        sid, p_nums, sub_code, sub_name, status, _, _, co_open, end_time, staff_rno, *rest = sess
+        s_wifi_val = rest[0] if rest else None
+        require_wifi = bool(s_wifi_val) if s_wifi_val is not None else True
 
     # Check personal check-in
     cursor.execute("""
@@ -38090,6 +38234,7 @@ def get_active_session_for_student(request: Request):
         "subject_name": sub_name,
         "subject_code": sub_code,
         "status": status,
+        "require_wifi": require_wifi,
         "checkin_open": status == "checkin_open",
         "checkout_open": status in ("checkout_open",),
         "already_checked_in": already_in,
@@ -38126,7 +38271,7 @@ async def student_session_checkin(request: Request):
     # Validate session
     cursor.execute("""
         SELECT dept, batch, semester, section, subject_code, subject_name,
-               status, period_numbers, date
+               status, period_numbers, date, require_wifi
         FROM class_attendance_sessions WHERE session_id=%s
     """, (session_id,))
     sess = cursor.fetchone()
@@ -38137,11 +38282,19 @@ async def student_session_checkin(request: Request):
         s_dept, s_batch, s_sem, s_section = sess["dept"], sess["batch"], sess["semester"], sess["section"]
         s_sub_code, s_sub_name = sess["subject_code"], sess["subject_name"]
         s_status, s_period_nums, s_date = sess["status"], sess["period_numbers"], sess["date"]
+        s_wifi_val = sess.get("require_wifi")
+        s_require_wifi = bool(s_wifi_val) if s_wifi_val is not None else True
     else:
-        s_dept, s_batch, s_sem, s_section, s_sub_code, s_sub_name, s_status, s_period_nums, s_date = sess
+        s_dept, s_batch, s_sem, s_section, s_sub_code, s_sub_name, s_status, s_period_nums, s_date, *rest = sess
+        s_wifi_val = rest[0] if rest else None
+        s_require_wifi = bool(s_wifi_val) if s_wifi_val is not None else True
 
     if s_status not in ("checkin_open",):
         raise HTTPException(status_code=400, detail=f"Check-in is not open for this session (status: {s_status}).")
+
+    # If the faculty requires campus Wi-Fi, enforce network validation
+    if s_require_wifi:
+        check_wifi(request)
 
     # Verify student belongs to this class group
     cursor.execute("""
